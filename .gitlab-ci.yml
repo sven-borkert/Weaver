@@ -42,7 +42,8 @@ test:
   script:
     - pnpm check
     - pnpm format:check
-    - pnpm test
+    # Package test pools running at once oversubscribe a small runner into timeouts.
+    - pnpm test --concurrency=1
 
 build:
   stage: build

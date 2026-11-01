@@ -33,7 +33,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm format:check
-      - run: pnpm test
+      # Package test pools running at once oversubscribe a small runner into timeouts.
+      - run: pnpm test --concurrency=1
 
   build:
     needs: test
