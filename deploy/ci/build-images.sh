@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Builds Weaver's images one after another, smoke-tests them, and pushes the
-# requested tags. Runs in GitLab CI (docker:dind); the script test drives it
+# requested tags. Runs in GitLab CI (docker:dind) and GitHub Actions; the script test drives it
 # with a stub docker. Required: IMAGE COMMIT_SHA SHORT_SHA BUILD_TIME BASE_PATH.
 # Optional: PUSH_TAGS (extra tags; empty = build only), DOCKER (command).
 set -eu

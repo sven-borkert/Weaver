@@ -3146,9 +3146,10 @@ time (`APP_BUILD_TIME`, else the moment of the build) and the commit
 [`AppVersionFooter`](<../apps/web/src/app/(workspace)/_components/AppVersionFooter.tsx>)
 renders build and timestamp at the bottom of the sidebar (version only in the
 collapsed rail, with the timestamp and commit in its tooltip).
-GitLab CI ([`.gitlab-ci.yml`](../.gitlab-ci.yml),
-[`deploy/ci/build-images.sh`](../deploy/ci/build-images.sh)) stamps
-`APP_COMMIT_SHA`/`APP_BUILD_TIME` and pushes `tools`, `web`, `worker` and
+GitLab CI ([`.gitlab-ci.yml`](../.gitlab-ci.yml)) and GitHub Actions
+([`build-images.yml`](../.github/workflows/build-images.yml)), both through
+[`deploy/ci/build-images.sh`](../deploy/ci/build-images.sh), stamp
+`APP_COMMIT_SHA`/`APP_BUILD_TIME` and push `tools`, `web`, `worker` and
 `mcp` to the project registry; [`docker-compose.yml`](../docker-compose.yml)
 pulls them through `WEAVER_IMAGE_PREFIX`/`WEAVER_IMAGE_TAG`, and
 [`docker-compose.build.yml`](../docker-compose.build.yml) adds the local

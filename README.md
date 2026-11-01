@@ -72,7 +72,14 @@ credentials and its database password belongs to the existing database.
 | `ingestion-worker`                                  | Upload parsing, kept apart so it can't starve assistant runs    |
 | `mcp-server`                                        | MCP endpoint for AI clients, at `http://localhost:3200/api/mcp` |
 
-## Build images with GitLab CI
+## Build images with GitHub Actions or GitLab CI
+
+[`.github/workflows/build-images.yml`](.github/workflows/build-images.yml) runs the checks and
+builds the images on pull requests, `main` and tags. From `main` and tags it pushes
+`tools`, `web`, `worker` and `mcp` to `ghcr.io/sven-borkert/weaver/<image>`, tagged the same
+way as the GitLab pipeline below. It needs no setup in the repository.
+
+### GitLab CI
 
 [`.gitlab-ci.yml`](.gitlab-ci.yml) runs in a GitLab project, so push or mirror this
 repository to one. GitHub doesn't run it. The pipeline:
@@ -88,7 +95,7 @@ containers, because the build uses Docker-in-Docker. The pipeline refuses to
 overwrite an existing version tag, so bump `version` in `package.json` before each release.
 
 The images are built for the base path `/weaver`, which is compiled into the web image.
-To serve Weaver from another path, change `WEAVER_BASE_PATH` in `.gitlab-ci.yml`.
+To serve Weaver from another path, change `WEAVER_BASE_PATH` in the CI config.
 
 ## Run in production
 

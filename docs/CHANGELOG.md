@@ -6,6 +6,7 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Added
 
+- GitHub Actions builds the Docker images and pushes them to GitHub Container Registry from `main` and tags, using the same build script and tags as GitLab CI.
 - A README and a self-contained quick start: `docker-compose.quickstart.yml` builds every service from the checkout, needs no registry or reverse proxy, and `scripts/quickstart-env.sh` generates its secrets and first Admin. It serves HTTP on loopback only.
 
 ### Changed

@@ -1,0 +1,90 @@
+# Weaver CI: Tier 1 checks on pull requests, main and tags; the four Docker images
+# are built afterwards and pushed to GitHub Container Registry from main and tags.
+name: Build images
+
+on:
+  push:
+    branches: [main]
+    tags: ["*"]
+  pull_request:
+
+# Releases must not interleave: the build script checks version tags before pushing.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Baked into the web image; another base path needs a rebuild with this changed.
+  WEAVER_BASE_PATH: /weaver
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    container: node:22
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      NODE_OPTIONS: --max-old-space-size=4096
+      # The Prisma config only needs the variable to exist; nothing connects.
+      DATABASE_URL: postgresql://weaver:ci-only@localhost:5432/weaver?schema=public
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: corepack enable
+      - run: corepack prepare "$(node -p "require('./package.json').packageManager.split('+')[0]")" --activate
+      # postinstall runs prisma generate with the placeholder DATABASE_URL above.
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm format:check
+      - run: pnpm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The images and their build stages outgrow a runner's default free disk.
+      - name: Free disk space
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Build and push
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REPOSITORY: ${{ github.repository }}
+          COMMIT_SHA: ${{ github.sha }}
+          BASE_PATH: ${{ env.WEAVER_BASE_PATH }}
+        run: |
+          # Registry paths must be lowercase; the repository name is not.
+          IMAGE="ghcr.io/$(printf '%s' "$REPOSITORY" | tr '[:upper:]' '[:lower:]')"
+          SHORT_SHA="$(printf '%s' "$COMMIT_SHA" | cut -c1-8)"
+          BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          CI_DEFAULT_BRANCH="$DEFAULT_BRANCH"
+          CI_COMMIT_TAG=""
+          CI_COMMIT_BRANCH=""
+          PUSH_TAGS=""
+          PUSH_CACHE=0
+          if [ "$REF_TYPE" = tag ]; then
+            [ "$REF_NAME" != latest ] || { echo "latest is reserved for the default branch" >&2; exit 1; }
+            CI_COMMIT_TAG="$REF_NAME"
+            PUSH_TAGS="$REF_NAME"
+          elif [ "$EVENT_NAME" = push ] && [ "$REF_NAME" = "$DEFAULT_BRANCH" ]; then
+            VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json)"
+            : "${VERSION:?version not found in package.json}"
+            CI_COMMIT_BRANCH="$REF_NAME"
+            PUSH_TAGS="latest $VERSION"
+            PUSH_CACHE=1
+          fi
+          if [ -n "$PUSH_TAGS" ]; then
+            printf '%s' "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          fi
+          export IMAGE SHORT_SHA BUILD_TIME CI_DEFAULT_BRANCH CI_COMMIT_TAG CI_COMMIT_BRANCH PUSH_TAGS PUSH_CACHE
+          sh deploy/ci/build-images.sh
