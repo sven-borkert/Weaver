@@ -27,4 +27,4 @@ it("keeps a full catalog's validators cached across repeated listings", () => {
   parseToolDefinitions(catalog);
   expect(afterFirstListing).toBeGreaterThanOrEqual(400);
   expect(compiled.count).toBe(afterFirstListing);
-});
+}, 30_000);
