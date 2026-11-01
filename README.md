@@ -72,6 +72,58 @@ credentials and its database password belongs to the existing database.
 | `ingestion-worker`                                  | Upload parsing, kept apart so it can't starve assistant runs    |
 | `mcp-server`                                        | MCP endpoint for AI clients, at `http://localhost:3200/api/mcp` |
 
+## Run with prebuilt images
+
+GitHub Actions publishes images to GHCR, so you can run Weaver without a checkout or a
+build. You need Docker with Compose v2, `curl` and `openssl`. The images are `linux/amd64`
+only; on Apple Silicon they run under emulation.
+
+```sh
+mkdir weaver && cd weaver
+curl -fsSO https://raw.githubusercontent.com/sven-borkert/Weaver/main/deploy/examples/docker-compose.yml
+
+WEB_PORT=3000
+MCP_PORT=3200
+(umask 077 && openssl rand -hex 32 > pg_password)
+(umask 077 && cat > web.env <<ENV
+NODE_ENV=production
+WEAVER_IMAGE_PREFIX=ghcr.io/sven-borkert/weaver
+WEAVER_IMAGE_TAG=latest
+WEAVER_BASE_PATH=/weaver
+WEAVER_WEB_PORT=$WEB_PORT
+WEAVER_MCP_PORT=$MCP_PORT
+AUTH_URL=http://localhost:$WEB_PORT
+AUTH_SECRET=$(openssl rand -base64 32)
+DATABASE_URL=postgresql://weaver:$(cat pg_password)@postgres:5432/weaver?schema=public
+WEAVER_ENCRYPTION_KEYS=1:$(openssl rand -base64 32)
+WEAVER_DATA_DIR=/data
+WEAVER_JOBS_ENABLED=true
+WEAVER_MCP_RESOURCE_URL=http://localhost:$MCP_PORT/weaver/api/mcp
+WEAVER_OUTBOUND_ALLOWED_ORIGINS=
+ENV
+)
+mkdir data
+# On Linux, the containers' user must own the data directory:
+[ "$(uname)" != Linux ] || sudo chown 1000:1000 data
+
+docker compose --env-file web.env up -d
+
+ADMIN_PASSWORD="$(openssl rand -hex 16)"
+docker compose --env-file web.env run --rm \
+  -e WEAVER_BOOTSTRAP_ADMIN_EMAIL=admin@example.com \
+  -e WEAVER_BOOTSTRAP_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  migrations pnpm --filter @weaver/db bootstrap:admin
+echo "Sign in at http://localhost:$WEB_PORT/weaver as admin@example.com with password $ADMIN_PASSWORD"
+```
+
+The `/weaver` path in the address is required, because it's compiled into these images. The
+MCP endpoint is at `http://localhost:3200/weaver/api/mcp`.
+
+This setup serves plain HTTP and publishes its ports on all network interfaces, so only use it
+on a trusted machine or network. To upgrade, run `docker compose --env-file web.env pull`, then
+`docker compose --env-file web.env up -d`. To remove it, run `down -v`, then delete `data` and
+`postgres_data`, which deletes all content.
+
 ## Build images with GitHub Actions or GitLab CI
 
 [`.github/workflows/build-images.yml`](.github/workflows/build-images.yml) runs the checks and
