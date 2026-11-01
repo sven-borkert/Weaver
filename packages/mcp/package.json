@@ -1,0 +1,31 @@
+{
+  "name": "@weaver/mcp",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./config": "./src/config.ts",
+    "./http": "./src/http.ts",
+    "./node": "./src/node.ts",
+    "./resources": "./src/resources.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "2.0.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "@weaver/assistant-tools": "workspace:*",
+    "@weaver/auth": "workspace:*",
+    "@weaver/config": "workspace:*",
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

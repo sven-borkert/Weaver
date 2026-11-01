@@ -1,0 +1,27 @@
+{
+  "name": "@weaver/config",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./oidc": "./src/oidc.ts",
+    "./oidcDiscovery": "./src/oidcDiscovery.ts",
+    "./server": "./src/server.ts",
+    "./encryptionKeys": "./src/encryptionKeys.ts",
+    "./publicUrls": "./src/publicUrls.ts",
+    "./testEnvironment": "./src/testEnvironment.ts",
+    "./jobs": "./src/jobs.ts",
+    "./workerRoles": "./src/workerRoles.ts",
+    "./outboundFetch": "./src/outboundFetch.ts",
+    "./outboundSsh": "./src/outboundSsh.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ipaddr.js": "1.9.1",
+    "undici": "7.29.0",
+    "zod": "^4.4.3"
+  }
+}

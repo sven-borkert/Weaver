@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Weaver PostgreSQL database and Git data
+Requires=docker.service
+After=docker.service weaver-docker.service
+
+[Service]
+Type=oneshot
+Environment=WEAVER_DEPLOY_ROOT=/srv/weaver
+ExecStart=/usr/local/sbin/weaver-backup
+# Covers the 135 s service drain plus dump, fsck and archive; the exit trap restarts the services.
+TimeoutStartSec=1200

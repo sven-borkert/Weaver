@@ -1,0 +1,22 @@
+{
+  "name": "@weaver/assistant-tools",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./registry": "./src/registry.ts",
+    "./toolsetNames": "./src/toolsetNames.ts",
+    "./toolsets": "./src/toolsets.ts",
+    "./tools/*": "./src/tools/*.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "zod": "^4.4.3"
+  }
+}

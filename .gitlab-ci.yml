@@ -1,0 +1,78 @@
+# Weaver CI: Tier 1 checks on every branch, merge request and tag; the four
+# Docker images are built afterwards and pushed to this project's container
+# registry from the default branch and tags.
+
+stages:
+  - test
+  - build
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+variables:
+  # Baked into the web image; another base path needs a rebuild with this changed.
+  WEAVER_BASE_PATH: /weaver
+
+test:
+  stage: test
+  image: node:22
+  variables:
+    PNPM_STORE_DIR: $CI_PROJECT_DIR/.pnpm-store
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    NODE_OPTIONS: --max-old-space-size=4096
+    # The Prisma config only needs the variable to exist; nothing connects.
+    DATABASE_URL: postgresql://weaver:ci-only@localhost:5432/weaver?schema=public
+  cache:
+    key:
+      files:
+        - pnpm-lock.yaml
+    paths:
+      - .pnpm-store
+  before_script:
+    - corepack enable
+    - corepack prepare "$(node -p "require('./package.json').packageManager.split('+')[0]")" --activate
+    - pnpm config set store-dir "$PNPM_STORE_DIR"
+    # postinstall runs prisma generate with the placeholder DATABASE_URL above.
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm check
+    - pnpm format:check
+    - pnpm test
+
+build:
+  stage: build
+  resource_group: registry-release
+  timeout: 2h
+  image: docker:29.1.4
+  services:
+    - name: docker:29.1.4-dind
+      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+    IMAGE: $CI_REGISTRY_IMAGE
+    COMMIT_SHA: $CI_COMMIT_SHA
+    SHORT_SHA: $CI_COMMIT_SHORT_SHA
+    BUILD_TIME: $CI_JOB_STARTED_AT
+    BASE_PATH: $WEAVER_BASE_PATH
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - |
+      if [ -n "$CI_COMMIT_TAG" ]; then
+        [ "$CI_COMMIT_TAG" != latest ] || { echo "latest is reserved for the default branch" >&2; exit 1; }
+        export PUSH_TAGS="$CI_COMMIT_TAG"
+      elif [ "$CI_COMMIT_BRANCH" = "$CI_DEFAULT_BRANCH" ]; then
+        VERSION="$(sed -n 's/^  "version": "\(.*\)",$/\1/p' package.json)"
+        : "${VERSION:?version not found in package.json}"
+        export PUSH_TAGS="latest $VERSION"
+        export PUSH_CACHE=1
+      else
+        export PUSH_TAGS=""
+      fi
+    - sh deploy/ci/build-images.sh

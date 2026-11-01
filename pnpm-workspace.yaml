@@ -1,0 +1,30 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  '@prisma/engines': true
+  esbuild: true
+  prisma: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - '@next/env@16.3.2'
+  - '@next/swc-darwin-arm64@16.3.2'
+  - '@next/swc-darwin-x64@16.3.2'
+  - '@next/swc-linux-arm64-gnu@16.3.2'
+  - '@next/swc-linux-arm64-musl@16.3.2'
+  - '@next/swc-linux-x64-gnu@16.3.2'
+  - '@next/swc-linux-x64-musl@16.3.2'
+  - '@next/swc-win32-arm64-msvc@16.3.2'
+  - '@next/swc-win32-x64-msvc@16.3.2'
+  - next@16.3.2
+  - shadcn@4.19.0
+  - '@next/eslint-plugin-next@16.3.2'
+  - eslint-config-next@16.3.2
+  - eslint@10.9.0
+  - '@ai-sdk/anthropic@4.0.48'
+  - '@ai-sdk/gateway@4.0.72'
+  - '@ai-sdk/openai-compatible@3.0.43'
+  - '@ai-sdk/openai@4.0.56'
+  - '@ai-sdk/provider-utils@5.0.36'
+  - ai@7.0.90

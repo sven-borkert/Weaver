@@ -1,0 +1,33 @@
+{
+  "name": "@weaver/db",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/client.ts",
+    "./client": "./generated/prisma/client.ts",
+    "./oauth-cutover": "./src/oauthCutoverBarrier.ts"
+  },
+  "scripts": {
+    "bootstrap:admin": "tsx prisma/bootstrap-admin.ts",
+    "generate": "dotenv -e ../../.env -- prisma generate --config prisma.config.ts",
+    "migrate:deploy": "tsx prisma/migrate-deploy.ts",
+    "lint": "eslint src prisma",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.9.1",
+    "@prisma/client": "^7.9.1",
+    "@weaver/config": "workspace:*",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@weaver/auth": "workspace:*",
+    "dotenv": "^17.4.2",
+    "dotenv-cli": "^11.0.0",
+    "prisma": "^7.9.1",
+    "tsx": "^4.23.12",
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

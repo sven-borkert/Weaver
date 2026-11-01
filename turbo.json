@@ -1,0 +1,72 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["tsconfig.base.json", "eslint.config.js"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "env": [
+        "DATABASE_URL",
+        "AUTH_SECRET",
+        "AUTH_URL",
+        "SKIP_ENV_VALIDATION",
+        "WEAVER_DATA_DIR",
+        "WEAVER_*",
+        "NEXT_PUBLIC_*",
+        "APP_*",
+        "BUILD_STANDALONE",
+        "VERCEL_GIT_COMMIT_SHA",
+        "GIT_COMMIT_SHA"
+      ],
+      "inputs": ["$TURBO_DEFAULT$", ".env*", "$TURBO_ROOT$/package.json"],
+      "outputs": [".next/**", "!.next/cache/**", "!.next/dev/**", "dist/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "env": [
+        "DATABASE_URL",
+        "AUTH_SECRET",
+        "AUTH_URL",
+        "PORT",
+        "SKIP_ENV_VALIDATION",
+        "WEAVER_DATA_DIR",
+        "WEAVER_*",
+        "NEXT_PUBLIC_*",
+        "APP_*",
+        "BUILD_STANDALONE",
+        "VERCEL_GIT_COMMIT_SHA",
+        "GIT_COMMIT_SHA"
+      ]
+    },
+    "start": {
+      "cache": false,
+      "persistent": true,
+      "env": [
+        "DATABASE_URL",
+        "AUTH_SECRET",
+        "AUTH_URL",
+        "PORT",
+        "SKIP_ENV_VALIDATION",
+        "WEAVER_DATA_DIR",
+        "WEAVER_*",
+        "NEXT_PUBLIC_*",
+        "APP_*",
+        "BUILD_STANDALONE",
+        "VERCEL_GIT_COMMIT_SHA",
+        "GIT_COMMIT_SHA"
+      ]
+    },
+    "lint": {
+      "dependsOn": ["^lint"],
+      "outputs": []
+    },
+    "typecheck": {
+      "dependsOn": ["^typecheck"],
+      "outputs": []
+    },
+    "test": {
+      "dependsOn": ["^test"],
+      "outputs": ["coverage/**"]
+    }
+  }
+}

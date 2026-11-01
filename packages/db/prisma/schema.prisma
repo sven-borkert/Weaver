@@ -1,0 +1,2415 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  Admin
+  User
+}
+
+enum KnowledgeGenerationStatus {
+  building
+  active
+  failed
+  superseded
+}
+
+enum KnowledgeDocumentStatus {
+  pending
+  processing
+  ready
+  failed
+  blocked_configuration
+  missing
+}
+
+enum KnowledgeFailureKind {
+  configuration
+  source_missing
+  provider
+  validation
+  stale
+  internal
+}
+
+enum KnowledgeGenerationTrigger {
+  initial
+  embedding_change
+  index_upgrade
+  manual_rebuild
+}
+
+enum AiUsageOutcome {
+  success
+  provider_failure
+  validation_failure
+  stale_discarded
+}
+
+enum DocumentChangeSummaryStatus {
+  pending
+  ready
+  failed
+  skipped
+}
+
+enum DocumentKind {
+  markdown
+  python
+}
+
+enum LlmProviderType {
+  openai
+  anthropic
+  openrouter
+  openai_compatible
+  lmstudio
+  ollama
+}
+
+/// Spec §10.1 purposes; knowledge is split into extraction + embedding because it needs two models.
+enum LlmPurpose {
+  assistant
+  knowledge_extraction
+  knowledge_embedding
+  ingestion
+  jobs
+  document_summary
+}
+
+enum LlmModelCapability {
+  chat
+  json_output
+  tool_use
+  embedding
+  vision
+}
+
+enum LlmEmbeddingDimensionMode {
+  native
+  matryoshka
+}
+
+/// Reasoning effort sent with chat calls on a route; provider_default sends nothing.
+enum LlmReasoningMode {
+  provider_default
+  none
+  low
+  medium
+  high
+}
+
+enum LlmTestOutcome {
+  success
+  failure
+}
+
+// ---- Phase 4D: assistant persistence (spec §11) ----
+enum AssistantMessageRole {
+  user
+  assistant
+}
+
+enum AssistantMessageStatus {
+  pending
+  complete
+  failed
+  cancelled
+}
+
+enum AssistantRunStatus {
+  queued
+  running
+  cancelling
+  completed
+  failed
+  cancelled
+}
+
+enum ScheduledTaskStatus {
+  active
+  paused
+}
+
+enum ScheduledTaskPauseReason {
+  manual
+  failing
+}
+
+enum ScheduledTaskRunStatus {
+  queued
+  running
+  succeeded
+  failed
+  skipped
+}
+
+enum ScheduledTaskRunTrigger {
+  schedule
+  manual
+}
+
+enum AssistantAttemptStatus {
+  running
+  succeeded
+  failed
+  abandoned
+  cancelled
+}
+
+enum AssistantCitationKind {
+  document
+  table
+  graph
+  search
+}
+
+enum AssistantProposalStatus {
+  pending
+  accepted
+  rejected
+  conflicted
+  expired
+  accepting
+}
+
+enum McpOutcome {
+  ok
+  error
+  denied
+}
+
+enum DiagnosticRuntime {
+  web
+  worker
+  mcp
+}
+
+enum DiagnosticSeverity {
+  debug
+  info
+  warn
+  error
+}
+
+enum ProjectPinKind {
+  document
+  table
+}
+
+enum ExternalMcpAuthMode {
+  none
+  bearer
+}
+
+enum ExternalMcpToolEffect {
+  read
+  write
+}
+
+enum ExternalMcpCallStatus {
+  prepared
+  dispatched
+  completed
+  denied
+  failed
+  unknown
+}
+
+enum ExternalMcpApprovalState {
+  pending
+  approved
+  denied
+  expired
+  invalidated
+  settled
+}
+
+model User {
+  examOperations ExamOperation[]
+  trainingRoles ProjectTrainingRole[] @relation("ProjectTrainingRoleUser")
+  trainingRolesAssigned ProjectTrainingRole[] @relation("ProjectTrainingRoleAssignedBy")
+  examsCreated Exam[] @relation("ExamCreator")
+  examAttempts ExamAttempt[] @relation("ExamAttemptTrainee")
+  examsGraded ExamAttempt[] @relation("ExamAttemptGrader")
+  examsReleased ExamAttempt[] @relation("ExamAttemptReleaser")
+  id                 String    @id @default(uuid()) @db.Uuid
+  email              String    @unique
+  name               String
+  emailVerified      Boolean   @default(false)
+  image              String?
+  role               Role      @default(User)
+  banned             Boolean   @default(false)
+  banReason          String?
+  banExpires         DateTime?
+  lastLoginAt        DateTime?
+  mustChangePassword Boolean   @default(false)
+  lastOpenedProjectId String?   @db.Uuid
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  sessions                 Session[]
+  accounts                 Account[]
+  memberships              Member[]
+  lastOpenedProject        Project?                  @relation("UserLastOpenedProject", fields: [lastOpenedProjectId], references: [id], onDelete: SetNull)
+  personalWorkspace        Project?                  @relation("PersonalWorkspaceOwner")
+  sentInvitations          Invitation[]
+  lastEditedDocuments      Document[]                @relation("DocumentLastEditedBy")
+  createdDocuments         Document[]                @relation("DocumentCreatedBy")
+  updatedDocuments         Document[]                @relation("DocumentUpdatedBy")
+  lastEditedTables         DataTable[]
+  apiKeys                  ApiKey[]
+  createdProjectApiKeys         ProjectApiKey[]               @relation("ProjectApiKeyCreator")
+  oauthClients             OauthClient[]
+  oauthRefreshTokens       OauthRefreshToken[]
+  oauthAccessTokens        OauthAccessToken[]
+  oauthConsents            OauthConsent[]
+  llmConnectionsCreated    LlmConnection[]           @relation("LlmConnectionCreatedBy")
+  llmRoutesUpdated         LlmRoute[]                @relation("LlmRouteUpdatedBy")
+  assistantConversations   AssistantConversation[]   @relation("AssistantConversationOwner")
+  assistantProposals       AssistantProposal[]       @relation("AssistantProposalUser")
+  scheduledTasks           ScheduledTask[]           @relation("ScheduledTaskOwner")
+  mcpOperations            McpOperation[]            @relation("McpOperationUser")
+  mcpAuditEvents           McpAuditEvent[]           @relation("McpAuditEventUser")
+  ingestionBatches         IngestionBatch[]          @relation("IngestionBatchCreator")
+  ingestionDrafts          IngestionDraft[]          @relation("IngestionDraftEditor")
+  uploadedArtifacts        Artifact[]                @relation("ArtifactUploader")
+  requestedNotebooks       ArtifactNotebook[]        @relation("ArtifactNotebookRequester")
+  backgroundWorkReceipts   BackgroundWorkReceipt[]
+  projectPinsCreated       ProjectContentPin[]       @relation("ProjectPinCreator")
+  externalMcpConnections   ExternalMcpConnection[]   @relation("ExternalMcpConnectionOwner")
+  remoteInstancesCreated   RemoteInstance[]          @relation("RemoteInstanceCreator")
+  remoteInstanceConnections RemoteInstanceConnection[]
+  remoteInstanceAuthorizations RemoteInstanceAuthorization[]
+  externalMcpToolsReviewed ExternalMcpTool[]         @relation("ExternalMcpToolReviewer")
+  externalMcpCalls         ExternalMcpCall[]         @relation("ExternalMcpCallUser")
+  externalMcpApprovals     ExternalMcpToolApproval[] @relation("ExternalMcpApprovalOwner")
+  externalMcpDecisions     ExternalMcpToolApproval[] @relation("ExternalMcpApprovalDecisionActor")
+  uploadRateLimits UploadRateLimit[]
+  uploadReservations UploadReservation[]
+  requestedKnowledgeGenerations KnowledgeGeneration[] @relation("KnowledgeGenerationRequestedBy")
+  reviewedDocuments        Document[]                @relation("DocumentReviewedBy")
+  reviewerGroupMemberships ReviewerGroupMember[]     @relation("ReviewerGroupMemberUser")
+  defaultReviewerFor       ProjectDefaultReviewer[]  @relation("ProjectDefaultReviewerUser")
+  documentReviewerRows     DocumentReviewer[]        @relation("DocumentReviewerUser")
+}
+
+model Session {
+  id                   String   @id @default(uuid()) @db.Uuid
+  userId               String   @db.Uuid
+  token                String   @unique
+  expiresAt            DateTime
+  ipAddress            String?
+  userAgent            String?
+  activeOrganizationId String?
+  impersonatedBy       String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  oauthRefreshTokens OauthRefreshToken[]
+  oauthAccessTokens  OauthAccessToken[]
+
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id @default(uuid()) @db.Uuid
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  // Partial expiresAt index for dpop-proof:% lives in the hand-authored migration.
+
+  @@index([identifier])
+}
+
+model Organization {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  slug      String   @unique
+  logo      String?
+  metadata  String?
+  createdAt DateTime @default(now())
+
+  project     Project?
+  members     Member[]
+  invitations Invitation[]
+}
+
+model Member {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  userId         String   @db.Uuid
+  role           String
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id             String   @id @default(uuid()) @db.Uuid
+  organizationId String   @db.Uuid
+  email          String
+  role           String?
+  status         String   @default("pending")
+  expiresAt      DateTime
+  inviterId      String   @db.Uuid
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  inviter      User         @relation(fields: [inviterId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([inviterId])
+}
+
+model Project {
+  trainingRoles ProjectTrainingRole[]
+  exams Exam[]
+  examAttempts ExamAttempt[]
+  id             String    @id @default(uuid()) @db.Uuid
+  name           String
+  description    String?
+  organizationId String    @unique @db.Uuid
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+  /// Document header format every file of this project has been upgraded to (DOCUMENT_HEADER_VERSION).
+  documentHeaderVersion Int @default(3)
+  /// Default `reviewEvery` for documents created in this project.
+  defaultReviewEveryMonths Int @default(12)
+  /// Folder metadata format every folder of this project has been upgraded to (FOLDER_METADATA_VERSION).
+  folderMetadataVersion Int @default(1)
+  personalOwnerId String?   @unique @db.Uuid
+
+  organization                 Organization                  @relation(fields: [organizationId], references: [id])
+  personalOwner                User?                         @relation("PersonalWorkspaceOwner", fields: [personalOwnerId], references: [id], onDelete: SetNull)
+  documents                    Document[]
+  lastOpenedByUsers            User[]                        @relation("UserLastOpenedProject")
+  tables                       DataTable[]
+  knowledgeGenerations         KnowledgeGeneration[]
+  documentIndexStates          DocumentIndexState[]
+  documentSearchChunks         DocumentSearchChunk[]
+  documentChangeSummaries      DocumentChangeSummary[]
+  tableSearchProjections       TableSearchProjection[]
+  knowledgeEmbeddings          KnowledgeEmbedding[]
+  graphEntities                GraphEntity[]
+  graphEntityAliases           GraphEntityAlias[]
+  entityMentions               EntityMention[]
+  graphRelations               GraphRelation[]
+  relationEvidence             RelationEvidence[]
+  aiUsage                      AiUsage[]
+  knowledgeGenerationDocuments KnowledgeGenerationDocument[]
+  apiKeyRestrictions           ApiKeyProject[]
+  projectApiKeys               ProjectApiKey[]
+  projectApiOperations         ProjectApiOperation[]
+  projectApiAuditEvents        ProjectApiAuditEvent[]
+  assistantConversationPins    AssistantConversation[]       @relation("AssistantConversationPin")
+  assistantProposals           AssistantProposal[]           @relation("AssistantProposalProject")
+  scheduledTasks               ScheduledTask[]               @relation("ScheduledTaskOutputProject")
+  mcpOperations                McpOperation[]                @relation("McpOperationProject")
+  mcpAuditEvents               McpAuditEvent[]               @relation("McpAuditEventProject")
+  ingestionBatches             IngestionBatch[]              @relation("IngestionBatchProject")
+  ingestionFiles               IngestionFile[]               @relation("IngestionFileProject")
+  reviewerGroups               ReviewerGroup[]
+  defaultReviewers             ProjectDefaultReviewer[]
+  artifacts                    Artifact[]                    @relation("ArtifactProject")
+  contentPins                  ProjectContentPin[]
+  gitRemote                    ProjectGitRemote?
+  uploadReservations           UploadReservation[]
+
+  @@index([deletedAt])
+}
+
+model ProjectGitRemote {
+  id                   String   @id @default(uuid()) @db.Uuid
+  projectId            String   @unique @db.Uuid
+  remoteUrl            String   @db.VarChar(2048)
+  branch               String   @default("main") @db.VarChar(255)
+  enabled              Boolean  @default(false)
+  revision             Int      @default(1)
+  keyName              String?  @db.VarChar(120)
+  keyFingerprint       String?  @db.VarChar(100)
+  keyUploadedAt        DateTime?
+  credentialCiphertext Bytes?
+  credentialNonce      Bytes?
+  credentialTag        Bytes?
+  credentialKeyVersion Int?
+  knownHosts           String?
+  lastPushedSha        String?  @db.VarChar(40)
+  lastPushedAt         DateTime?
+  lastAttemptAt        DateTime?
+  lastErrorCode        String?  @db.VarChar(40)
+  failureCount         Int      @default(0)
+  nextAttemptAt        DateTime @default(now())
+  queueToken           String?  @db.Uuid
+  queuedAt             DateTime?
+  leaseToken           String?  @db.Uuid
+  leaseExpiresAt       DateTime?
+  pullQueueToken       String?  @db.Uuid
+  pullRequestedAt      DateTime?
+  pullRequestedById    String?  @db.Uuid
+  lastPullSha          String?  @db.VarChar(40)
+  lastPullAt           DateTime?
+  lastPullErrorCode    String?  @db.VarChar(40)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  project              Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([enabled, nextAttemptAt])
+}
+
+model ProjectContentPin {
+  id          String         @id @default(uuid()) @db.Uuid
+  projectId   String         @db.Uuid
+  kind        ProjectPinKind
+  resourceId  String         @db.Uuid
+  createdById String?        @db.Uuid
+  createdAt   DateTime
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("ProjectPinCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, kind, resourceId])
+  @@index([projectId, createdAt, id])
+  @@index([createdById])
+}
+
+model Document {
+  id                  String   @id @db.Uuid
+  projectId           String   @db.Uuid
+  path                String
+  slug                String
+  title               String
+  /// Mirrors the stored file's extension; rebuildable projection.
+  kind                DocumentKind @default(markdown)
+  /// Optional Git appearance metadata; rebuildable projection.
+  appearance          Json?
+  /// Database-generated ECMAScript-compatible key used to recheck exact search.
+  normalizedTitle     String   @default(dbgenerated())
+  /// Fixed-width SHA-256 key used to index exact title candidates safely.
+  normalizedTitleHash Bytes    @default(dbgenerated())
+  excerpt             String
+  headCommitSha       String
+  /// Last commit touching the file (activity); see updatedAt for the document metadata.
+  lastEditedById      String?  @db.Uuid
+  lastEditedByProjectKeyId String? @db.Uuid
+  lastEditedByName String?
+  lastEditedAt        DateTime
+  /// Frontmatter `created`/`createdBy`/`updated`/`updatedBy`; names are as written in Git.
+  createdAt           DateTime
+  createdById         String?  @db.Uuid
+  createdByName       String?
+  updatedAt           DateTime
+  updatedById         String?  @db.Uuid
+  updatedByName       String?
+  /// Header review block; null until the file carries one.
+  reviewEveryMonths   Int?
+  reviewSince         DateTime?
+  lastReviewedAt      DateTime?
+  reviewedById        String?  @db.Uuid
+  reviewedByName      String?
+  /// reviewSince until the first review, then lastReviewedAt + reviewEveryMonths.
+  reviewDueAt         DateTime?
+
+  project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reviewedBy   User?                 @relation("DocumentReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewers    DocumentReviewer[]
+  lastEditedBy User?                 @relation("DocumentLastEditedBy", fields: [lastEditedById], references: [id], onDelete: SetNull)
+  createdBy    User?                 @relation("DocumentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy    User?                 @relation("DocumentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  linksTo      DocumentLink[]        @relation("LinksFrom")
+  searchChunks DocumentSearchChunk[]
+
+  @@unique([projectId, slug])
+  @@unique([projectId, path])
+  @@index([projectId, lastEditedAt])
+  @@index([projectId, lastEditedAt(sort: Desc), id(sort: Desc)])
+  @@index([projectId, normalizedTitleHash, title, id])
+  @@index([lastEditedById])
+  @@index([createdById])
+  @@index([updatedById])
+  @@index([reviewDueAt])
+  @@index([projectId, reviewDueAt, id])
+  @@index([lastReviewedAt])
+  @@index([projectId, lastReviewedAt, id])
+  @@index([reviewedById])
+}
+
+/// Derived projection of schema.json/data.jsonl under tables/**; the
+/// schema UUID is supplied by Git and the row is rebuildable, never truth.
+model DataTable {
+  id                  String   @id @db.Uuid
+  projectId           String   @db.Uuid
+  path                String
+  slug                String
+  title               String
+  /// Optional Git appearance metadata; rebuildable projection.
+  appearance          Json?
+  /// Database-generated ECMAScript-compatible key used to recheck exact search.
+  normalizedTitle     String   @default(dbgenerated())
+  /// Fixed-width SHA-256 key used to index exact title candidates safely.
+  normalizedTitleHash Bytes    @default(dbgenerated())
+  rowCount            Int
+  headCommitSha       String
+  lastEditedById      String?  @db.Uuid
+  lastEditedByProjectKeyId String? @db.Uuid
+  lastEditedByName String?
+  lastEditedAt        DateTime
+  createdAt           DateTime
+
+  project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  lastEditedBy User?   @relation(fields: [lastEditedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, slug])
+  @@unique([projectId, path])
+  @@index([projectId, lastEditedAt])
+  @@index([projectId, lastEditedAt(sort: Desc), id(sort: Desc)])
+  @@index([projectId, normalizedTitleHash, title, id])
+  @@index([lastEditedById])
+}
+
+/// Derived typed crossrefs keyed by source + target kind + target UUID.
+/// targetDocumentId has no FK so unresolved/deleted document or table targets survive.
+model DocumentLink {
+  sourceDocumentId String   @db.Uuid
+  targetDocumentId String   @db.Uuid
+  targetType       String   @default("document")
+  createdAt        DateTime @default(now())
+
+  source Document @relation("LinksFrom", fields: [sourceDocumentId], references: [id], onDelete: Cascade)
+
+  @@id([sourceDocumentId, targetType, targetDocumentId])
+  @@index([targetDocumentId])
+}
+
+// No FK to Document: summaries survive document deletion and recovery.
+model DocumentChangeSummary {
+  projectId     String                      @db.Uuid
+  commitSha     String                      @db.VarChar(40)
+  documentId    String                      @db.Uuid
+  pathAtSha     String
+  baseCommitSha String                      @db.VarChar(40)
+  status        DocumentChangeSummaryStatus @default(pending)
+  summary       String?                     @db.VarChar(120)
+  failureReason String?                     @db.VarChar(32)
+  attempts      Int                         @default(0)
+  createdAt     DateTime
+  updatedAt     DateTime
+  completedAt   DateTime?
+  basePathAtSha  String?
+  lastErrorClass String?   @db.VarChar(64)
+  lastJobId      String?   @db.VarChar(64)
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([projectId, commitSha])
+  @@index([status, updatedAt])
+  @@index([createdAt, projectId, commitSha])
+}
+
+model Account {
+  /// OIDC issuer writes share the settings lock via Account_oidc_issuer_guard.
+  id                    String    @id @default(uuid()) @db.Uuid
+  userId                String    @db.Uuid
+  issuer                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([issuer, accountId])
+  @@index([userId])
+}
+
+model KnowledgeGeneration {
+  id                      String                    @id @default(uuid()) @db.Uuid
+  projectId               String                    @db.Uuid
+  configFingerprint       String
+  embeddingModel          String
+  embeddingDimensions     Int
+  extractionSchemaVersion Int
+  promptVersion           String
+  /// Non-secret route snapshot (spec §10.3); null for keyword-only generations.
+  routeSnapshot           Json?
+  status                  KnowledgeGenerationStatus @default(building)
+  documentTotal           Int                       @default(0)
+  documentReadyCount      Int                       @default(0)
+  documentFailedCount     Int                       @default(0)
+  failureKind             KnowledgeFailureKind?
+  failureSummary          String?                   @db.VarChar(300)
+  buildTrigger            KnowledgeGenerationTrigger?
+  requestedById           String?                   @db.Uuid
+  /// Generation whose graph was copied in instead of re-extracted; no FK because superseded generations are deleted.
+  graphSourceGenerationId String?                   @db.Uuid
+  createdAt               DateTime                  @default(now())
+  completedAt             DateTime?
+  activatedAt             DateTime?
+  supersededAt            DateTime?
+
+  project          Project                       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  requestedBy      User?                         @relation("KnowledgeGenerationRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  documents        KnowledgeGenerationDocument[]
+  embeddings       KnowledgeEmbedding[]
+  entities         GraphEntity[]
+  mentions         EntityMention[]
+  relations        GraphRelation[]
+  relationEvidence RelationEvidence[]
+
+  @@index([projectId])
+  @@index([projectId, configFingerprint, status])
+  @@index([projectId, createdAt(sort: Desc), id(sort: Desc)])
+  @@index([requestedById, createdAt])
+}
+
+/// Local keyword progress keyed by a rebuildable document UUID, intentionally without a Document FK.
+/// Exact-title search uses the generated eligibility key and an ordered covering index.
+model DocumentIndexState {
+  documentId               String                  @id @db.Uuid
+  projectId                String                  @db.Uuid
+  targetSha                String
+  keywordIndexedSha        String?
+  /// Database-triggered title present only while this state is ready and current.
+  exactTitle               String?
+  /// Database-generated canonical collision recheck for exact-title search.
+  exactNormalizedTitle     String?                 @default(dbgenerated())
+  /// Fixed-width SHA-256 candidate key for exact-title search.
+  exactNormalizedTitleHash Bytes?                  @default(dbgenerated())
+  /// Database-generated eligible project key for the bounded exact-title access path.
+  exactProjectId           String?                 @default(dbgenerated()) @db.Uuid
+  status                   KnowledgeDocumentStatus @default(pending)
+  attempts                 Int                     @default(0)
+  failureKind              KnowledgeFailureKind?
+  failureSummary           String?                 @db.VarChar(300)
+  lastAttemptAt            DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([exactNormalizedTitleHash, exactProjectId, exactNormalizedTitle, exactTitle, documentId, targetSha], map: "DocumentIndexState_exact_title_idx")
+}
+
+model KnowledgeGenerationDocument {
+  generationId       String                  @db.Uuid
+  documentId         String                  @db.Uuid
+  projectId          String                  @db.Uuid
+  targetSha          String
+  semanticIndexedSha String?
+  graphIndexedSha    String?
+  configFingerprint  String
+  extractionFingerprint String? @db.VarChar(64)
+  extractionModel       String? @db.VarChar(200)
+  status             KnowledgeDocumentStatus @default(pending)
+  attempts           Int                     @default(0)
+  processingClaimToken String?               @db.Uuid
+  processingJobId    String?                  @db.VarChar(200)
+  processingRetryCount Int?
+  failureKind        KnowledgeFailureKind?
+  failureSummary     String?                 @db.VarChar(300)
+  lastAttemptAt      DateTime?
+  completedAt        DateTime?
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  generation KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@id([generationId, documentId])
+  @@index([projectId])
+  @@index([generationId])
+  @@index([documentId])
+  @@index([generationId, completedAt])
+}
+
+model DocumentSearchChunk {
+  id               String    @id @db.VarChar(64)
+  projectId        String    @db.Uuid
+  documentId       String    @db.Uuid
+  ordinal          Int
+  sourceCommitSha  String
+  contentHash      String
+  headingPath      String[]
+  navigationAnchor String?   @db.VarChar(180)
+  content          String    @db.Text
+  createdAt        DateTime  @default(now())
+  supersededAt     DateTime?
+
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, sourceCommitSha, ordinal])
+  @@index([projectId])
+  @@index([documentId])
+}
+
+/// Searchable table metadata keyed by a rebuildable table UUID, intentionally without a DataTable FK.
+model TableSearchProjection {
+  tableId                  String   @id @db.Uuid
+  projectId                String   @db.Uuid
+  sourceCommitSha          String
+  title                    String
+  /// Database-triggered title present only while this projection is current.
+  exactTitle               String?
+  /// Database-generated canonical collision recheck for exact-title search.
+  exactNormalizedTitle     String?  @default(dbgenerated())
+  /// Fixed-width SHA-256 candidate key for exact-title search.
+  exactNormalizedTitleHash Bytes?   @default(dbgenerated())
+  schemaText               String   @db.Text
+  updatedAt                DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, exactNormalizedTitleHash, exactTitle, tableId], map: "TableSearchProjection_exact_title_idx")
+}
+
+/// The pgvector embedding column is database-owned and accessed through parameterized raw SQL.
+model KnowledgeEmbedding {
+  id                  String   @id @default(uuid()) @db.Uuid
+  projectId           String   @db.Uuid
+  generationId        String   @db.Uuid
+  ownerType           String
+  ownerId             String
+  contentHash         String
+  configFingerprint   String
+  model               String
+  embeddingDimensions Int
+  createdAt           DateTime @default(now())
+
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generation KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+
+  @@unique([generationId, ownerType, ownerId])
+  @@index([projectId])
+  @@index([projectId, ownerType, contentHash])
+  @@index([generationId])
+}
+
+model GraphEntity {
+  id             String   @id @default(uuid()) @db.Uuid
+  projectId      String   @db.Uuid
+  generationId   String   @db.Uuid
+  entityType     String
+  canonicalName  String
+  normalizedName String
+  description    String?  @db.Text
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project           Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generation        KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  aliases           GraphEntityAlias[]
+  mentions          EntityMention[]
+  outgoingRelations GraphRelation[]     @relation("GraphRelationSource")
+  incomingRelations GraphRelation[]     @relation("GraphRelationTarget")
+
+  @@unique([generationId, entityType, normalizedName])
+  @@index([projectId])
+  @@index([projectId, normalizedName])
+  @@index([generationId])
+}
+
+model GraphEntityAlias {
+  id              String   @id @default(uuid()) @db.Uuid
+  projectId       String   @db.Uuid
+  entityId        String   @db.Uuid
+  alias           String
+  normalizedAlias String
+  createdAt       DateTime @default(now())
+
+  project Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  entity  GraphEntity @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@unique([entityId, normalizedAlias])
+  @@index([projectId])
+  @@index([projectId, normalizedAlias])
+  @@index([entityId])
+}
+
+model EntityMention {
+  id              String    @id @default(uuid()) @db.Uuid
+  projectId       String    @db.Uuid
+  generationId    String    @db.Uuid
+  entityId        String    @db.Uuid
+  documentId      String    @db.Uuid
+  sourceChunkId   String    @db.VarChar(64)
+  sourceCommitSha String
+  mentionText     String    @db.Text
+  sourceDescription String? @db.Text
+  confidence      Float
+  validFrom       DateTime?
+  validTo         DateTime?
+  recordedAt      DateTime  @default(now())
+  invalidatedAt   DateTime?
+
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generation KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  entity     GraphEntity         @relation(fields: [entityId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([generationId])
+  @@index([entityId])
+  @@index([documentId])
+  @@index([sourceChunkId])
+}
+
+model GraphRelation {
+  id             String   @id @default(uuid()) @db.Uuid
+  projectId      String   @db.Uuid
+  generationId   String   @db.Uuid
+  sourceEntityId String   @db.Uuid
+  targetEntityId String   @db.Uuid
+  relationType   String
+  normalizedType String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generation   KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  sourceEntity GraphEntity         @relation("GraphRelationSource", fields: [sourceEntityId], references: [id], onDelete: Cascade)
+  targetEntity GraphEntity         @relation("GraphRelationTarget", fields: [targetEntityId], references: [id], onDelete: Cascade)
+  evidence     RelationEvidence[]
+
+  @@unique([generationId, sourceEntityId, targetEntityId, normalizedType])
+  @@index([projectId])
+  @@index([generationId])
+  @@index([sourceEntityId])
+  @@index([targetEntityId])
+}
+
+model RelationEvidence {
+  id              String    @id @default(uuid()) @db.Uuid
+  projectId       String    @db.Uuid
+  generationId    String    @db.Uuid
+  relationId      String    @db.Uuid
+  documentId      String    @db.Uuid
+  sourceChunkId   String    @db.VarChar(64)
+  sourceCommitSha String
+  evidenceText    String    @db.Text
+  confidence      Float
+  validFrom       DateTime?
+  validTo         DateTime?
+  recordedAt      DateTime  @default(now())
+  invalidatedAt   DateTime?
+
+  project    Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  generation KnowledgeGeneration @relation(fields: [generationId], references: [id], onDelete: Cascade)
+  relation   GraphRelation       @relation(fields: [relationId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([generationId])
+  @@index([relationId])
+  @@index([documentId])
+  @@index([sourceChunkId])
+}
+
+model AiUsage {
+  id                String         @id @default(uuid()) @db.Uuid
+  projectId         String?        @db.Uuid
+  operation         String
+  jobId             String?
+  runId             String?
+  documentId        String?        @db.Uuid
+  provider          String
+  model             String
+  connectionId      String?        @db.Uuid
+  configFingerprint String
+  inputTokens       Int?
+  outputTokens      Int?
+  cachedTokens      Int?
+  totalTokens       Int?
+  durationMs        Int
+  outcome           AiUsageOutcome
+  costMicros        BigInt?
+  currency          String?
+  createdAt         DateTime       @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([connectionId])
+  @@index([createdAt, id])
+  @@index([runId])
+}
+
+// ---- Phase 4C: encrypted LLM connections and routing (spec §10) ----
+/// Credential columns hold AES-256-GCM output; AAD is "llm-connection:<id>". Never select them into API results.
+model LlmConnection {
+  id                   String          @id @default(uuid()) @db.Uuid
+  name                 String          @unique
+  providerType         LlmProviderType
+  endpoint             String
+  settings             Json            @default("{}")
+  requestTimeoutMs     Int             @default(30000)
+  enabled              Boolean         @default(true)
+  credentialCiphertext Bytes
+  credentialNonce      Bytes
+  credentialTag        Bytes
+  credentialKeyVersion Int
+  credentialUpdatedAt  DateTime        @default(now())
+  lastTestAt           DateTime?
+  lastTestOutcome      LlmTestOutcome?
+  lastTestSummary      String?         @db.VarChar(300)
+  createdById          String?         @db.Uuid
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  createdBy User?      @relation("LlmConnectionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  models    LlmModel[]
+
+  @@index([createdById])
+}
+
+// Context/output token limits are positive or null (database CHECKs).
+model LlmModel {
+  id                         String                    @id @default(uuid()) @db.Uuid
+  connectionId               String                    @db.Uuid
+  providerModelId            String
+  displayName                String
+  contextWindow              Int?
+  maxOutputTokens            Int?
+  embeddingDimensions        Int?
+  embeddingDimensionMode     LlmEmbeddingDimensionMode @default(native)
+  upstreamProvider           String?                   @db.VarChar(200)
+  /// Legacy value retained during rollout; active thinking effort is set on LlmRoute.
+  reasoningMode              LlmReasoningMode          @default(provider_default)
+  capabilities               LlmModelCapability[]
+  inputCostMicrosPerMillion  Int?
+  outputCostMicrosPerMillion Int?
+  currency                   String?
+  /// Shared by verified-compatible embedding models; null means the provider identity decides.
+  vectorSpaceKey              String?   @db.VarChar(64)
+  vectorSpaceReferenceModelId String?   @db.Uuid
+  vectorSpaceVerifiedAt       DateTime?
+  vectorSpaceMinSimilarity    Float?
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
+
+  connection LlmConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  routes     LlmRoute[]
+  vectorSpaceReferenceModel LlmModel?  @relation("LlmModelVectorSpaceReference", fields: [vectorSpaceReferenceModelId], references: [id], onDelete: SetNull)
+  vectorSpaceReferencedBy   LlmModel[] @relation("LlmModelVectorSpaceReference")
+
+  @@unique([connectionId, providerModelId])
+}
+
+/// One row per purpose; deleting a routed model is refused (Restrict) so admins clear routes first.
+model LlmRoute {
+  purpose     LlmPurpose @id
+  modelId     String     @db.Uuid
+  reasoningMode LlmReasoningMode @default(provider_default)
+  updatedById String?    @db.Uuid
+  updatedAt   DateTime   @updatedAt
+
+  model     LlmModel @relation(fields: [modelId], references: [id], onDelete: Restrict)
+  updatedBy User?    @relation("LlmRouteUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([modelId])
+  @@index([updatedById])
+}
+
+model AssistantConversation {
+  id              String    @id @default(uuid()) @db.Uuid
+  ownerId         String    @db.Uuid
+  title           String    @db.VarChar(200)
+  pinnedProjectId String?   @db.Uuid
+  autoApproveChanges Boolean @default(false)
+  lastMessageAt   DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  owner         User                @relation("AssistantConversationOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  pinnedProject Project?            @relation("AssistantConversationPin", fields: [pinnedProjectId], references: [id], onDelete: SetNull)
+  messages      AssistantMessage[]
+  runs          AssistantRun[]
+  proposals     AssistantProposal[]
+
+  @@index([ownerId, updatedAt])
+  @@index([pinnedProjectId])
+}
+
+/// content: { text: string; citationIds?: string[]; proposalIds?: string[] }
+model AssistantMessage {
+  id             String                 @id @default(uuid()) @db.Uuid
+  conversationId String                 @db.Uuid
+  position       Int
+  role           AssistantMessageRole
+  status         AssistantMessageStatus @default(complete)
+  content        Json
+  scopeSnapshot  Json?
+  createdAt      DateTime               @default(now())
+
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggeredRun AssistantRun?         @relation("AssistantRunUserMessage")
+  producedBy   AssistantRun?         @relation("AssistantRunAssistantMessage")
+  citations    AssistantCitation[]
+
+  @@unique([conversationId, position])
+}
+
+/// nextSequence is the monotonic event counter; routeSnapshot is the non-secret §10.3 snapshot.
+model AssistantRun {
+  id                 String             @id @default(uuid()) @db.Uuid
+  conversationId     String             @db.Uuid
+  userMessageId      String             @unique @db.Uuid
+  assistantMessageId String?            @unique @db.Uuid
+  status             AssistantRunStatus @default(queued)
+  scopeSnapshot      Json
+  actorSnapshot      Json
+  routeSnapshot      Json?
+  nextSequence       Int                @default(0)
+  attemptCount       Int                @default(0)
+  maxAttempts        Int                @default(3)
+  jobId              String?
+  errorCode          String?            @db.VarChar(40)
+  errorMessage       String?            @db.VarChar(300)
+  cancelRequestedAt  DateTime?
+  queuedAt           DateTime           @default(now())
+  startedAt          DateTime?
+  finishedAt         DateTime?
+
+  conversation         AssistantConversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userMessage          AssistantMessage          @relation("AssistantRunUserMessage", fields: [userMessageId], references: [id], onDelete: Cascade)
+  assistantMessage     AssistantMessage?         @relation("AssistantRunAssistantMessage", fields: [assistantMessageId], references: [id], onDelete: SetNull)
+  attempts             AssistantRunAttempt[]
+  events               AssistantRunEvent[]
+  citations            AssistantCitation[]
+  proposals            AssistantProposal[]
+  externalMcpCalls     ExternalMcpCall[]
+  externalMcpApprovals ExternalMcpToolApproval[]
+
+  @@index([conversationId, queuedAt])
+  @@index([status, queuedAt])
+  @@index([conversationId, finishedAt(sort: Desc), id(sort: Desc)])
+}
+
+model AssistantRunAttempt {
+  id             String                 @id @default(uuid()) @db.Uuid
+  runId          String                 @db.Uuid
+  number         Int
+  workerId       String                 @db.VarChar(200)
+  status         AssistantAttemptStatus @default(running)
+  leaseExpiresAt DateTime
+  startedAt      DateTime               @default(now())
+  endedAt        DateTime?
+  failureCode    String?                @db.VarChar(40)
+  failureSummary String?                @db.VarChar(300)
+
+  run                  AssistantRun              @relation(fields: [runId], references: [id], onDelete: Cascade)
+  events               AssistantRunEvent[]
+  externalMcpCalls     ExternalMcpCall[]
+  externalMcpApprovals ExternalMcpToolApproval[]
+
+  @@unique([runId, number])
+  @@index([status, leaseExpiresAt])
+  @@index([endedAt, id])
+}
+
+model AssistantRunEvent {
+  id        String   @id @default(uuid()) @db.Uuid
+  runId     String   @db.Uuid
+  attemptId String?  @db.Uuid
+  sequence  Int
+  type      String   @db.VarChar(40)
+  payload   Json
+  createdAt DateTime @default(now())
+
+  run     AssistantRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  attempt AssistantRunAttempt? @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, sequence])
+  @@index([attemptId])
+  @@index([createdAt, id])
+}
+
+/// locator: validated SourceLocator JSON (spec §14). No FK to documents/tables: cited revisions outlive deletions.
+model AssistantCitation {
+  id         String                @id @default(uuid()) @db.Uuid
+  runId      String                @db.Uuid
+  messageId  String?               @db.Uuid
+  kind       AssistantCitationKind
+  projectId  String                @db.Uuid
+  resourceId String                @db.Uuid
+  commitSha  String?
+  locator    Json
+  label      String                @db.VarChar(300)
+  excerpt    String?               @db.VarChar(500)
+  createdAt  DateTime              @default(now())
+
+  run     AssistantRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  message AssistantMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([messageId])
+  @@index([runId])
+}
+
+/// operation: one ProposalOperation (Task 6); preview: diff/row preview; resolution: { commitSha?, reason?, resolvedById? }
+model AssistantProposal {
+  id             String                  @id @default(uuid()) @db.Uuid
+  conversationId String                  @db.Uuid
+  runId          String                  @db.Uuid
+  userId         String                  @db.Uuid
+  projectId      String                  @db.Uuid
+  kind           String                  @db.VarChar(40)
+  resourceId     String?                 @db.Uuid
+  baseCommitSha  String?
+  summary        String                  @db.VarChar(500)
+  operation      Json
+  preview        Json
+  status         AssistantProposalStatus @default(pending)
+  resolution     Json?
+  createdAt      DateTime                @default(now())
+  expiresAt      DateTime
+  resolvedAt     DateTime?
+
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  run          AssistantRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  user         User                  @relation("AssistantProposalUser", fields: [userId], references: [id], onDelete: Cascade)
+  project      Project               @relation("AssistantProposalProject", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+  @@index([status, expiresAt])
+  @@index([projectId])
+  @@index([runId])
+  @@index([userId])
+}
+
+/// Phase 6A: a user-authored scheduled AI task (spec §4).
+enum ScheduledTaskOutputMode {
+  replace
+  update
+}
+
+model ScheduledTask {
+  id                  String                    @id @default(uuid()) @db.Uuid
+  ownerId             String                    @db.Uuid
+  name                String                    @db.VarChar(120)
+  instruction         String
+  scopeRequest        Json
+  scopeSnapshot       Json
+  outputProjectId     String                    @db.Uuid
+  outputFolderPath    String[]
+  outputDocumentId    String?                   @db.Uuid
+  outputMode          ScheduledTaskOutputMode   @default(replace)
+  outputTitle         String?                   @db.VarChar(200)
+  schedule            Json
+  timezone            String
+  cron                String
+  status              ScheduledTaskStatus       @default(active)
+  pauseReason         ScheduledTaskPauseReason?
+  nextRunAt           DateTime?
+  consecutiveFailures Int                       @default(0)
+  lastRunAt           DateTime?
+  lastRunStatus       ScheduledTaskRunStatus?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  owner          User                         @relation("ScheduledTaskOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  outputProject  Project                      @relation("ScheduledTaskOutputProject", fields: [outputProjectId], references: [id], onDelete: Cascade)
+  runs           ScheduledTaskRun[]
+  externalInputs ScheduledTaskExternalInput[]
+
+  @@index([ownerId])
+  @@index([outputProjectId])
+  @@index([status, nextRunAt])
+  @@index([outputDocumentId])
+}
+
+model ScheduledTaskRun {
+  id               String                  @id @default(uuid()) @db.Uuid
+  taskId           String                  @db.Uuid
+  status           ScheduledTaskRunStatus  @default(queued)
+  trigger          ScheduledTaskRunTrigger
+  queuedAt         DateTime                @default(now())
+  startedAt        DateTime?
+  finishedAt       DateTime?
+  jobId            String?
+  workerId         String?
+  leaseExpiresAt   DateTime?
+  projectHeads     Json?
+  contextSummary   Json?
+  outputDocumentId String?                 @db.Uuid
+  // Where that report was written; plain uuid so history outlives a task move or project.
+  outputProjectId  String?                 @db.Uuid
+  outputCommitSha  String?
+  inputTokens      Int?
+  outputTokens     Int?
+  durationMs       Int?
+  /// A failure code (spec §8) or, for skipped runs, the skip reason.
+  errorCode        String?                 @db.VarChar(40)
+  errorMessage     String?                 @db.VarChar(300)
+
+  task             ScheduledTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  externalMcpCalls ExternalMcpCall[]
+
+  @@index([taskId, queuedAt])
+  @@index([status, leaseExpiresAt])
+  @@index([taskId, finishedAt(sort: Desc), id(sort: Desc)])
+  @@index([finishedAt, id])
+}
+
+model ExternalMcpConnection {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  name                   String                    @db.VarChar(120)
+  endpoint               String                    @db.VarChar(2048)
+  enabled                Boolean                   @default(false)
+  allowInsecureTls       Boolean                   @default(false)
+  authMode               ExternalMcpAuthMode       @default(none)
+  credentialCiphertext   String?
+  credentialKeyVersion   Int?
+  credentialIv           String?
+  credentialTag          String?
+  revision               Int                       @default(1)
+  timeoutMs              Int                       @default(30000)
+  ownerId                String                    @db.Uuid
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  lastDiscoveredAt       DateTime?
+  discoveryProtocol      String?                   @db.VarChar(40)
+  discoveryServerName    String?                   @db.VarChar(200)
+  discoveryToolCount     Int?
+  discoveryResourceCount Int?
+  discoveryErrorCode     String?                   @db.VarChar(40)
+  discoveryErrorSummary  String?                   @db.VarChar(300)
+  lastTestedAt           DateTime?
+  testStatus             String?                   @db.VarChar(40)
+  testErrorCode          String?                   @db.VarChar(40)
+  testErrorSummary       String?                   @db.VarChar(300)
+
+  owner     User                      @relation("ExternalMcpConnectionOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  tools     ExternalMcpTool[]
+  calls     ExternalMcpCall[]
+  approvals ExternalMcpToolApproval[]
+
+  @@unique([ownerId, name])
+  @@index([ownerId])
+  @@index([enabled])
+}
+
+/// Another Weaver instance users may send content to; registering it also creates its OAuth client row here.
+model RemoteInstance {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @unique @db.VarChar(120)
+  /// https origin plus optional base path, no trailing slash; the peer's client id is derived from it.
+  baseUrl           String   @unique @db.VarChar(2048)
+  enabled           Boolean  @default(true)
+  revision          Int      @default(1)
+  createdById       String?  @db.Uuid
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  lastCheckedAt     DateTime?
+  checkStatus       String?  @db.VarChar(40)
+  checkErrorSummary String?  @db.VarChar(300)
+
+  createdBy      User?                        @relation("RemoteInstanceCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  connections    RemoteInstanceConnection[]
+  authorizations RemoteInstanceAuthorization[]
+
+  @@index([createdById])
+  @@index([enabled])
+}
+
+/// One user's OAuth tokens for one remote instance; the secret blob is `{ accessToken, refreshToken }`.
+model RemoteInstanceConnection {
+  id                   String    @id @default(uuid()) @db.Uuid
+  remoteInstanceId     String    @db.Uuid
+  userId               String    @db.Uuid
+  remoteUserId         String?   @db.VarChar(64)
+  remoteUserName       String?   @db.VarChar(200)
+  tokensCiphertext     String
+  tokensKeyVersion     Int
+  tokensIv             String
+  tokensTag            String
+  accessTokenExpiresAt DateTime
+  scope                String    @db.VarChar(200)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  lastUsedAt           DateTime?
+
+  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([remoteInstanceId, userId])
+  @@index([userId])
+}
+
+/// An in-flight connect attempt: the OAuth state and PKCE verifier, ten minutes at most.
+model RemoteInstanceAuthorization {
+  state            String   @id @db.VarChar(64)
+  remoteInstanceId String   @db.Uuid
+  userId           String   @db.Uuid
+  codeVerifier     String   @db.VarChar(128)
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+
+  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([remoteInstanceId])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model ExternalMcpTool {
+  id                     String                 @id @default(uuid()) @db.Uuid
+  connectionId           String                 @db.Uuid
+  remoteName             String                 @db.VarChar(300)
+  description            String?
+  discoveredDefinition   Json
+  presentInCatalog       Boolean                @default(true)
+  discoveredRemoteDigest String                 @db.Char(64)
+  reviewedDefinition     Json?
+  reviewedRemoteDigest   String?                @db.Char(64)
+  reviewDigest           String?                @db.Char(64)
+  /// Discovery pre-fills the suggested effect; ExternalMcpTool_review_check requires one once reviewed.
+  effect                 ExternalMcpToolEffect?
+  enabled                Boolean                @default(false)
+  reviewedById           String?                @db.Uuid
+  reviewedAt             DateTime?
+  discoveredAt           DateTime
+
+  connection ExternalMcpConnection        @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  reviewedBy User?                        @relation("ExternalMcpToolReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  taskInputs ScheduledTaskExternalInput[]
+  calls      ExternalMcpCall[]
+  approvals  ExternalMcpToolApproval[]
+
+  @@unique([connectionId, remoteName])
+  @@index([reviewedById])
+  @@index([connectionId, enabled])
+}
+
+model ScheduledTaskExternalInput {
+  id               String   @id @default(uuid()) @db.Uuid
+  taskId           String   @db.Uuid
+  position         Int
+  name             String   @db.VarChar(120)
+  toolId           String   @db.Uuid
+  argumentBindings Json
+  createdAt        DateTime
+
+  task  ScheduledTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tool  ExternalMcpTool   @relation(fields: [toolId], references: [id], onDelete: NoAction)
+  calls ExternalMcpCall[]
+
+  @@unique([taskId, position])
+  @@unique([taskId, name])
+  @@index([toolId])
+}
+
+model ExternalMcpCall {
+  id                     String                    @id @default(uuid()) @db.Uuid
+  userId                 String?                   @db.Uuid
+  connectionId           String?                   @db.Uuid
+  toolId                 String?                   @db.Uuid
+  assistantRunId         String?                   @db.Uuid
+  attemptId              String?                   @db.Uuid
+  toolCallId             String?                   @db.VarChar(200)
+  taskRunId              String?                   @db.Uuid
+  inputId                String?                   @db.Uuid
+  inputSnapshotId        String?                   @db.Uuid
+  mcpRequestId           String?                   @unique @db.VarChar(200)
+  mcpCredentialId        String?                   @db.VarChar(200)
+  mcpAuthMethod          String?                   @db.VarChar(20)
+  status                 ExternalMcpCallStatus     @default(prepared)
+  userSnapshotId         String                    @db.Uuid
+  userSnapshotName       String                    @db.VarChar(200)
+  connectionSnapshotId   String                    @db.Uuid
+  connectionSnapshotName String                    @db.VarChar(120)
+  toolSnapshotId         String                    @db.Uuid
+  toolSnapshotName       String                    @db.VarChar(300)
+  remoteDigest           String                    @db.Char(64)
+  reviewDigest           String                    @db.Char(64)
+  configRevision         Int
+  effect                 ExternalMcpToolEffect
+  argsDigest             String                    @db.Char(64)
+  invocationDigest       String?                   @db.Char(64)
+  denialDigest           String?                   @db.Char(64)
+  deadline               DateTime?
+  scopeSnapshot          Json
+  correlationId          String?                   @db.VarChar(200)
+  preparedAt             DateTime
+  dispatchedAt           DateTime?
+  completedAt            DateTime?
+  durationMs             Int?
+  requestBytes           Int?
+  responseBytes          Int?
+  errorCode              String?                   @db.VarChar(40)
+  errorSummary           String?                   @db.VarChar(300)
+  retainedUntil          DateTime
+
+  user         User?                       @relation("ExternalMcpCallUser", fields: [userId], references: [id], onDelete: SetNull)
+  connection   ExternalMcpConnection?      @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  tool         ExternalMcpTool?            @relation(fields: [toolId], references: [id], onDelete: SetNull)
+  assistantRun AssistantRun?               @relation(fields: [assistantRunId], references: [id], onDelete: Cascade)
+  attempt      AssistantRunAttempt?        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  taskRun      ScheduledTaskRun?           @relation(fields: [taskRunId], references: [id], onDelete: Cascade)
+  input        ScheduledTaskExternalInput? @relation(fields: [inputId], references: [id], onDelete: SetNull)
+  approval     ExternalMcpToolApproval?
+
+  @@unique([attemptId, toolCallId])
+  @@unique([taskRunId, inputSnapshotId])
+  @@index([userId])
+  @@index([connectionId])
+  @@index([toolId])
+  @@index([assistantRunId])
+  @@index([attemptId])
+  @@index([taskRunId])
+  @@index([inputId])
+  @@index([status, preparedAt])
+  @@index([retainedUntil])
+}
+
+model ExternalMcpToolApproval {
+  id                         String                   @id @default(uuid()) @db.Uuid
+  callId                     String                   @unique @db.Uuid
+  ownerId                    String                   @db.Uuid
+  runId                      String                   @db.Uuid
+  attemptId                  String                   @db.Uuid
+  connectionId               String?                  @db.Uuid
+  toolId                     String?                  @db.Uuid
+  toolCallId                 String                   @db.VarChar(200)
+  scopeSnapshot              Json
+  configRevision             Int
+  reviewDigest               String                   @db.Char(64)
+  argsDigest                 String                   @db.Char(64)
+  pendingArgumentsCiphertext String?
+  pendingArgumentsKeyVersion Int?
+  pendingArgumentsIv         String?
+  pendingArgumentsTag        String?
+  state                      ExternalMcpApprovalState @default(pending)
+  expiresAt                  DateTime
+  createdAt                  DateTime
+  decidedById                String?                  @db.Uuid
+  decidedAt                  DateTime?
+  retainedUntil              DateTime
+
+  call       ExternalMcpCall        @relation(fields: [callId], references: [id], onDelete: Cascade)
+  owner      User                   @relation("ExternalMcpApprovalOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  run        AssistantRun           @relation(fields: [runId], references: [id], onDelete: Cascade)
+  attempt    AssistantRunAttempt    @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  connection ExternalMcpConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  tool       ExternalMcpTool?       @relation(fields: [toolId], references: [id], onDelete: SetNull)
+  decidedBy  User?                  @relation("ExternalMcpApprovalDecisionActor", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([runId])
+  @@index([attemptId])
+  @@index([connectionId])
+  @@index([toolId])
+  @@index([decidedById])
+  @@index([state, expiresAt])
+  @@index([retainedUntil])
+}
+
+/// Spec §16/§26: one row per successful direct write, keyed by the client's idempotency key.
+model McpOperation {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @db.Uuid
+  credentialId   String   @db.VarChar(200)
+  projectId      String   @db.Uuid
+  idempotencyKey String   @db.VarChar(128)
+  toolName       String   @db.VarChar(60)
+  /// SHA-256 over the canonical request; a reused key with another hash is a CONFLICT.
+  requestHash    String   @db.VarChar(64)
+  resourceId     String?  @db.Uuid
+  commitSha      String
+  /// The tool output returned on replay (McpWriteResult without `replayed`).
+  result         Json
+  createdAt      DateTime @default(now())
+
+  user    User    @relation("McpOperationUser", fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation("McpOperationProject", fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, idempotencyKey])
+  @@index([projectId, createdAt])
+  @@index([createdAt])
+}
+
+/// Spec §17/§26: one row per tools/call and resources/read; never payloads, never tokens.
+model McpAuditEvent {
+  id                   String     @id @default(uuid()) @db.Uuid
+  requestId            String     @db.VarChar(64)
+  userId               String?    @db.Uuid
+  credentialId         String     @db.VarChar(200)
+  authenticationMethod String     @db.VarChar(20)
+  clientId             String?
+  method               String     @db.VarChar(40)
+  name                 String     @db.VarChar(500)
+  projectId            String?    @db.Uuid
+  outcome              McpOutcome
+  errorCode            String?    @db.VarChar(40)
+  durationMs           Int
+  commitSha            String?
+  createdAt            DateTime   @default(now())
+
+  user    User?    @relation("McpAuditEventUser", fields: [userId], references: [id], onDelete: SetNull)
+  project Project? @relation("McpAuditEventProject", fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([projectId, createdAt])
+  @@index([createdAt])
+}
+
+/// Shared administrative settings keyed by name; readers treat a missing row as defaults.
+model SystemSetting {
+  key         String   @id @db.VarChar(80)
+  value       Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?  @db.Uuid
+}
+
+/// Diagnostic log rows (admin MCP diagnostics design §4.2). No foreign keys: inserts and pruning never wait on other tables.
+model DiagnosticEvent {
+  id              String             @id @default(uuid()) @db.Uuid
+  createdAt       DateTime
+  runtime         DiagnosticRuntime
+  severity        DiagnosticSeverity
+  verbose         Boolean            @default(false)
+  category        String             @db.VarChar(40)
+  event           String             @db.VarChar(80)
+  message         String             @db.VarChar(500)
+  requestId       String?            @db.VarChar(64)
+  jobId           String?            @db.VarChar(64)
+  runId           String?            @db.Uuid
+  userId          String?            @db.Uuid
+  credentialId    String?            @db.VarChar(200)
+  projectId       String?            @db.Uuid
+  generationId    String?            @db.Uuid
+  documentId      String?            @db.Uuid
+  connectionId    String?            @db.Uuid
+  durationMs      Int?
+  statusCode      Int?
+  outcome         String?            @db.VarChar(20)
+  details         Json?
+  hasRequestBody  Boolean            @default(false)
+  hasResponseBody Boolean            @default(false)
+  bodyProjectIds  Json?
+  requestBody     String?            @db.Text
+  responseBody    String?            @db.Text
+
+  @@index([event, createdAt])
+  @@index([severity, createdAt])
+  @@index([userId, createdAt])
+  @@index([connectionId, createdAt])
+  @@index([createdAt])
+  @@index([category, createdAt])
+  @@index([jobId])
+  @@index([runId])
+  @@index([requestId])
+  @@index([projectId, createdAt])
+  @@index([generationId])
+  @@index([verbose, createdAt])
+}
+
+// ---- Better Auth jwt plugin ----
+model Jwks {
+  id         String    @id @default(uuid()) @db.Uuid
+  publicKey  String
+  privateKey String
+  createdAt  DateTime
+  expiresAt  DateTime?
+  alg        String?
+  crv        String?
+}
+
+enum ProjectApiTargetKind {
+  document
+  documentFolder
+  table
+  tableFolder
+}
+
+enum ProjectApiOperationState {
+  reserved
+  succeeded
+  failed
+}
+
+model ProjectApiKey {
+  id                 String    @id @default(uuid()) @db.Uuid
+  projectId          String    @db.Uuid
+  createdById        String?   @db.Uuid
+  name               String    @db.VarChar(100)
+  digest             String    @unique @db.VarChar(64)
+  fingerprint        String    @db.VarChar(16)
+  expiresAt          DateTime?
+  revokedAt          DateTime?
+  policyVersion      Int       @default(1)
+  rateLimitPerMinute Int       @default(100)
+  createdAt          DateTime
+  updatedAt          DateTime  @updatedAt
+  lastUsedAt         DateTime?
+
+  project     Project                @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy   User?                  @relation("ProjectApiKeyCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  grants      ProjectApiKeyGrant[]
+  operations  ProjectApiOperation[]
+  auditEvents ProjectApiAuditEvent[]
+  rateWindow  ProjectApiRateWindow?
+
+  @@unique([id, projectId])
+  @@index([projectId, revokedAt, createdAt])
+  @@index([createdById])
+}
+
+/// Content target UUIDs deliberately have no FK to rebuildable projections.
+model ProjectApiKeyGrant {
+  id          String               @id @default(uuid()) @db.Uuid
+  keyId       String               @db.Uuid
+  targetKind  ProjectApiTargetKind
+  targetId    String?              @db.Uuid
+  isScopeRoot Boolean              @default(false)
+  canRead     Boolean              @default(false)
+  canCreate   Boolean              @default(false)
+  canUpdate   Boolean              @default(false)
+  canDelete   Boolean              @default(false)
+
+  key ProjectApiKey @relation(fields: [keyId], references: [id], onDelete: Cascade)
+
+  /// A partial SQL unique index also prevents duplicate scope-root grants.
+  @@unique([keyId, targetKind, targetId])
+  @@index([keyId])
+}
+
+model ProjectApiOperation {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  keyId              String                   @db.Uuid
+  projectId          String                   @db.Uuid
+  idempotencyKey     String                   @db.VarChar(128)
+  operation          String                   @db.VarChar(40)
+  requestHash        String                   @db.VarChar(64)
+  state              ProjectApiOperationState @default(reserved)
+  resourceId         String?                  @db.Uuid
+  generatedIds       Json
+  authorizingAnchors Json
+  commitSha          String?                  @db.VarChar(40)
+  receipt            Json?
+  error              Json?
+  httpStatus         Int?
+  createdAt          DateTime
+  completedAt        DateTime?
+
+  key     ProjectApiKey @relation(fields: [keyId, projectId], references: [id, projectId], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([keyId, idempotencyKey])
+  @@index([keyId, projectId])
+  @@index([projectId, state, createdAt])
+  @@index([state, completedAt])
+}
+
+model ProjectApiAuditEvent {
+  id         String   @id @default(uuid()) @db.Uuid
+  keyId      String   @db.Uuid
+  projectId  String   @db.Uuid
+  requestId  String   @db.VarChar(64)
+  method     String   @db.VarChar(8)
+  operation  String   @db.VarChar(40)
+  resourceId String?  @db.Uuid
+  outcome    String   @db.VarChar(40)
+  status     Int
+  durationMs Int
+  commitSha  String?  @db.VarChar(40)
+  createdAt  DateTime
+
+  key     ProjectApiKey @relation(fields: [keyId, projectId], references: [id, projectId], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([keyId, projectId])
+  @@index([projectId, createdAt])
+  @@index([createdAt])
+}
+
+model ProjectApiRateWindow {
+  keyId           String   @id @db.Uuid
+  windowStartedAt DateTime
+  requestCount    Int
+
+  key ProjectApiKey @relation(fields: [keyId], references: [id], onDelete: Cascade)
+
+  @@index([windowStartedAt])
+}
+
+// ---- Better Auth api-key plugin (modelName "apiKey"); referenceId is always a user ----
+model ApiKey {
+  id                  String    @id @default(uuid()) @db.Uuid
+  configId            String    @default("default")
+  name                String?
+  start               String?
+  referenceId         String    @db.Uuid
+  prefix              String?
+  key                 String
+  refillInterval      Int?
+  refillAmount        Int?
+  lastRefillAt        DateTime?
+  enabled             Boolean?  @default(true)
+  rateLimitEnabled    Boolean?  @default(true)
+  rateLimitTimeWindow Int?      @default(86400000)
+  rateLimitMax        Int?      @default(10)
+  requestCount        Int?      @default(0)
+  remaining           Int?
+  lastRequest         DateTime?
+  expiresAt           DateTime?
+  createdAt           DateTime
+  updatedAt           DateTime
+  permissions         String?
+  metadata            String?
+
+  user     User            @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+  projects ApiKeyProject[]
+
+  @@index([configId])
+  @@index([referenceId])
+  @@index([key])
+}
+
+// Weaver-owned project restriction (spec §8); empty set = all accessible projects.
+model ApiKeyProject {
+  apiKeyId  String @db.Uuid
+  projectId String @db.Uuid
+
+  apiKey  ApiKey  @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+
+  @@id([apiKeyId, projectId])
+  @@index([projectId])
+}
+
+// ---- Better Auth oauth-provider (via @better-auth/mcp) ----
+model OauthClient {
+  id                               String    @id @default(uuid()) @db.Uuid
+  clientId                         String    @unique
+  clientSecret                     String?
+  clientDiscoveryId                String?
+  disabled                         Boolean?  @default(false)
+  skipConsent                      Boolean?
+  enableEndSession                 Boolean?
+  subjectType                      String?
+  scopes                           String[]
+  clientCredentialsScopes          String[]  @default([])
+  userId                           String?   @db.Uuid
+  createdAt                        DateTime?
+  updatedAt                        DateTime?
+  name                             String?
+  uri                              String?
+  icon                             String?
+  contacts                         String[]
+  tos                              String?
+  policy                           String?
+  softwareId                       String?
+  softwareVersion                  String?
+  softwareStatement                String?
+  redirectUris                     String[]
+  postLogoutRedirectUris           String[]
+  backchannelLogoutUri             String?
+  backchannelLogoutSessionRequired Boolean?
+  tokenEndpointAuthMethod          String?
+  applicationType                  String?
+  jwks                             String?
+  jwksUri                          String?
+  grantTypes                       String[]
+  responseTypes                    String[]
+  requirePKCE                      Boolean?
+  dpopBoundAccessTokens            Boolean?  @default(false)
+  referenceId                      String?
+  metadata                         Json?
+
+  user            User?                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clientResources OauthClientResource[]
+  refreshTokens   OauthRefreshToken[]
+  accessTokens    OauthAccessToken[]
+  consents        OauthConsent[]
+
+  @@index([userId])
+}
+
+model OauthResource {
+  id                            String    @id @default(uuid()) @db.Uuid
+  identifier                    String    @unique
+  name                          String
+  accessTokenTtl                Int?
+  refreshTokenTtl               Int?
+  signingAlgorithm              String?
+  signingKeyId                  String?
+  allowedScopes                 String[]
+  customClaims                  Json?
+  dpopBoundAccessTokensRequired Boolean?  @default(false)
+  disabled                      Boolean?  @default(false)
+  createdAt                     DateTime?
+  updatedAt                     DateTime?
+  policyVersion                 Int?      @default(1)
+  metadata                      Json?
+
+  clientResources OauthClientResource[]
+}
+
+model OauthClientResource {
+  id         String    @id @default(uuid()) @db.Uuid
+  clientId   String
+  resourceId String
+  metadata   Json?
+  createdAt  DateTime?
+
+  client   OauthClient   @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  resource OauthResource @relation(fields: [resourceId], references: [identifier], onDelete: Cascade)
+
+  @@unique([clientId, resourceId])
+  @@index([clientId])
+  @@index([resourceId])
+}
+
+// Early refresh-family deletion invalidates its consent generation through an AFTER DELETE trigger.
+model OauthRefreshToken {
+  id                      String    @id @default(uuid()) @db.Uuid
+  token                   String    @unique
+  clientId                String
+  sessionId               String?   @db.Uuid
+  userId                  String    @db.Uuid
+  referenceId             String? // Weaver consent-generation id, propagated by Better Auth.
+  authorizationCodeId     String?
+  resources               String[]
+  requestedUserInfoClaims String[]
+  expiresAt               DateTime?
+  createdAt               DateTime?
+  revoked                 DateTime?
+  rotatedAt               DateTime?
+  rotationReplayResponse  String?
+  rotationReplayExpiresAt DateTime?
+  authTime                DateTime?
+  confirmation            Json?
+  scopes                  String[]
+
+  client       OauthClient        @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  session      Session?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessTokens OauthAccessToken[]
+
+  @@index([clientId])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([authorizationCodeId])
+  @@index([referenceId])
+}
+
+model OauthAccessToken {
+  id                      String    @id @default(uuid()) @db.Uuid
+  token                   String?   @unique
+  clientId                String
+  sessionId               String?   @db.Uuid
+  userId                  String?   @db.Uuid
+  referenceId             String?
+  authorizationCodeId     String?
+  resources               String[]
+  requestedUserInfoClaims String[]
+  refreshId               String?   @db.Uuid
+  expiresAt               DateTime?
+  createdAt               DateTime?
+  revoked                 DateTime?
+  confirmation            Json?
+  scopes                  String[]
+
+  client       OauthClient        @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  session      Session?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  user         User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshToken OauthRefreshToken? @relation(fields: [refreshId], references: [id], onDelete: Cascade)
+
+  @@index([clientId])
+  @@index([sessionId])
+  @@index([userId])
+  @@index([authorizationCodeId])
+  @@index([refreshId])
+}
+
+model OauthConsent {
+  id                      String    @id @default(uuid()) @db.Uuid
+  clientId                String
+  userId                  String?   @db.Uuid
+  referenceId             String? // Immutable Weaver authorization generation.
+  resources               String[]
+  requestedUserInfoClaims String[]
+  scopes                  String[]
+  createdAt               DateTime?
+  updatedAt               DateTime?
+
+  client OauthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user   User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientId])
+  @@index([clientId])
+  @@index([userId])
+  @@index([userId, clientId, referenceId])
+}
+
+// Replay tombstones for private_key_jwt client assertions; ids are plugin-formatted strings.
+model OauthClientAssertion {
+  id        String   @id
+  expiresAt DateTime
+}
+
+// ---- Phase 5A: import & ingestion (spec §5) ----
+enum IngestionOrigin {
+  upload
+  external
+}
+
+enum IngestionFileStatus {
+  pending
+  parsing
+  extracting
+  linking
+  ready
+  accepting
+  accepted
+  rejected
+  failed
+  blocked_configuration
+}
+
+enum IngestionTargetKind {
+  document
+  table
+}
+
+enum IngestionFailureKind {
+  configuration
+  source_missing
+  parser
+  provider
+  validation
+  internal
+}
+
+model IngestionBatch {
+  id          String          @id @default(uuid()) @db.Uuid
+  projectId   String          @db.Uuid
+  createdById String          @db.Uuid
+  origin      IngestionOrigin
+  label       String?         @db.VarChar(200)
+  createdAt   DateTime        @default(now())
+
+  project   Project         @relation("IngestionBatchProject", fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User            @relation("IngestionBatchCreator", fields: [createdById], references: [id], onDelete: Cascade)
+  files     IngestionFile[]
+
+  @@index([projectId, createdAt])
+  @@index([createdById])
+  @@index([createdById, id])
+}
+
+model IngestionFile {
+  id                   String                @id @default(uuid()) @db.Uuid
+  batchId              String                @db.Uuid
+  projectId            String                @db.Uuid
+  fileName             String                @db.VarChar(255)
+  mimeType             String                @db.VarChar(128)
+  byteSize             Int
+  contentDigest        String                @db.VarChar(64)
+  status               IngestionFileStatus   @default(pending)
+  failureKind          IngestionFailureKind?
+  failureMessage       String?               @db.VarChar(500)
+  parserAdapterId      String?               @db.VarChar(40)
+  parserVersion        String?               @db.VarChar(40)
+  /// Resolved LLM route captured when an AI stage runs; null until 5C.
+  routeSnapshot        Json?
+  parseStartedAt       DateTime?
+  parseEndedAt         DateTime?
+  analyzeStartedAt     DateTime?
+  analyzeEndedAt       DateTime?
+  linkStartedAt        DateTime?
+  linkEndedAt          DateTime?
+  attemptCount         Int                   @default(0)
+  /// Durable pg-boss delivery identity of the active stage's claim; fences redeliveries of parse, analyze, and link alike.
+  stageClaimJobId      String?               @db.VarChar(64)
+  stageClaimRetryCount Int?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+
+  batch   IngestionBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  project Project         @relation("IngestionFileProject", fields: [projectId], references: [id], onDelete: Cascade)
+  draft   IngestionDraft?
+
+  @@index([projectId, status])
+  @@index([batchId, createdAt])
+  @@index([projectId, contentDigest])
+  @@index([batchId, createdAt(sort: Desc), id(sort: Desc)])
+}
+
+model IngestionDraft {
+  id                 String              @id @default(uuid()) @db.Uuid
+  fileId             String              @unique @db.Uuid
+  targetKind         IngestionTargetKind
+  proposedTitle      String              @db.VarChar(200)
+  proposedFolderPath String              @default("") @db.VarChar(500)
+  proposedTags       String[]            @default([])
+  markdown           String?
+  tableSchema        Json?
+  tableRows          Json?
+  /// Search phrases proposed by analysis; consumed by the link stage.
+  linkQueries        String[]            @default([])
+  /// [{ documentId, title, anchor, confidence, excerpt, keep }] written by the link stage.
+  proposedLinks      Json?
+  warnings           String[]            @default([])
+  editedById         String?             @db.Uuid
+  editedAt           DateTime?
+  acceptedResourceId String?             @db.Uuid
+  acceptedCommitSha  String?
+  // Bumped by every review save; a save or first accept names the revision it saw.
+  revision           Int                 @default(0)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  file     IngestionFile @relation(fields: [fileId], references: [id], onDelete: Cascade)
+  editedBy User?         @relation("IngestionDraftEditor", fields: [editedById], references: [id], onDelete: SetNull)
+
+  @@index([editedById])
+}
+
+/// A project file kept outside Git: latest content only, bytes in the per-project blob store.
+model Artifact {
+  id            String   @id @default(uuid()) @db.Uuid
+  projectId     String   @db.Uuid
+  filename      String   @db.VarChar(255)
+  /// NFKC-normalised, lower-cased filename; the identity inside a project.
+  filenameKey   String   @db.VarChar(255)
+  contentDigest String   @db.VarChar(64)
+  byteSize      Int
+  contentType   String   @db.VarChar(128)
+  uploadedById  String?  @db.Uuid
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project    Project @relation("ArtifactProject", fields: [projectId], references: [id], onDelete: Cascade)
+  uploadedBy User?   @relation("ArtifactUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  notebook ArtifactNotebook?
+
+  @@unique([projectId, filenameKey])
+  @@index([projectId, updatedAt])
+  @@index([projectId, contentDigest])
+  @@index([uploadedById])
+}
+
+enum PersonalWorkKind {
+  task
+  import
+  assistant
+  knowledge
+  notebook
+  git_sync
+  exam
+}
+
+model BackgroundWorkReceipt {
+  userId   String           @db.Uuid
+  kind     PersonalWorkKind
+  workId   String           @db.Uuid
+  revision String           @db.VarChar(32)
+  seenAt   DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, kind, workId, revision])
+  @@index([seenAt])
+}
+
+
+model UploadRateLimit {
+  userId String @db.Uuid
+  channel String
+  windowStart DateTime @db.Timestamp(3)
+  count Int
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, channel])
+}
+
+
+enum ArtifactNotebookStatus {
+  queued
+  running
+  ready
+  failed
+}
+
+model ArtifactNotebook {
+  artifactId String @id @db.Uuid
+  contentDigest String @db.VarChar(64)
+  parserVersion Int
+  status ArtifactNotebookStatus @default(queued)
+  claimToken String? @db.Uuid
+  startedAt DateTime?
+  updatedAt DateTime @updatedAt
+  error String? @db.VarChar(64)
+  /// Bytes of the published snapshot on disk; counted against the project quota.
+  snapshotBytes BigInt @default(0)
+  /// Who caused the current preparation (uploader or retrying reader); null for system re-queues.
+  requestedById String? @db.Uuid
+  queuedAt DateTime @default(now())
+  finishedAt DateTime?
+  /// Manifest summary of the published snapshot; null until ready.
+  sectionCount Int?
+  pageCount Int?
+  emptySectionCount Int?
+  unreadableSectionCount Int?
+
+  artifact Artifact @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  requestedBy User? @relation("ArtifactNotebookRequester", fields: [requestedById], references: [id], onDelete: SetNull)
+
+  @@index([status, updatedAt])
+  @@index([requestedById])
+}
+
+model UploadReservation {
+  id String @id @default(uuid()) @db.Uuid
+  userId String @db.Uuid
+  projectId String @db.Uuid
+  bytes BigInt
+  expiresAt DateTime
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([projectId, expiresAt])
+  @@index([expiresAt])
+}
+
+model ReviewerGroup {
+  id        String   @id @default(uuid()) @db.Uuid
+  projectId String   @db.Uuid
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project           Project                  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  members           ReviewerGroupMember[]
+  defaultFor        ProjectDefaultReviewer[]
+  documentReviewers DocumentReviewer[]
+
+  @@unique([projectId, name])
+}
+
+model ReviewerGroupMember {
+  groupId String @db.Uuid
+  userId  String @db.Uuid
+
+  group ReviewerGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User          @relation("ReviewerGroupMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupId, userId])
+  @@index([userId])
+}
+
+/// Exactly one of userId/groupId is set (check constraint in SQL).
+model ProjectDefaultReviewer {
+  id        String  @id @default(uuid()) @db.Uuid
+  projectId String  @db.Uuid
+  userId    String? @db.Uuid
+  groupId   String? @db.Uuid
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User?          @relation("ProjectDefaultReviewerUser", fields: [userId], references: [id], onDelete: Cascade)
+  group   ReviewerGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@unique([projectId, groupId])
+}
+
+/// One row per header reviewer entry; userId/groupId link only to a current member / existing group.
+model DocumentReviewer {
+  id         String  @id @default(uuid()) @db.Uuid
+  documentId String  @db.Uuid
+  type       String
+  refId      String  @db.Uuid
+  name       String
+  userId     String? @db.Uuid
+  groupId    String? @db.Uuid
+
+  document Document       @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User?          @relation("DocumentReviewerUser", fields: [userId], references: [id], onDelete: SetNull)
+  group    ReviewerGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@unique([documentId, type, refId])
+  @@index([userId])
+  @@index([groupId])
+}
+
+enum TrainingRole {
+  trainer
+  trainee
+}
+
+enum ExamStatus {
+  draft
+  published
+  archived
+}
+
+enum ExamQuestionKind {
+  multiple_choice
+  free_text
+}
+
+enum ExamAttemptStatus {
+  in_progress
+  submitted
+  in_review
+  released
+}
+
+enum ExamSubmissionKind {
+  manual
+  timeout
+}
+
+model ProjectTrainingRole {
+  projectId    String       @db.Uuid
+  userId       String       @db.Uuid
+  role         TrainingRole
+  assignedById String?      @db.Uuid
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  project    Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user       User    @relation("ProjectTrainingRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  assignedBy User?   @relation("ProjectTrainingRoleAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+  @@id([projectId, userId])
+  @@index([userId])
+  @@index([assignedById])
+}
+
+model Exam {
+  id               String     @id @default(uuid()) @db.Uuid
+  projectId        String     @db.Uuid
+  title            String     @db.VarChar(200)
+  instructions     String     @default("")
+  status           ExamStatus @default(draft)
+  timeLimitMinutes Int
+  passingPercent   Int?
+  revision         Int        @default(1)
+  createdById      String?    @db.Uuid
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+  project   Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User?          @relation("ExamCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  questions ExamQuestion[]
+  attempts  ExamAttempt[]
+  @@index([projectId, status])
+  @@index([projectId, updatedAt])
+  @@index([createdById])
+}
+
+model ExamQuestion {
+  id             String           @id @default(uuid()) @db.Uuid
+  examId         String           @db.Uuid
+  position       Int
+  kind           ExamQuestionKind
+  prompt         String
+  weight         Int
+  /// multiple_choice only: [{ id, text, correct }]
+  choices        Json?
+  allowMultiple  Boolean          @default(false)
+  expectedAnswer String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  exam Exam @relation(fields: [examId], references: [id], onDelete: Cascade)
+  @@unique([examId, position])
+}
+
+/// ExamAttempt_open_attempt_key and exam range CHECKs are defined in the exams migration.
+model ExamAttempt {
+  id                 String              @id @default(uuid()) @db.Uuid
+  examId             String              @db.Uuid
+  projectId          String              @db.Uuid
+  traineeId          String              @db.Uuid
+  attemptNumber      Int
+  examRevision       Int
+  /// ExamSnapshot (exams/schema.ts): the definition incl. correct answers; shown to the trainee only once released.
+  definitionSnapshot Json
+  status             ExamAttemptStatus   @default(in_progress)
+  startedAt          DateTime
+  deadlineAt         DateTime
+  submittedAt        DateTime?
+  submissionKind     ExamSubmissionKind?
+  maxScore           Int
+  gradedAt           DateTime?
+  gradedById         String?             @db.Uuid
+  gradedByName       String?             @db.VarChar(200)
+  gradedVia          String?             @db.VarChar(20)
+  releasedAt         DateTime?
+  releasedById       String?             @db.Uuid
+  releasedByName     String?             @db.VarChar(200)
+  totalScore         Float?
+  percent            Float?
+  passed             Boolean?
+  overallFeedback    String?
+  revision           Int                 @default(1)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  exam       Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  project    Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  trainee    User         @relation("ExamAttemptTrainee", fields: [traineeId], references: [id], onDelete: Cascade)
+  gradedBy   User?        @relation("ExamAttemptGrader", fields: [gradedById], references: [id], onDelete: SetNull)
+  releasedBy User?        @relation("ExamAttemptReleaser", fields: [releasedById], references: [id], onDelete: SetNull)
+  answers    ExamAnswer[]
+  @@unique([examId, traineeId, attemptNumber])
+  @@index([projectId, status, submittedAt])
+  @@index([projectId, startedAt(sort: Desc), id(sort: Desc)])
+  @@index([projectId, examId, startedAt(sort: Desc), id(sort: Desc)])
+  @@index([examId, status])
+  @@index([traineeId, startedAt])
+  @@index([status, deadlineAt])
+  @@index([gradedById])
+  @@index([releasedById])
+}
+
+model ExamAnswer {
+  id                String           @id @default(uuid()) @db.Uuid
+  attemptId         String           @db.Uuid
+  /// Snapshot question id; no FK so live question edits/deletes never touch attempts.
+  questionId        String           @db.Uuid
+  kind              ExamQuestionKind
+  selectedChoiceIds String[]         @default([])
+  text              String?
+  sequence          Int              @default(0)
+  savedAt           DateTime
+  autoScore         Float?
+  score             Float?
+  rationale         String?
+  attempt ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  @@unique([attemptId, questionId])
+}
+
+model ExamOperation {
+  userId String @db.Uuid
+  idempotencyKey String @db.VarChar(128)
+  toolName String
+  requestHash String
+  result Json
+  createdAt DateTime @default(now())
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@id([userId, idempotencyKey])
+  @@index([createdAt])
+}

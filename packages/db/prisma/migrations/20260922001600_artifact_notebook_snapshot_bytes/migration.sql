@@ -1,0 +1,1 @@
+ALTER TABLE "ArtifactNotebook" ADD COLUMN "snapshotBytes" BIGINT NOT NULL DEFAULT 0;

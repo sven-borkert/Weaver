@@ -1,0 +1,101 @@
+#!/usr/bin/env sh
+# Fetch the deploy files of a git ref from GitLab, install them, and reload the
+# stack (pull + recreate). Usage: weaver-upgrade [ref]   (default: main)
+# Needs /srv/weaver/gitlab-token: a project access token with read_api.
+set -eu
+
+REF="${1:-main}"
+[ "$REF" = main ] || { echo "upgrade accepts main only; use the documented image-pin rollback procedure" >&2; exit 1; }
+command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
+WEAVER_DEPLOY_ROOT="${WEAVER_DEPLOY_ROOT:-/srv/weaver}"
+env_value() { sed -n "s/^$1=//p" "$WEAVER_DEPLOY_ROOT/web.env" | tail -n 1; }
+GITLAB_API="${WEAVER_GITLAB_API:-$(env_value WEAVER_GITLAB_API)}"
+# URL-encoded project path.
+GITLAB_PROJECT="${WEAVER_GITLAB_PROJECT:-$(env_value WEAVER_GITLAB_PROJECT)}"
+[ -n "$GITLAB_API" ] && [ -n "$GITLAB_PROJECT" ] || { echo "set WEAVER_GITLAB_API and WEAVER_GITLAB_PROJECT in web.env" >&2; exit 1; }
+TOKEN_FILE="$WEAVER_DEPLOY_ROOT/gitlab-token"
+
+exec 9>"$WEAVER_DEPLOY_ROOT/deploy.lock"
+flock -x 9
+
+[ -r "$TOKEN_FILE" ] || { echo "missing $TOKEN_FILE" >&2; exit 1; }
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+# A literal --header would put the token in `ps`/cmdline for every fetch; a file curl reads doesn't.
+(umask 077 && printf 'PRIVATE-TOKEN: %s\n' "$(cat "$TOKEN_FILE")" > "$work/headers")
+
+expected_sha="$(curl -fsS --header @"$work/headers" \
+  "$GITLAB_API/projects/$GITLAB_PROJECT/repository/commits/$REF" | jq -er '.id')"
+printf '%s' "$expected_sha" | grep -Eq '^[0-9a-f]{40}$' || exit 1
+REF="$expected_sha"
+image_tag="$(printf '%s' "$expected_sha" | cut -c1-8)"
+
+compose() {
+  docker compose --env-file "$WEAVER_DEPLOY_ROOT/web.env" -f "$WEAVER_DEPLOY_ROOT/docker-compose.yml" "$@"
+}
+
+# Old image sets keep their short-SHA tags, so `image prune` alone never frees them (about 7 GB per release).
+# Keep this release and the previous one as the rollback target; failures here must not fail a finished upgrade.
+remove_old_images() {
+  repos="$(compose config --images | sed -n "s/:$image_tag\$//p" | sort -u)" || repos=""
+  for repo in $repos; do
+    docker image ls --format '{{.Tag}}' "$repo" | while IFS= read -r tag; do
+      case "$tag" in
+        "$image_tag" | "$previous_tag" | "<none>") ;;
+        *) docker image rm "$repo:$tag" >/dev/null 2>&1 || echo "kept $repo:$tag (could not remove)" >&2 ;;
+      esac
+    done
+  done
+  docker image prune -f >/dev/null || true
+}
+
+fetch() {
+  encoded="$(printf '%s' "$1" | sed 's#/#%2F#g')"
+  mkdir -p "$work/$(dirname "$1")"
+  curl -fsS --header @"$work/headers" \
+    "$GITLAB_API/projects/$GITLAB_PROJECT/repository/files/$encoded/raw?ref=$REF" \
+    -o "$work/$1"
+}
+
+for file in docker-compose.yml \
+  deploy/weaver-compose-up deploy/weaver-upgrade deploy/weaver-backup \
+  deploy/weaver-docker.service deploy/weaver-backup.service deploy/weaver-backup.timer; do
+  fetch "$file"
+done
+
+# Pull the exact revision before replacing deploy files or restarting a container.
+WEAVER_IMAGE_TAG="$image_tag" docker compose --env-file "$WEAVER_DEPLOY_ROOT/web.env" \
+  -f "$work/docker-compose.yml" pull --quiet
+previous_tag="$(sed -n 's/^WEAVER_IMAGE_TAG=//p' "$WEAVER_DEPLOY_ROOT/web.env" | tail -n 1)"
+sed '/^WEAVER_IMAGE_TAG=/d' "$WEAVER_DEPLOY_ROOT/web.env" > "$work/web.env"
+printf '\nWEAVER_IMAGE_TAG=%s\n' "$image_tag" >> "$work/web.env"
+install -m 0600 "$work/web.env" "$WEAVER_DEPLOY_ROOT/web.env"
+
+install -m 0640 "$work/docker-compose.yml" "$WEAVER_DEPLOY_ROOT/docker-compose.yml"
+# GNU install unlinks the target first, so replacing this running script is safe.
+install -m 0755 "$work/deploy/weaver-compose-up" "$work/deploy/weaver-upgrade" "$work/deploy/weaver-backup" /usr/local/sbin/
+install -m 0644 "$work/deploy/weaver-docker.service" "$work/deploy/weaver-backup.service" "$work/deploy/weaver-backup.timer" /etc/systemd/system/
+systemctl daemon-reload
+# Reload takes the same lock through compose-up; release our file-install hold first.
+flock -u 9
+systemctl reload-or-restart weaver-docker.service
+
+host="$(sed -n 's/^WEAVER_PUBLIC_HOST=//p' "$WEAVER_DEPLOY_ROOT/web.env")"
+base_path="$(sed -n 's/^WEAVER_BASE_PATH=//p' "$WEAVER_DEPLOY_ROOT/web.env")"
+url="https://${host}${base_path:-/weaver}/api/health"
+# web needs a few seconds after the reload; quiet retries instead of a failed upgrade.
+for i in $(seq 1 30); do
+  revision="$(curl -fsS "$url" 2>/dev/null | jq -r '.commitSha // empty')" || revision=""
+  if [ "$revision" = "$expected_sha" ] &&
+    compose ps --format json agent-worker ingestion-worker mcp-server |
+      jq -se 'map(if type == "array" then .[] else . end) | length == 3 and all(.[]; .State == "running" and .Health == "healthy")' >/dev/null; then
+    remove_old_images
+    echo "upgraded to $expected_sha"
+    exit 0
+  fi
+  sleep 2
+done
+echo "expected revision or healthy workers not ready within 60 s: $url" >&2
+exit 1

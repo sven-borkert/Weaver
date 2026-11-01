@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Use this script to start a docker container for a local development database
+
+# TO RUN ON WINDOWS:
+# 1. Install WSL (Windows Subsystem for Linux) - https://learn.microsoft.com/en-us/windows/wsl/install
+# 2. Install Docker Desktop or Podman Deskop
+# - Docker Desktop for Windows - https://docs.docker.com/docker-for-windows/install/
+# - Podman Desktop - https://podman.io/getting-started/installation
+# 3. Open WSL - `wsl`
+# 4. Run this script - `./start-database.sh`
+
+# On Linux and macOS you can run this script directly - `./start-database.sh`
+
+set -euo pipefail
+
+# import env variables from .env
+set -a
+source .env
+set +a
+
+DB_VALUES=$(node --input-type=module -e 'import {parseDatabaseUrl} from "./scripts/database-url.mjs"; try { const db=parseDatabaseUrl(process.env.DATABASE_URL); for (const key of ["password", "port", "name", "user"]) console.log(db[key]); } catch(error) { console.error(error.message); process.exit(1); }')
+{ IFS= read -r DB_PASSWORD; IFS= read -r DB_PORT; IFS= read -r DB_NAME; IFS= read -r DB_USER; } <<< "$DB_VALUES"
+DB_CONTAINER_NAME="$DB_NAME-postgres"
+
+if ! [ -x "$(command -v docker)" ] && ! [ -x "$(command -v podman)" ]; then
+  echo -e "Docker or Podman is not installed. Please install docker or podman and try again.\nDocker install guide: https://docs.docker.com/engine/install/\nPodman install guide: https://podman.io/getting-started/installation"
+  exit 1
+fi
+
+# determine which docker command to use
+if [ -x "$(command -v docker)" ]; then
+  DOCKER_CMD="docker"
+elif [ -x "$(command -v podman)" ]; then
+  DOCKER_CMD="podman"
+fi
+
+if ! $DOCKER_CMD info > /dev/null 2>&1; then
+  echo "$DOCKER_CMD daemon is not running. Please start $DOCKER_CMD and try again."
+  exit 1
+fi
+
+if [ "$($DOCKER_CMD ps -q -f name=$DB_CONTAINER_NAME)" ]; then
+  echo "Database container '$DB_CONTAINER_NAME' already running"
+  exit 0
+fi
+
+if [ "$($DOCKER_CMD ps -q -a -f name=$DB_CONTAINER_NAME)" ]; then
+  $DOCKER_CMD start "$DB_CONTAINER_NAME"
+  echo "Existing database container '$DB_CONTAINER_NAME' started"
+  exit 0
+fi
+
+if command -v nc >/dev/null 2>&1; then
+  if nc -z localhost "$DB_PORT" 2>/dev/null; then
+    echo "Port $DB_PORT is already in use."
+    exit 1
+  fi
+else
+  echo "Warning: Unable to check if port $DB_PORT is already in use (netcat not installed)"
+  read -p "Do you want to continue anyway? [y/N]: " -r REPLY
+  if ! [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "Aborting."
+    exit 1
+  fi
+fi
+
+export POSTGRES_PASSWORD="$DB_PASSWORD"
+$DOCKER_CMD run -d \
+  --name "$DB_CONTAINER_NAME" \
+  -e POSTGRES_USER="$DB_USER" \
+  -e POSTGRES_PASSWORD \
+  -e POSTGRES_DB="$DB_NAME" \
+  -p "127.0.0.1:$DB_PORT:5432" \
+  pgvector/pgvector:pg17 && echo "Database container '$DB_CONTAINER_NAME' was successfully created"

@@ -1,0 +1,21 @@
+{
+  "name": "@weaver/external-mcp",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/server.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@weaver/config": "workspace:*",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
+    "re2js": "2.8.6"
+  }
+}

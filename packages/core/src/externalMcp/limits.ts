@@ -1,0 +1,21 @@
+export const MAX_EXTERNAL_CONNECTIONS = 5;
+export const MAX_EXTERNAL_TOOLS = 20;
+export const MAX_EXTERNAL_INPUTS = 5;
+export const MAX_DISCOVERED_TOOLS = 500;
+export const MAX_DISCOVERY_PAGES = 20;
+export const MAX_CATALOG_BYTES = 2 * 1024 * 1024;
+export const MAX_TOOL_DEFINITION_BYTES = 64 * 1024;
+export const MAX_ARGUMENT_BYTES = 16 * 1024;
+export const MAX_RESPONSE_BYTES = 256 * 1024;
+export const MAX_MODEL_VISIBLE_CHARS = 16_000;
+export const DEFAULT_TIMEOUT_MS = 30_000;
+export const MIN_TIMEOUT_MS = 5_000;
+export const MAX_TIMEOUT_MS = 120_000;
+export const APPROVAL_WAIT_MS = 10 * 60 * 1_000;
+export const EXTERNAL_METADATA_RETENTION_DAYS = 30;
+export const MAX_ENDPOINT_LENGTH = 2_048;
+export const MAX_BULK_TOOL_REVIEWS = 500;
+export const MAX_TOOL_KEYS = 2_000;
+
+export const MAX_STORED_EXTERNAL_CONNECTIONS = 10;
+export const MAX_ENABLED_EXTERNAL_TOOLS = 100;

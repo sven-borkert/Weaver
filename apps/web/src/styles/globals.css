@@ -1,0 +1,776 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ────────────────────────────────────────────────────────────────
+   Weaver — design tokens (light), from the Weaver design kit
+   Cool-white surfaces · cobalt accent · navy sidebar · semantic state colors
+   ──────────────────────────────────────────────────────────────── */
+/* .theme-light pins a subtree to the light values under a dark page root. */
+:root,
+.theme-light {
+  color-scheme: light;
+
+  /* Surfaces */
+  --canvas: #f3f6fa;
+  --surface: #ffffff;
+  --surface-2: #edf2f8;
+  --subtle: #edf2f8;
+  --hover: #e6edf7;
+  --pressed: #d6e3f5;
+
+  /* Borders */
+  --line: #dce4ef;
+  --line-strong: #b6c6dc;
+  --line-faint: #dce4ef;
+
+  /* Text */
+  --text: #15243b;
+  --text-2: #52647e;
+  --text-3: #586a84;
+  --text-muted: #586a84;
+  --text-on-accent: #ffffff;
+
+  /* Brand accent (cobalt) */
+  --brand: #155eef;
+  --brand-hover: #124cc4;
+  --brand-pressed: #0e3a99;
+  --brand-bg: #eaf2ff;
+  --brand-bg-2: #d6e5ff;
+  --brand-border: #a9c8fa;
+  --brand-text: #124cc4;
+
+  /* Semantic — lifecycle. Every text shade keeps 4.5:1 on its soft background. */
+  --draft: #52647e;
+  --draft-bg: #edf2f8;
+  --draft-border: #b6c6dc;
+
+  --review: #82550f;
+  --review-bg: #fbf0d6;
+  --review-border: rgba(227, 176, 75, 0.5);
+  --review-dot: #a86b12;
+
+  --approved: #226b44;
+  --approved-bg: #ddf0e4;
+  --approved-border: rgba(92, 192, 138, 0.5);
+  --approved-dot: #2f8f5b;
+
+  --danger: #a33830;
+  --danger-bg: #f8e0dd;
+  --danger-border: rgba(229, 122, 111, 0.5);
+  --danger-hover: #872d27;
+
+  --info: #155eef;
+  --info-bg: #eaf2ff;
+  --info-border: #a9c8fa;
+
+  /* Shadows — navy tinted */
+  --sh-xs: 0 1px 2px rgba(21, 36, 59, 0.06);
+  --sh-sm: 0 1px 2px rgba(21, 36, 59, 0.05), 0 2px 6px rgba(21, 36, 59, 0.06);
+  --sh-md: 0 2px 4px rgba(21, 36, 59, 0.05), 0 8px 20px rgba(21, 36, 59, 0.08);
+  --sh-lg: 0 4px 8px rgba(21, 36, 59, 0.06), 0 20px 44px rgba(21, 36, 59, 0.14);
+  --sh-focus: 0 0 0 3px rgba(21, 94, 239, 0.4);
+  --sh-focus-danger: 0 0 0 3px rgba(196, 69, 58, 0.25);
+
+  /* Type scale */
+  --fs-10: 10px;
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-15: 15px;
+  --fs-16: 16px;
+  --fs-18: 18px;
+  --fs-20: 20px;
+  --fs-22: 22px;
+  --fs-24: 24px;
+  --fs-30: 30px;
+
+  /* Radius */
+  --r-2: 2px;
+  --r-4: 4px;
+  --r-6: 6px;
+  --r-8: 8px;
+  --r-10: 10px;
+  --r-full: 9999px;
+
+  /* Layout */
+  --sidebar-w: 278px;
+  --sidebar-w-collapsed: 56px;
+  --topbar-h: 48px;
+  --drawer-w: 520px;
+  --document-tree-w: 240px;
+  --context-rail-w: 320px;
+
+  --code-keyword: #7c3aed;
+  --code-string: #15803d;
+  --code-comment: #6b7280;
+  --code-number: #b45309;
+  --code-function: #1d4ed8;
+  --code-class: #0f766e;
+  --code-operator: #475569;
+  --code-decorator: #be185d;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Dark mode — activated by next-themes (.dark class on <html>)
+   ──────────────────────────────────────────────────────────────── */
+.dark {
+  color-scheme: dark;
+
+  --canvas: #0c1625;
+  --surface: #142236;
+  --surface-2: #0e1c2f;
+  --subtle: #1a2b43;
+  --hover: #223753;
+  --pressed: #2d4668;
+
+  --line: #2f4561;
+  --line-strong: #56708f;
+  --line-faint: #2f4561;
+
+  --text: #edf3fc;
+  --text-2: #bdcbe0;
+  --text-3: #a5b8d2;
+  --text-muted: #a5b8d2;
+  --text-on-accent: #102238;
+
+  --brand: #8abbff;
+  --brand-hover: #b4d3ff;
+  --brand-pressed: #d3e5ff;
+  --brand-bg: #1d3659;
+  --brand-bg-2: #264570;
+  --brand-border: #3a5f94;
+  --brand-text: #b4d3ff;
+
+  --draft: #bdcbe0;
+  --draft-bg: #223753;
+  --draft-border: #56708f;
+
+  --review: #ebc476;
+  --review-bg: #3f331d;
+  --review-border: rgba(235, 196, 118, 0.32);
+  --review-dot: #ebc476;
+
+  --approved: #83d5a1;
+  --approved-bg: #213d2c;
+  --approved-border: rgba(131, 213, 161, 0.32);
+  --approved-dot: #83d5a1;
+
+  --danger: #f0a49a;
+  --danger-bg: #482a28;
+  --danger-border: rgba(240, 164, 154, 0.32);
+  --danger-hover: #f6bdb5;
+
+  --info: #8abbff;
+  --info-bg: #1d3659;
+  --info-border: #3a5f94;
+
+  --sh-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --sh-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --sh-md: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.4);
+  --sh-lg: 0 4px 8px rgba(0, 0, 0, 0.4), 0 20px 44px rgba(0, 0, 0, 0.55);
+  --sh-focus: 0 0 0 3px rgba(138, 187, 255, 0.5);
+
+  --code-keyword: #c4b5fd;
+  --code-string: #86efac;
+  --code-comment: #9ca3af;
+  --code-number: #fcd34d;
+  --code-function: #93c5fd;
+  --code-class: #5eead4;
+  --code-operator: #cbd5e1;
+  --code-decorator: #f9a8d4;
+}
+
+/* Bindings are re-declared on every scope root so they resolve against that scope's values. */
+:root,
+.theme-light,
+.nav-scope {
+  /* shadcn token bindings — map to design palette */
+  --background: var(--canvas);
+  --foreground: var(--text);
+  --card: var(--surface);
+  --card-foreground: var(--text);
+  --popover: var(--surface);
+  --popover-foreground: var(--text);
+  --primary: var(--brand);
+  --primary-foreground: var(--text-on-accent);
+  --secondary: var(--subtle);
+  --secondary-foreground: var(--text);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--text-3);
+  --accent: var(--brand-bg);
+  --accent-foreground: var(--brand-text);
+  --destructive: var(--danger);
+  --border: var(--line);
+  --input: var(--line-strong);
+  --ring: var(--brand);
+  --chart-1: var(--brand);
+  --chart-2: var(--approved-dot);
+  --chart-3: var(--review-dot);
+  --chart-4: var(--text-2);
+  --chart-5: var(--draft);
+  --radius: 0.5rem;
+  --sidebar: var(--surface-2);
+  --sidebar-foreground: var(--text-2);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--text-on-accent);
+  --sidebar-accent: var(--brand-bg);
+  --sidebar-accent-foreground: var(--brand-text);
+  --sidebar-border: var(--line);
+  --sidebar-ring: var(--brand);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Navigation scope — the sidebar stays navy in both themes; the
+   generic tokens are re-pointed so its children need no own classes
+   ──────────────────────────────────────────────────────────────── */
+.nav-scope {
+  color-scheme: dark;
+
+  --canvas: #102238;
+  --surface: #102238;
+  --surface-2: #102238;
+  --subtle: #223b59;
+  --hover: #223b59;
+  --pressed: #2d4668;
+
+  --line: #38506b;
+  --line-strong: #56708f;
+  --line-faint: #38506b;
+
+  --text: #ffffff;
+  --text-2: #d5e0ee;
+  --text-3: #a3b5cb;
+  --text-muted: #a3b5cb;
+  --text-on-accent: #102238;
+
+  --brand: #38bdf8;
+  --brand-hover: #7bcfff;
+  --brand-pressed: #b4e3ff;
+  --brand-bg: #223b59;
+  --brand-bg-2: #2d4668;
+  --brand-border: #38506b;
+  --brand-text: #ffffff;
+
+  --sh-focus: 0 0 0 3px rgba(56, 189, 248, 0.5);
+}
+
+.dark .nav-scope {
+  --canvas: #081321;
+  --surface: #081321;
+  --surface-2: #081321;
+  --line: #2f4561;
+  --line-faint: #2f4561;
+  --brand: #7bcfff;
+  --brand-hover: #b4e3ff;
+  --sh-focus: 0 0 0 3px rgba(123, 207, 255, 0.5);
+}
+
+/* Native select popups are rendered by the browser, so they need explicit
+   colors instead of relying only on inherited Tailwind classes. */
+select {
+  color-scheme: light;
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+.dark select {
+  color-scheme: dark;
+}
+
+select option,
+select optgroup {
+  background-color: var(--surface);
+  color: var(--text);
+}
+
+select option:checked {
+  background-color: var(--brand-bg-2);
+  color: var(--text);
+}
+
+select:disabled {
+  background-color: var(--subtle);
+  color: var(--text-muted);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Tailwind @theme — expose design tokens as utility classes
+   ──────────────────────────────────────────────────────────────── */
+@theme {
+  /* Self-hosted by the @fontsource-variable packages imported in app/layout.tsx. */
+  --font-sans:
+    "Hanken Grotesk Variable", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", sans-serif;
+  --font-mono:
+    "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-subtle: var(--subtle);
+  --color-hover: var(--hover);
+  --color-pressed: var(--pressed);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-faint: var(--line-faint);
+
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-text-muted: var(--text-muted);
+  --color-text-on-accent: var(--text-on-accent);
+
+  --color-brand: var(--brand);
+  --color-brand-hover: var(--brand-hover);
+  --color-brand-pressed: var(--brand-pressed);
+  --color-brand-bg: var(--brand-bg);
+  --color-brand-bg-2: var(--brand-bg-2);
+  --color-brand-border: var(--brand-border);
+  --color-brand-text: var(--brand-text);
+
+  --color-draft: var(--draft);
+  --color-draft-bg: var(--draft-bg);
+  --color-draft-border: var(--draft-border);
+
+  --color-review: var(--review);
+  --color-review-bg: var(--review-bg);
+  --color-review-border: var(--review-border);
+  --color-review-dot: var(--review-dot);
+
+  --color-approved: var(--approved);
+  --color-approved-bg: var(--approved-bg);
+  --color-approved-border: var(--approved-border);
+  --color-approved-dot: var(--approved-dot);
+
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-danger-border: var(--danger-border);
+  --color-danger-hover: var(--danger-hover);
+
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+  --color-info-border: var(--info-border);
+
+  /* shadcn token mappings (keep existing primitives working) */
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+
+  /* Design-kit radii: 6 menu items/tags, 8 controls, 10 cards, 16 dialogs */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-2xl: 16px;
+  --radius-3xl: 22px;
+  --radius-4xl: 26px;
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Base resets and helpers
+   ──────────────────────────────────────────────────────────────── */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--text);
+    font-size: var(--fs-13);
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-feature-settings: "zero";
+}
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+.scrollarea::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollarea::-webkit-scrollbar-thumb {
+  background: var(--line-strong);
+  border-radius: 4px;
+}
+.scrollarea::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes weaver-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes document-section-highlight {
+  from {
+    background: var(--brand-bg-2);
+    outline-color: var(--brand);
+  }
+  to {
+    background: var(--brand-bg);
+    outline-color: var(--brand-border);
+  }
+}
+
+.document-prose {
+  color: var(--text);
+  font-size: var(--fs-15);
+  line-height: 1.7;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+[data-document-section="true"] {
+  scroll-margin-top: calc(var(--document-sticky-header-h, 0px) + 1rem);
+}
+
+/* Saved panel widths from AppShell, capped by the window but never below the defaults (lib/panel-widths.ts). */
+[data-app-shell] {
+  --sidebar-w: min(var(--sidebar-w-pref, 278px), max(278px, 35vw));
+  --context-rail-w: min(var(--context-rail-w-pref, 320px), max(320px, 40vw));
+}
+
+html[data-panel-resizing],
+html[data-panel-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+:where([data-document-title="true"], [data-document-section="true"]):focus {
+  outline: 2px solid var(--brand);
+  outline-offset: 0.25rem;
+}
+
+[data-section-highlight="true"] {
+  animation: document-section-highlight 1.5s ease-out;
+  background: var(--brand-bg);
+  border-radius: var(--r-4);
+  outline: 2px solid var(--brand);
+  outline-offset: 0.25rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-section-highlight="true"] {
+    animation: none;
+  }
+}
+
+[data-document-mode] {
+  max-width: 100%;
+  min-width: 0;
+}
+
+[data-document-mode] :where(h1, h2, h3, p) {
+  overflow-wrap: anywhere;
+}
+
+.document-prose > div :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.25;
+  margin-block: 1.6em 0.55em;
+}
+
+.document-prose > div :where(h1) {
+  font-size: var(--fs-30);
+}
+.document-prose > div :where(h2) {
+  font-size: var(--fs-24);
+}
+.document-prose > div :where(h3) {
+  font-size: var(--fs-20);
+}
+.document-prose > div :where(h4, h5, h6) {
+  font-size: var(--fs-16);
+}
+
+.document-prose > div :where(p) {
+  margin-block: 0 1em;
+}
+
+.document-prose > div :where(ul, ol) {
+  margin-block: 0 1em;
+  padding-inline-start: 1.5rem;
+}
+
+.document-prose > div :where(ul) {
+  list-style: disc;
+}
+.document-prose > div :where(ol) {
+  list-style: decimal;
+}
+.document-prose > div :where(li) {
+  margin-block: 0.25em;
+}
+/* TipTap wraps every item's text in a paragraph; tight lists must not inherit its gap. */
+.document-prose > div :where(li > p) {
+  margin-block: 0;
+}
+.document-prose > div :where(li > p + p) {
+  margin-block-start: 0.5em;
+}
+.document-prose > div :where(li > :is(ul, ol)) {
+  margin-block: 0.25em 0;
+}
+
+.document-prose > div :where(ul[data-type="taskList"]) {
+  list-style: none;
+  padding-inline-start: 0;
+}
+
+/* TipTap's task-item NodeView omits data-type="taskItem", so key off the list. */
+.document-prose > div :where(ul[data-type="taskList"] > li) {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.6rem;
+}
+
+.document-prose > div :where(ul[data-type="taskList"] > li > label) {
+  margin-top: 0.2em;
+}
+
+.document-prose > div :where(ul[data-type="taskList"] > li > div) {
+  flex: 1;
+}
+.document-prose > div :where(ul[data-type="taskList"] > li > div > p) {
+  margin-block: 0;
+}
+.document-prose > div :where(ul[data-type="taskList"] > li > div > p + p) {
+  margin-block-start: 0.5em;
+}
+
+.document-prose > div :where(a) {
+  color: var(--brand-text);
+  text-decoration: underline;
+  text-decoration-color: var(--brand-border);
+  text-underline-offset: 0.2em;
+}
+
+.document-prose > div :where(a:hover) {
+  color: var(--brand-hover);
+}
+
+.document-prose > div :where(blockquote) {
+  border-inline-start: 3px solid var(--line-strong);
+  color: var(--text-2);
+  margin-block: 1.25em;
+  padding-inline-start: 1rem;
+}
+
+.document-prose > div :where(code) {
+  background: var(--subtle);
+  border: 1px solid var(--line);
+  border-radius: var(--r-4);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.3em;
+}
+
+.document-prose > div :where(pre) {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-8);
+  margin-block: 1.25em;
+  overflow-wrap: anywhere;
+  overflow-x: auto;
+  padding: 1rem;
+  white-space: pre-wrap;
+}
+
+.document-prose > div :where(pre code) {
+  background: transparent;
+  border: 0;
+  padding: 0;
+}
+
+.document-prose > div :where(table) {
+  border-collapse: collapse;
+  margin-block: 1.25em;
+  width: 100%;
+}
+
+.document-prose > div :where(th, td) {
+  border: 1px solid var(--line);
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  vertical-align: top;
+}
+
+.document-prose > div :where(th) {
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+.document-prose > div :where(img) {
+  border-radius: var(--r-8);
+  display: block;
+  height: auto;
+  margin-block: 1.25em;
+  max-width: 100%;
+}
+
+/* GitHub alert types: each variant maps to one semantic token family. */
+.document-prose > div :where([data-callout]) {
+  --callout-accent: var(--info);
+  --callout-label: var(--info);
+  --callout-bg: var(--info-bg);
+  --callout-border: var(--info-border);
+  background: var(--callout-bg);
+  border: 1px solid var(--callout-border);
+  border-inline-start: 4px solid var(--callout-accent);
+  border-radius: var(--r-8);
+  color: var(--text-2);
+  margin-block: 1.25em;
+  min-height: 3.5rem;
+  padding: 0.625rem 1rem 0.75rem;
+}
+
+.document-prose > div :where([data-callout])::before {
+  color: var(--callout-label);
+  content: "Note";
+  display: block;
+  font-size: var(--fs-12);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  margin-block-end: 0.375rem;
+  pointer-events: none;
+  user-select: none;
+}
+
+.document-prose > div :where([data-callout="TIP"]) {
+  --callout-accent: var(--approved-dot);
+  --callout-label: var(--approved);
+  --callout-bg: var(--approved-bg);
+  --callout-border: var(--approved-border);
+}
+.document-prose > div :where([data-callout="TIP"])::before {
+  content: "Tip";
+}
+
+.document-prose > div :where([data-callout="IMPORTANT"]) {
+  --callout-accent: var(--brand);
+  --callout-label: var(--brand-text);
+  --callout-bg: var(--brand-bg);
+  --callout-border: var(--brand-border);
+}
+.document-prose > div :where([data-callout="IMPORTANT"])::before {
+  content: "Important";
+}
+
+.document-prose > div :where([data-callout="WARNING"]) {
+  --callout-accent: var(--review-dot);
+  --callout-label: var(--review);
+  --callout-bg: var(--review-bg);
+  --callout-border: var(--review-border);
+}
+.document-prose > div :where([data-callout="WARNING"])::before {
+  content: "Warning";
+}
+
+.document-prose > div :where([data-callout="CAUTION"]) {
+  --callout-accent: var(--danger);
+  --callout-label: var(--danger);
+  --callout-bg: var(--danger-bg);
+  --callout-border: var(--danger-border);
+}
+.document-prose > div :where([data-callout="CAUTION"])::before {
+  content: "Caution";
+}
+
+.document-prose > div :where([data-callout] > :first-child) {
+  margin-top: 0;
+}
+
+.document-prose > div :where([data-callout] > :last-child) {
+  margin-bottom: 0;
+}
+
+.document-prose > div :where([data-crossref-id]) {
+  background: var(--brand-bg);
+  border: 1px solid var(--brand-border);
+  border-radius: var(--r-4);
+  color: var(--brand-text);
+  display: inline-flex;
+  padding-inline: 0.3em;
+}
+
+.python-editor .cm-editor {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  min-height: 420px;
+}
+.python-editor .cm-editor.cm-focused {
+  outline: 2px solid color-mix(in srgb, var(--brand) 50%, transparent);
+  outline-offset: 1px;
+}
+.python-editor .cm-scroller {
+  overflow: auto;
+}
+.python-editor .cm-gutters {
+  background: var(--surface-2);
+  color: var(--text-3);
+  border-right: 1px solid var(--line);
+}
+.python-editor .cm-activeLine,
+.python-editor .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--brand-bg) 55%, transparent);
+}
+.python-editor .cm-selectionBackground,
+.python-editor .cm-editor ::selection {
+  background: var(--brand-bg-2) !important;
+}

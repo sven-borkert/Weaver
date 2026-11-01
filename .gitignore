@@ -1,0 +1,87 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# testing
+/coverage
+/test-results
+/playwright-report
+
+# database
+/prisma/db.sqlite
+/prisma/db.sqlite-journal
+db.sqlite
+
+# next.js
+/.next/
+/apps/web/.next/
+/out/
+next-env.d.ts
+/apps/web/next-env.d.ts
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# local env files
+# do not commit any .env files to git, except for the .env.example file. https://create.t3.gg/en/usage/env-variables#using-environment-variables
+.env
+.env*.local
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+
+# Turbo
+.turbo/
+
+# python
+__pycache__/
+
+# idea files
+.idea
+
+# project-specific
+.env.test
+.env.e2e
+.local-db-secret
+
+# Claude Code per-developer settings (the shared settings.json is committed)
+.claude/settings.local.json
+
+# Prisma client output (configured in packages/db/prisma/schema.prisma)
+/packages/db/generated/
+
+# Local git worktrees
+/.worktrees/
+
+# Local agent working state
+/.superpowers/
+
+# per-env document/git data dirs
+/data/
+/data-test/
+/data-e2e/
+
+# pnpm fallback store (created when a sandboxed agent cannot write to ~/Library/pnpm)
+/.pnpm-store/
+
+# Local Rust notebook reader build
+/packages/ingestion/native/onenote-reader/target/
+
+.env.*
+!.env.example

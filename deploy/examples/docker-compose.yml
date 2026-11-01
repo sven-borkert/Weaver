@@ -1,0 +1,150 @@
+# Weaver on one host, from the GitLab registry images. Copy this file and
+# web.env.example next to each other, fill web.env, then:
+# docker compose --env-file web.env up -d (docs/setup.md, "Run from registry images").
+name: weaver
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "1m"
+    max-file: "1"
+
+services:
+  postgres:
+    # Pinned with its base OS: a moving tag can change glibc collations under existing data.
+    image: pgvector/pgvector:0.8.6-pg17-trixie
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: weaver
+      POSTGRES_USER: weaver
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    secrets: [pg_password]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weaver -d weaver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrations:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/tools:${WEAVER_IMAGE_TAG:-latest}
+    command: ["pnpm", "--filter", "@weaver/db", "migrate:deploy"]
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: [web.env]
+
+  web:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/web:${WEAVER_IMAGE_TAG:-latest}
+    stop_grace_period: 135s
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file: [web.env]
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+    volumes:
+      - ./data:/data
+    ports:
+      - "${WEAVER_WEB_PORT:-3000}:3000"
+
+  agent-worker:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/worker:${WEAVER_IMAGE_TAG:-latest}
+    stop_grace_period: 45s
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file: [web.env]
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_WORKER_HEALTH_PORT: 3101
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3101/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  ingestion-worker:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/worker:${WEAVER_IMAGE_TAG:-latest}
+    stop_grace_period: 45s
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file: [web.env]
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_WORKER_ROLES: ingestion
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_WORKER_HEALTH_PORT: 3102
+    volumes:
+      - ./data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3102/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  mcp-server:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/mcp:${WEAVER_IMAGE_TAG:-latest}
+    stop_grace_period: 135s
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file: [web.env]
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_MCP_PORT: 3200
+    volumes:
+      - ./data:/data
+    ports:
+      - "${WEAVER_MCP_PORT:-3200}:3200"
+
+secrets:
+  pg_password:
+    file: ./pg_password

@@ -1,0 +1,24 @@
+{
+  "name": "@weaver/git-store",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/gitStore.ts",
+    "./advisory-lock": "./src/advisoryLock.ts",
+    "./remote": "./src/remote.ts",
+    "./version": "./src/gitVersion.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weaver/config": "workspace:*",
+    "pg": "^8.23.0",
+    "simple-git": "^3.36.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@weaver/artifact-readers",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./errors": "./src/errors.ts",
+    "./archive": "./src/archive.ts",
+    "./json": "./src/json.ts",
+    "./yaml": "./src/yaml.ts",
+    "./structured": "./src/structured.ts",
+    "./text": "./src/text.ts",
+    "./csv": "./src/csv.ts",
+    "./pdf": "./src/pdf.ts",
+    "./excel": "./src/excel.ts",
+    "./word": "./src/word.ts",
+    "./testing/pdfFixture": "./src/testing/pdfFixture.ts",
+    "./testing/docxFixture": "./src/testing/docxFixture.ts",
+    "./testing/xlsxFixture": "./src/testing/xlsxFixture.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
+    "exceljs": "4.4.0",
+    "markdown-it": "15.0.2",
+    "pdfjs-dist": "6.3.289",
+    "unpdf": "1.8.1",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1"
+  }
+}

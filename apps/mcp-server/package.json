@@ -1,0 +1,21 @@
+{
+  "name": "@weaver/mcp-server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src",
+    "start": "tsx src/index.ts",
+    "test": "vitest run src --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weaver/auth": "workspace:*",
+    "@weaver/config": "workspace:*",
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "@weaver/external-mcp": "workspace:*",
+    "@weaver/mcp": "workspace:*",
+    "tsx": "^4.23.12"
+  }
+}

@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+# Pull the release images and start the Weaver stack. Extra arguments go to `up`.
+set -eu
+
+WEAVER_DEPLOY_ROOT="${WEAVER_DEPLOY_ROOT:-/srv/weaver}"
+export WEAVER_DEPLOY_ROOT
+exec 9>"$WEAVER_DEPLOY_ROOT/deploy.lock"
+flock -x 9
+COMPOSE_FILE_PATH="${COMPOSE_FILE_PATH:-$WEAVER_DEPLOY_ROOT/docker-compose.yml}"
+
+compose() {
+  docker compose --env-file "$WEAVER_DEPLOY_ROOT/web.env" -f "$COMPOSE_FILE_PATH" "$@"
+}
+
+# Boot must not depend on the registry: an unreachable registry still starts the stack with the images already present.
+compose pull --quiet --ignore-pull-failures
+if [ "${1:-}" = --force-recreate ]; then
+  # Keep PostgreSQL running while the migration and application containers are replaced.
+  compose up -d --wait postgres
+  compose stop web agent-worker ingestion-worker mcp-server
+  compose up -d --no-deps --force-recreate migrations
+  compose wait migrations
+  compose up -d --no-deps --force-recreate web agent-worker ingestion-worker mcp-server
+else
+  compose up -d "$@"
+fi

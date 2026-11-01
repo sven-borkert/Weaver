@@ -1,0 +1,20 @@
+{
+  "name": "@weaver/agent-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "lint": "eslint src",
+    "start": "tsx src/index.ts",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weaver/ai": "workspace:*",
+    "@weaver/config": "workspace:*",
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "@weaver/ingestion": "workspace:*",
+    "tsx": "^4.23.12"
+  }
+}

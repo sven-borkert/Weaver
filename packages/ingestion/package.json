@@ -1,0 +1,44 @@
+{
+  "name": "@weaver/ingestion",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./parser": "./src/parser.ts",
+    "./title": "./src/title.ts",
+    "./markdown": "./src/markdown.ts",
+    "./fixtures": "./src/fixtures.ts",
+    "./native": "./src/native/index.ts",
+    "./ocr": "./src/ocr.ts",
+    "./docling": "./src/docling.ts",
+    "./selectParser": "./src/selectParser.ts",
+    "./parseStage": "./src/parseStage.ts",
+    "./analyzeStage": "./src/analyzeStage.ts",
+    "./linkStage": "./src/linkStage.ts",
+    "./publish": "./src/publish.ts",
+    "./notebook": "./src/notebook/runner.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.8",
+    "@weaver/ai": "workspace:*",
+    "@weaver/artifact-readers": "workspace:*",
+    "@weaver/config": "workspace:*",
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "ai": "7.0.90",
+    "exceljs": "4.4.0",
+    "mammoth": "1.12.2",
+    "pdfjs-dist": "6.3.289",
+    "turndown": "7.2.4",
+    "unpdf": "1.8.1",
+    "zod": "^4.4.3",
+    "tsx": "^4.23.12"
+  },
+  "devDependencies": {
+    "@types/turndown": "5.0.6"
+  }
+}

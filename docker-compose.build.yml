@@ -1,0 +1,43 @@
+# Local image builds: docker compose -f docker-compose.yml -f docker-compose.build.yml build
+# Deployments never use this overlay; CI builds the same targets with deploy/ci/build-images.sh.
+x-web-build: &web-build
+  context: .
+  dockerfile: docker/web.Dockerfile
+  args:
+    NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+    APP_BUILD_TIME: ${APP_BUILD_TIME:-}
+    APP_COMMIT_SHA: ${APP_COMMIT_SHA:-}
+
+services:
+  migrations:
+    build:
+      <<: *web-build
+      target: tools
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: runtime
+      args:
+        NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+        APP_BUILD_TIME: ${APP_BUILD_TIME:-}
+        APP_COMMIT_SHA: ${APP_COMMIT_SHA:-}
+
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: runtime
+
+  ingestion-worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: runtime
+
+  mcp-server:
+    build:
+      context: .
+      dockerfile: docker/mcp.Dockerfile
+      target: runtime

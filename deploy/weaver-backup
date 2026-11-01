@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# bash, not sh: the dump needs pipefail so a failing pg_dump cannot pass through gzip.
+set -euo pipefail
+
+WEAVER_DEPLOY_ROOT="${WEAVER_DEPLOY_ROOT:-/srv/weaver}"
+COMPOSE_FILE_PATH="${COMPOSE_FILE_PATH:-$WEAVER_DEPLOY_ROOT/docker-compose.yml}"
+BACKUP_DIR="${BACKUP_DIR:-$WEAVER_DEPLOY_ROOT/backups}"
+RETENTION_DAYS="${RETENTION_DAYS:-14}"
+export WEAVER_DEPLOY_ROOT
+exec 9>"$WEAVER_DEPLOY_ROOT/deploy.lock"
+flock -x 9
+
+# Every writer of the database and the data tree; postgres stays up for pg_dump.
+APP_SERVICES="web agent-worker ingestion-worker mcp-server"
+
+timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+db_file="$BACKUP_DIR/weaver-postgres-$timestamp.sql.gz"
+data_file="$BACKUP_DIR/weaver-data-$timestamp.tar.gz"
+stopped_services=""
+restart_failed=0
+fsck_failed=0
+
+compose() {
+  docker compose --env-file "$WEAVER_DEPLOY_ROOT/web.env" -f "$COMPOSE_FILE_PATH" "$@"
+}
+
+# `start`, not `up`: no rebuild and no migrations run, only what this script stopped.
+restart_services() {
+  [ -n "$stopped_services" ] || return 0
+  # shellcheck disable=SC2086
+  if compose start $stopped_services; then
+    stopped_services=""
+  else
+    restart_failed=1
+    echo "could not restart:$stopped_services - run: systemctl reload weaver-docker.service" >&2
+  fi
+}
+
+cleanup() {
+  rm -f "$db_file.tmp" "$data_file.tmp"
+  restart_services || echo "restart after backup failed" >&2
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+install -d -m 0700 "$BACKUP_DIR"
+
+running="$(compose ps --services --status running --status restarting)"
+for service in $APP_SERVICES; do
+  if printf '%s\n' "$running" | grep -qx -- "$service"; then
+    stopped_services="$stopped_services $service"
+  fi
+done
+if [ -n "$stopped_services" ]; then
+  # shellcheck disable=SC2086
+  compose stop $stopped_services
+fi
+
+remaining="$(compose ps --services --status running --status restarting --status paused)"
+for service in $APP_SERVICES; do
+  if printf '%s\n' "$remaining" | grep -qx -- "$service"; then
+    echo "writer is not stopped: $service; refusing inconsistent backup" >&2
+    exit 1
+  fi
+done
+
+compose exec -T postgres pg_dump --no-owner --no-privileges -U weaver -d weaver |
+  gzip -9 > "$db_file.tmp"
+
+# A broken repository must not stop the database and the healthy repositories
+# from being backed up, but it fails the run and keeps older backups from pruning.
+for repo in "$WEAVER_DEPLOY_ROOT"/data/git/*/; do
+  [ -d "$repo" ] || continue
+  if ! git -c safe.directory='*' -C "$repo" fsck --connectivity-only --no-dangling; then
+    echo "git fsck failed for $repo" >&2
+    fsck_failed=1
+  fi
+done
+
+# With the writers stopped nothing may change under tar, so any nonzero status is fatal.
+tar -C "$WEAVER_DEPLOY_ROOT" --exclude='data/files/*/tmp' -czf "$data_file.tmp" data
+
+restart_services
+
+gzip -t "$db_file.tmp"
+gzip -t "$data_file.tmp"
+tar -tzf "$data_file.tmp" >/dev/null
+
+chmod 0600 "$db_file.tmp" "$data_file.tmp"
+mv "$db_file.tmp" "$db_file"
+mv "$data_file.tmp" "$data_file"
+
+echo "Created $db_file"
+echo "Created $data_file"
+
+# Prune only after a verified new backup lands, so a failed run never removes history.
+if [ "$fsck_failed" -eq 0 ]; then
+  find "$BACKUP_DIR" -maxdepth 1 -type f \
+    \( -name 'weaver-postgres-*.sql.gz' -o -name 'weaver-data-*.tar.gz' \) \
+    -mtime "+$RETENTION_DAYS" -print -delete
+else
+  echo "backup written, but a repository failed git fsck; older backups were kept" >&2
+fi
+
+if [ "$fsck_failed" -ne 0 ]; then
+  exit 1
+fi
+if [ "$restart_failed" -ne 0 ]; then
+  echo "backup written, but restarting the application services failed; check compose ps" >&2
+  exit 1
+fi

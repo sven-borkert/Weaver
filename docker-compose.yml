@@ -1,0 +1,213 @@
+name: weaver
+
+# Host values come from `--env-file ${WEAVER_DEPLOY_ROOT}/web.env` (deploy/README.md).
+# Images come from the GitLab registry; docker-compose.build.yml adds the local builds.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "1m"
+    max-file: "1"
+
+services:
+  postgres:
+    stop_grace_period: 60s
+    command: ["postgres", "-c", "max_connections=150"]
+    # Pinned with its base OS: a moving tag can change glibc collations under existing data.
+    image: pgvector/pgvector:0.8.6-pg17-trixie
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: weaver
+      POSTGRES_USER: weaver
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_password
+    volumes:
+      - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/postgres_data:/var/lib/postgresql/data
+    networks: [internal]
+    secrets: [pg_password]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weaver -d weaver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrations:
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/tools:${WEAVER_IMAGE_TAG:-latest}
+    command: ["pnpm", "--filter", "@weaver/db", "migrate:deploy"]
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - path: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/web.env
+        required: true
+    networks: [internal]
+
+  web:
+    stop_grace_period: 135s
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/web:${WEAVER_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - path: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/web.env
+        required: true
+    environment:
+      NODE_ENV: production
+      WEAVER_AUTH_TRUST_PROXY: true
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+    volumes:
+      - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data
+    networks: [internal, ingress]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${WEAVER_TRAEFIK_NETWORK:-ingress}"
+      - "traefik.http.routers.weaver.rule=Host(`${WEAVER_PUBLIC_HOST:?set WEAVER_PUBLIC_HOST}`) && PathPrefix(`${WEAVER_BASE_PATH:-/weaver}`)"
+      - "traefik.http.routers.weaver.entrypoints=websecure"
+      - "traefik.http.routers.weaver.tls.certresolver=${WEAVER_TLS_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.weaver.middlewares=weaver-hsts"
+      - "traefik.http.middlewares.weaver-hsts.headers.stsSeconds=31536000"
+      - "traefik.http.routers.weaver.priority=200"
+      - "traefik.http.services.weaver.loadbalancer.server.port=3000"
+      # RFC 8414 discovery for this issuer only; the host root stays free for other apps.
+      - "traefik.http.routers.weaver-wellknown.rule=Host(`${WEAVER_PUBLIC_HOST:?set WEAVER_PUBLIC_HOST}`) && PathPrefix(`/.well-known/oauth-authorization-server${WEAVER_BASE_PATH:-/weaver}/`)"
+      - "traefik.http.routers.weaver-wellknown.entrypoints=websecure"
+      - "traefik.http.routers.weaver-wellknown.tls.certresolver=${WEAVER_TLS_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.weaver-wellknown.priority=250"
+      - "traefik.http.routers.weaver-wellknown.middlewares=weaver-wellknown-prefix,weaver-hsts"
+      - "traefik.http.routers.weaver-wellknown.service=weaver"
+      - "traefik.http.middlewares.weaver-wellknown-prefix.addprefix.prefix=${WEAVER_BASE_PATH:-/weaver}"
+
+  agent-worker:
+    stop_grace_period: 45s
+    # Interim guard: office-format parsers decompress before they can measure (docs/IMPLEMENTATION.md).
+    mem_limit: 2g
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/worker:${WEAVER_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - path: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/web.env
+        required: true
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_WORKER_HEALTH_PORT: 3101
+    volumes:
+      - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data
+    networks: [internal]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3101/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  ingestion-worker:
+    stop_grace_period: 45s
+    # Interim guard: office-format parsers decompress before they can measure (docs/IMPLEMENTATION.md).
+    mem_limit: 2g
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/worker:${WEAVER_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - path: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/web.env
+        required: true
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_WORKER_ROLES: ingestion
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_WORKER_HEALTH_PORT: 3102
+    volumes:
+      - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data
+    networks: [internal]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3102/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  mcp-server:
+    stop_grace_period: 135s
+    image: ${WEAVER_IMAGE_PREFIX:-weaver}/mcp:${WEAVER_IMAGE_TAG:-latest}
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    env_file:
+      - path: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/web.env
+        required: true
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+      NEXT_PUBLIC_BASE_PATH: ${WEAVER_BASE_PATH:-/weaver}
+      WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
+      WEAVER_DATA_DIR: /data
+      WEAVER_MCP_PORT: 3200
+      # Traefik appends the direct client address as the right-most X-Forwarded-For hop.
+      WEAVER_MCP_TRUST_PROXY: true
+    volumes:
+      - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data
+    networks: [internal, ingress]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3200/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${WEAVER_TRAEFIK_NETWORK:-ingress}"
+      # The MCP endpoint is <base path>/api/mcp; its RFC 9728 document sits at the origin root (spec §26.2 item 5).
+      - "traefik.http.routers.weaver-mcp.rule=Host(`${WEAVER_PUBLIC_HOST:?set WEAVER_PUBLIC_HOST}`) && (PathPrefix(`${WEAVER_BASE_PATH:-/weaver}/api/mcp`) || Path(`/.well-known/oauth-protected-resource${WEAVER_BASE_PATH:-/weaver}/api/mcp`))"
+      - "traefik.http.routers.weaver-mcp.entrypoints=websecure"
+      - "traefik.http.routers.weaver-mcp.tls.certresolver=${WEAVER_TLS_CERTRESOLVER:-letsencrypt}"
+      - "traefik.http.routers.weaver-mcp.priority=300"
+      - "traefik.http.services.weaver-mcp.loadbalancer.server.port=3200"
+
+networks:
+  internal:
+  ingress:
+    name: ${WEAVER_TRAEFIK_NETWORK:-ingress}
+    external: true
+
+secrets:
+  pg_password:
+    file: ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/pg_password

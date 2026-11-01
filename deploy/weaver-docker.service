@@ -1,0 +1,21 @@
+[Unit]
+Description=Weaver Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=WEAVER_DEPLOY_ROOT=/srv/weaver
+WorkingDirectory=/srv/weaver
+ExecStart=/usr/local/sbin/weaver-compose-up
+ExecStop=/usr/bin/docker compose --env-file /srv/weaver/web.env -f /srv/weaver/docker-compose.yml down
+ExecReload=/usr/local/sbin/weaver-compose-up --force-recreate
+# Pulling five images on a slow link can still take a while.
+TimeoutStartSec=900
+# Web and MCP drain for up to 135 s each.
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

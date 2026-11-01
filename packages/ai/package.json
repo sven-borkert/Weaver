@@ -1,0 +1,35 @@
+{
+  "name": "@weaver/ai",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./completion": "./src/completion.ts",
+    "./errors": "./src/errors.ts",
+    "./model": "./src/model.ts",
+    "./prompt": "./src/prompt.ts",
+    "./runner": "./src/runner.ts",
+    "./taskPrompt": "./src/taskPrompt.ts",
+    "./taskRunner": "./src/taskRunner.ts",
+    "./tools": "./src/tools.ts",
+    "./usage": "./src/usage.ts",
+    "./externalTools": "./src/externalTools.ts",
+    "./externalToolSearch": "./src/externalToolSearch.ts"
+  },
+  "scripts": {
+    "lint": "eslint src",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "4.0.48",
+    "@ai-sdk/openai": "4.0.56",
+    "@ai-sdk/openai-compatible": "3.0.43",
+    "@weaver/assistant-tools": "workspace:*",
+    "@weaver/config": "workspace:*",
+    "@weaver/core": "workspace:*",
+    "@weaver/db": "workspace:*",
+    "@weaver/external-mcp": "workspace:*",
+    "ai": "7.0.90",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "@weaver/auth",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./constants": "./src/constants.ts"
+  },
+  "scripts": {
+    "lint": "eslint src scripts",
+    "test": "vitest run src",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weaver/config": "workspace:*",
+    "@better-auth/api-key": "1.7.2",
+    "@better-auth/cimd": "1.7.2",
+    "@better-auth/core": "1.7.2",
+    "@better-auth/mcp": "1.7.2",
+    "@better-auth/oauth-provider": "1.7.2",
+    "better-auth": "1.7.2",
+    "jose": "^6.2.9"
+  },
+  "devDependencies": {
+    "typescript": "~5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

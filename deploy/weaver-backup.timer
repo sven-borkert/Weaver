@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Weaver backup
+
+[Timer]
+OnCalendar=*-*-* 02:40:00
+Persistent=true
+RandomizedDelaySec=5m
+Unit=weaver-backup.service
+
+[Install]
+WantedBy=timers.target
