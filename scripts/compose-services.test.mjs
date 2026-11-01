@@ -328,3 +328,29 @@ test("the generic example runs every service from registry images on one host", 
   );
   assert.match(example, /POSTGRES_PASSWORD_FILE: \/run\/secrets\/pg_password/);
 });
+
+test("the quick start builds locally and publishes only on loopback", () => {
+  const quickstart = readFileSync("docker-compose.quickstart.yml", "utf8");
+  const services = mappingBlock(quickstart, "services", 0);
+  assert.doesNotMatch(quickstart, /traefik|external: true/);
+  for (const name of [
+    "data-permissions",
+    "migrations",
+    "bootstrap-admin",
+    "web",
+    "agent-worker",
+    "ingestion-worker",
+    "mcp-server",
+  ]) {
+    assert.match(mappingBlock(services, name, 2), /^    build:/m);
+  }
+  const published = quickstart.match(/^      - "[^"]*:\d+"$/gm) ?? [];
+  assert.equal(published.length, 2, "only web and mcp-server publish ports");
+  for (const port of published) assert.match(port, /"127\.0\.0\.1:/);
+  assert.match(
+    mappingBlock(services, "web", 2),
+    /args:\s*\n\s+NEXT_PUBLIC_BASE_PATH: ""/,
+    "the root-served quick start must not inherit the /weaver build default",
+  );
+  assert.match(readFileSync(".gitignore", "utf8"), /^\.env\.quickstart$/m);
+});

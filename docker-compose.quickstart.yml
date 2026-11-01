@@ -1,0 +1,210 @@
+# Self-contained local evaluation: builds from this checkout, no registry or reverse proxy.
+#   ./scripts/quickstart-env.sh
+#   docker compose -f docker-compose.quickstart.yml --env-file .env.quickstart up -d --build
+# Both ports bind to loopback because the stack serves plain HTTP. Production: deploy/README.md.
+name: weaver-quickstart
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-app-environment: &app-environment
+  NODE_ENV: production
+  NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
+  DATABASE_URL: postgresql://weaver:${POSTGRES_PASSWORD:?run scripts/quickstart-env.sh}@postgres:5432/weaver?schema=public
+  AUTH_URL: http://localhost:${WEAVER_WEB_PORT:-3000}
+  AUTH_SECRET: ${AUTH_SECRET:?run scripts/quickstart-env.sh}
+  WEAVER_ENCRYPTION_KEYS: ${WEAVER_ENCRYPTION_KEYS:?run scripts/quickstart-env.sh}
+  WEAVER_DATA_DIR: /data
+  WEAVER_JOBS_ENABLED: "true"
+  WEAVER_OUTBOUND_ALLOWED_ORIGINS: ${WEAVER_OUTBOUND_ALLOWED_ORIGINS:-}
+  WEAVER_MCP_RESOURCE_URL: http://localhost:${WEAVER_MCP_PORT:-3200}/api/mcp
+
+x-app-depends-on: &app-depends-on
+  data-permissions:
+    condition: service_completed_successfully
+  bootstrap-admin:
+    condition: service_completed_successfully
+
+x-tools-build: &tools-build
+  context: .
+  dockerfile: docker/web.Dockerfile
+  target: tools
+
+services:
+  postgres:
+    # Pinned with its base OS: a moving tag can change glibc collations under existing data.
+    image: pgvector/pgvector:0.8.6-pg17-trixie
+    command: ["postgres", "-c", "max_connections=150"]
+    stop_grace_period: 60s
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_DB: weaver
+      POSTGRES_USER: weaver
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run scripts/quickstart-env.sh}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U weaver -d weaver"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # A new named volume is owned by root; the application images run as UID 1000.
+  data-permissions:
+    image: weaver-quickstart/tools:local
+    build: *tools-build
+    user: "0:0"
+    command: ["chown", "1000:1000", "/data"]
+    restart: "no"
+    logging: *default-logging
+    volumes:
+      - app_data:/data
+
+  migrations:
+    image: weaver-quickstart/tools:local
+    build: *tools-build
+    command: ["pnpm", "--filter", "@weaver/db", "migrate:deploy"]
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *app-environment
+
+  # Creates the first Admin once; it skips when any user already exists.
+  bootstrap-admin:
+    image: weaver-quickstart/tools:local
+    build: *tools-build
+    command: ["pnpm", "--filter", "@weaver/db", "bootstrap:admin"]
+    restart: "no"
+    logging: *default-logging
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-environment
+      WEAVER_BOOTSTRAP_ADMIN_EMAIL: ${WEAVER_BOOTSTRAP_ADMIN_EMAIL:?run scripts/quickstart-env.sh}
+      WEAVER_BOOTSTRAP_ADMIN_PASSWORD: ${WEAVER_BOOTSTRAP_ADMIN_PASSWORD:?run scripts/quickstart-env.sh}
+
+  web:
+    image: weaver-quickstart/web:local
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      target: runtime
+      args:
+        NEXT_PUBLIC_BASE_PATH: ""
+    stop_grace_period: 135s
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on: *app-depends-on
+    environment:
+      <<: *app-environment
+      NEXT_PUBLIC_BASE_PATH: ""
+    volumes:
+      - app_data:/data
+    ports:
+      - "127.0.0.1:${WEAVER_WEB_PORT:-3000}:3000"
+
+  agent-worker:
+    image: weaver-quickstart/worker:local
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: runtime
+    stop_grace_period: 45s
+    # Interim guard: office-format parsers decompress before they can measure (docs/IMPLEMENTATION.md).
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on: *app-depends-on
+    environment:
+      <<: *app-environment
+      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git
+      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git
+      WEAVER_WORKER_HEALTH_PORT: 3101
+    volumes:
+      - app_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3101/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  ingestion-worker:
+    image: weaver-quickstart/worker:local
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+      target: runtime
+    stop_grace_period: 45s
+    # Interim guard: office-format parsers decompress before they can measure (docs/IMPLEMENTATION.md).
+    mem_limit: 2g
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on: *app-depends-on
+    environment:
+      <<: *app-environment
+      WEAVER_WORKER_ROLES: ingestion
+      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git
+      WEAVER_WORKER_HEALTH_PORT: 3102
+    volumes:
+      - app_data:/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3102/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  mcp-server:
+    image: weaver-quickstart/mcp:local
+    build:
+      context: .
+      dockerfile: docker/mcp.Dockerfile
+      target: runtime
+    stop_grace_period: 135s
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on: *app-depends-on
+    environment:
+      <<: *app-environment
+      NEXT_PUBLIC_BASE_PATH: ""
+      WEAVER_MCP_PORT: 3200
+    volumes:
+      - app_data:/data
+    ports:
+      - "127.0.0.1:${WEAVER_MCP_PORT:-3200}:3200"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3200/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  postgres_data:
+  app_data:

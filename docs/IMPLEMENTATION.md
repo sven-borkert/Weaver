@@ -3152,7 +3152,8 @@ GitLab CI ([`.gitlab-ci.yml`](../.gitlab-ci.yml),
 `mcp` to the project registry; [`docker-compose.yml`](../docker-compose.yml)
 pulls them through `WEAVER_IMAGE_PREFIX`/`WEAVER_IMAGE_TAG`, and
 [`docker-compose.build.yml`](../docker-compose.build.yml) adds the local
-builds.
+builds. [`docker-compose.quickstart.yml`](../docker-compose.quickstart.yml) is a separate
+loopback-only stack that builds from the checkout for local evaluation (see `README.md`).
 
 ### Assistant external controls (Phase 7A)
 

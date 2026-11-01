@@ -58,6 +58,7 @@ __pycache__/
 # project-specific
 .env.test
 .env.e2e
+.env.quickstart
 .local-db-secret
 
 # Claude Code per-developer settings (the shared settings.json is committed)

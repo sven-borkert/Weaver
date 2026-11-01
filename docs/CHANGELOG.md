@@ -4,6 +4,10 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Added
+
+- A README and a self-contained quick start: `docker-compose.quickstart.yml` builds every service from the checkout, needs no registry or reverse proxy, and `scripts/quickstart-env.sh` generates its secrets and first Admin. It serves HTTP on loopback only.
+
 ### Changed
 
 - Deployment: `WEAVER_IMAGE_PREFIX` now defaults to `weaver` and `WEAVER_TLS_CERTRESOLVER` to `letsencrypt`. `weaver-upgrade` requires `WEAVER_GITLAB_API` and `WEAVER_GITLAB_PROJECT`, set in `web.env` or the environment.
