@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { scanForSecrets, scanTableForSecrets } from "./secretScan";
+import {
+  SCAN_SLICE_CHARS,
+  SCAN_STRIDE_CHARS,
+  scanForSecrets,
+  scanTableForSecrets,
+} from "./secretScan";
 
 // Assembled at runtime so the corpus itself never trips a repository secret scanner.
 const j = (...parts: string[]) => parts.join("");
@@ -122,7 +127,6 @@ const NEGATIVES: Array<[label: string, text: string]> = [
   ["bare word assignment", "token: true"],
   ["url without password", "https://user@git.example.com/repo.git"],
   ["url with port only", "postgres://db.example.com:5432/weaver"],
-  ["IBAN with a bad checksum", j("DE89 3704 0044 ", "0532 0130 01")],
   ["card failing Luhn", j("4111 1111 ", "1111 1112")],
   ["order number with 16 digits", "1234 5678 9012 3456"],
   ["two dot-separated words", "eyJ.notatoken"],
@@ -161,20 +165,187 @@ describe("scanForSecrets", () => {
     expect(scanForSecrets(text, "a")).toEqual(scanForSecrets(text, "a"));
   });
 
-  it("bounds its hits and stays linear on hostile input", () => {
+  it("bounds its hits", () => {
     const many = Array.from({ length: 500 }, () =>
       j("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789"),
     ).join("\n");
     expect(scanForSecrets(many, "note").length).toBeLessThanOrEqual(50);
-    const started = Date.now();
-    scanForSecrets(`${"a".repeat(200_000)}://${"b:".repeat(50_000)}`, "note");
-    scanForSecrets(`${"password ".repeat(20_000)}`, "note");
-    expect(Date.now() - started).toBeLessThan(1_500);
-  }, 10_000);
+  });
+
+  // No clock assertion: a quadratic pattern exceeds the timeout, a slow runner does not.
+  it.each([
+    ["long word", "a".repeat(200_000)],
+    ["word then scheme", `${"a".repeat(100_000)}://${"b:".repeat(50_000)}`],
+    ["repeated scheme", "a://b:".repeat(33_333)],
+    ["repeated keyword", "password".repeat(25_000)],
+    ["repeated keyword with space", "password ".repeat(22_222)],
+    ["repeated open quote", 'password="'.repeat(20_000)],
+    ["repeated JWT start", "eyJ".repeat(66_666)],
+    ["JWT without dots", `eyJ${"a".repeat(199_990)}`],
+    ["repeated IBAN start", "AB12 ".repeat(40_000)],
+    ["long digit run", "1".repeat(200_000)],
+    ["spaced digits", "1 ".repeat(100_000)],
+    ["PEM start", "-----BEGIN A ".repeat(15_000)],
+  ])(
+    "stays linear on 200,000 characters: %s",
+    (_label, text) => {
+      expect(Array.isArray(scanForSecrets(text, "note"))).toBe(true);
+    },
+    5_000,
+  );
+});
+
+describe("placeholders match only complete forms", () => {
+  it.each([
+    ["dollar-brace", "password = ${DB_PASSWORD}"],
+    ["dollar name", "password = $DB_PASSWORD"],
+    ["angle", 'password = "<your password>"'],
+    ["mustache", 'token = "{{ vault_token }}"'],
+    ["percent", "api_key = %API_KEY%"],
+    ["exact word", "secret: changeme"],
+    ["exact word in caps", "password=PLACEHOLDER"],
+    ["url password", "postgres://app:${DB_PASSWORD}@db/weaver"],
+  ])("passes %s", (_label, text) => {
+    expect(scanForSecrets(text, "note")).toEqual([]);
+  });
+
+  it.each([
+    ["starts with $", 'password = "$ecretP4ss!"'],
+    ["starts with <", "password = <h7Kq2mZp"],
+    ["starts with {", "password = {h7Kq2mZp"],
+    ["starts with [", "password = [h7Kq2mZp"],
+    ["starts with (", "password = (h7Kq2mZp"],
+    ["starts with %", "password = %h7Kq2mZp"],
+    ["dollar-brace with a tail", "password = ${h7Kq}2mZp"],
+    ["keyword prefix: your", "password = your-real-K3y9"],
+    ["keyword prefix: example", "password = example-prod-K3y9"],
+    ["keyword prefix: changeme", "password = changeme99"],
+    ["short value", "password = hunter2"],
+  ])("flags a real secret that %s", (_label, text) => {
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "credential_assignment",
+    );
+  });
+});
+
+describe("checksums do not depend on what surrounds the value", () => {
+  const iban = j("DE89 3704 0044 ", "0532 0130 00");
+  it.each([
+    ["trailing word", `${iban} Zahlung bis Freitag`],
+    ["trailing digits", `${iban} 2026`],
+    ["lower case", iban.toLowerCase()],
+    ["no spaces", iban.replaceAll(" ", "")],
+    ["dashes", iban.replaceAll(" ", "-")],
+    ["leading code-like word", `AB12 ${iban}`],
+    ["two-digit-group country", j("GB82 WEST 1234 ", "5698 7654 32")],
+  ])("finds an IBAN with %s", (_label, text) => {
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "iban",
+    );
+  });
+
+  it("does not call a bad checksum an IBAN", () => {
+    const text = j("DE89 3704 0044 ", "0532 0130 01");
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).not.toContain(
+      "iban",
+    );
+  });
+
+  it.each([
+    ["spaces", j("4111 1111 ", "1111 1111")],
+    ["dashes", j("4111-1111-", "1111-1111")],
+    ["no separators", j("41111111", "11111111")],
+    ["15-digit Amex", j("3782 822463 ", "10005")],
+    ["a trailing year", j("4111 1111 ", "1111 1111 2028")],
+    ["a leading group", j("2028 4111 1111 ", "1111 1111")],
+    ["trailing text", j("4111 1111 ", "1111 1111 exp 12/28")],
+  ])("finds a card with %s", (_label, text) => {
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "card_number",
+    );
+  });
+});
+
+describe("slicing", () => {
+  const segment = (length: number) => "a".repeat(length);
+  const jwt = (header: number, payload: number) =>
+    j("eyJ", segment(header), ".", segment(payload), ".", segment(40));
+
+  it.each([
+    ["first slice edge", SCAN_SLICE_CHARS],
+    ["second slice edge", SCAN_STRIDE_CHARS + SCAN_SLICE_CHARS],
+    ["stride edge", SCAN_STRIDE_CHARS],
+  ])("finds a 2 KB JWT straddling the %s", (_label, edge) => {
+    const token = jwt(1_000, 1_000);
+    const text = `${"x ".repeat((edge - 1_000) / 2)}${token}`;
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "jwt",
+    );
+  });
+
+  it("finds an 8 KB token straddling a slice edge", () => {
+    const text = `${"x ".repeat((SCAN_SLICE_CHARS - 4_000) / 2)}${jwt(4_000, 4_000)}`;
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "jwt",
+    );
+  });
+
+  it("finds a token longer than the bound by its prefix", () => {
+    expect(
+      scanForSecrets(jwt(1_000, 8_000).concat(segment(30_000)), "note").map(
+        (hit) => hit.kind,
+      ),
+    ).toContain("jwt");
+  });
+});
+
+describe("common credential forms", () => {
+  it.each([
+    ["camelCase password", "dbPassword=h7Kq2mZp"],
+    ["camelCase token", "authToken: h7Kq2mZp"],
+    ["keyword suffix", "password_prod=h7Kq2mZp"],
+    ["keyword suffix with dash", "api-key-staging: h7Kq2mZp"],
+    ["shell export", "export MYSQL_PASSWORD=h7Kq2mZp"],
+    ["backslash-escaped JSON", String.raw`{\"password\": \"h7Kq2mZp\"}`],
+    ["backslash-escaped value", String.raw`password=\"h7Kq2mZp\"`],
+    ["fat arrow", "'secret' => 'h7Kq2mZp'"],
+    ["walrus", "token := h7Kq2mZp"],
+    ["quoted value with spaces", 'password = "correct horse battery"'],
+    ["quoted value over the bound", `password = "${"h7Kq".repeat(100)}"`],
+  ])("finds %s", (_label, text) => {
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "credential_assignment",
+    );
+  });
+
+  it.each([
+    ["an empty user", "redis://:h7Kq2mZp@cache.example.com:6379/0"],
+    ["@ in the password", "postgres://app:h7K@q2m@Zp@db.example.com/weaver"],
+    ["no user and @", "redis://:h7K@q2mZp@cache.example.com"],
+    [
+      "a second URL in the run",
+      "https://a.example/x,https://u:h7Kq2mZp@b.example",
+    ],
+  ])("finds URL credentials with %s", (_label, text) => {
+    expect(scanForSecrets(text, "note").map((hit) => hit.kind)).toContain(
+      "url_credentials",
+    );
+  });
+
+  it("never returns the value of any form", () => {
+    for (const text of [
+      "dbPassword=h7Kq2mZp",
+      "redis://:h7Kq2mZp@cache.example.com",
+      String.raw`{\"password\": \"h7Kq2mZp\"}`,
+    ])
+      expect(JSON.stringify(scanForSecrets(text, "note"))).not.toContain(
+        "h7Kq2mZp",
+      );
+  });
 });
 
 describe("scanTableForSecrets", () => {
-  it("scans every cell and column name, naming the position", () => {
+  it("scans every cell, naming only the position", () => {
     const hits = scanTableForSecrets(
       ["name", "value"],
       [
@@ -183,12 +354,24 @@ describe("scanTableForSecrets", () => {
       ],
     );
     expect(hits).toEqual([
-      { kind: "github_token", location: "table row 2, column value" },
+      { kind: "github_token", location: "table row 2, column 2" },
     ]);
   });
 
-  it("scans a column name", () => {
+  it("scans a column name and reports its position", () => {
     const hits = scanTableForSecrets([j("AKIA", "IOSFODNN7EXAMPLE")], [["x"]]);
     expect(hits[0]?.location).toBe("table column 1");
+  });
+
+  // A headerless CSV makes its first data row the column names.
+  it("never echoes a column name into a location", () => {
+    const hits = scanTableForSecrets(
+      ["hunter2hunter2", "h7Kq2mZp"],
+      [["x", j("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789")]],
+    );
+    const serialized = JSON.stringify(hits);
+    expect(serialized).not.toContain("hunter2hunter2");
+    expect(serialized).not.toContain("h7Kq2mZp");
+    expect(hits[0]?.location).toBe("table row 1, column 2");
   });
 });
