@@ -7,7 +7,6 @@ import { z } from "zod";
 import {
   boundItems,
   defineSharedReadTool,
-  defineTool,
   newOutputBudget,
   requireScope,
   scopedProjectIds,

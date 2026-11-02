@@ -35,7 +35,6 @@ import {
 } from "./wikiRuns";
 
 const HISTORY_WALK_LIMIT = 500;
-const REVERT_SUMMARY = "Revert of a wiki run";
 const TERMINAL = ["succeeded", "stopped", "failed", "cancelled"] as const;
 const RETENTION_MS = 90 * 24 * 60 * 60_000;
 
@@ -205,7 +204,7 @@ async function applyRevertWrite(
   };
   const operation: ContentOperation =
     write.kind === "restore"
-      ? ({
+      ? {
           kind: "content.restore",
           projectId: lease.projectId,
           resourceType: "document",
@@ -213,15 +212,15 @@ async function applyRevertWrite(
           mode: "version",
           sourceSha: write.toSha,
           expectedHeadCommitSha: write.expectedHead,
-        } as ContentOperation)
-      : ({
+        }
+      : {
           kind: "content.lifecycle",
           action: "item_delete",
           projectId: lease.projectId,
           resourceType: "document",
           resourceId: write.documentId,
           expectedHeadCommitSha: write.expectedHead,
-        } as ContentOperation);
+        };
   try {
     const outcome = await withProjectRepo(lease.projectId, (repo) =>
       recoverCheckApply({

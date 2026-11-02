@@ -96,10 +96,11 @@ describe("withNotesMessage", () => {
     const notes = second.filter(
       (message) =>
         message.role === "user" &&
-        String(message.content).startsWith(WIKI_NOTES_HEADER),
+        typeof message.content === "string" &&
+        message.content.startsWith(WIKI_NOTES_HEADER),
     );
     expect(notes).toHaveLength(1);
-    expect(String(notes[0]!.content)).toContain("two");
+    expect(notes[0]!.content).toContain("two");
     expect(second[1]).toBe(notes[0]);
   });
 
@@ -138,7 +139,7 @@ describe("a 200,000-character source at a 100,000 window", () => {
     const seen: Array<{ offset: number; visible: boolean; bytes: number }> = [];
     let step = 0;
     const model = new MockLanguageModelV4({
-      doStream: async ({ prompt }: any) => {
+      doStream: async ({ prompt }) => {
         const current = step;
         step += 1;
         const calls: Array<[string, unknown]> =

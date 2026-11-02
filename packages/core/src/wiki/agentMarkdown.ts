@@ -89,7 +89,7 @@ function splitProse(markdown: string): Array<{ text: string; prose: boolean }> {
     const marker = FENCE_RE.exec(line)?.[1];
     if (fence !== null) {
       parts.push({ text: line, prose: false });
-      if (marker && marker[0] === fence[0] && marker.length >= fence.length)
+      if (marker?.startsWith(fence.charAt(0)) && marker.length >= fence.length)
         fence = null;
       continue;
     }

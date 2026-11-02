@@ -135,7 +135,7 @@ export class WikiRunSession {
     readonly db: PrismaClient,
     readonly lease: LeasedWikiRun,
     /** Bytes of tool schema this attempt may still load. */
-    readonly schemaReserveBytes: number = 0,
+    readonly schemaReserveBytes = 0,
   ) {
     this.actor = createWikiAgentSecurityContext({
       agentId: lease.agentId,

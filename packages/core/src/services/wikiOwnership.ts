@@ -173,6 +173,6 @@ export async function isOwnedAtWrite(
     where: { documentId: input.documentId },
     select: { lastAgentCommitSha: true, run: { select: { agentId: true } } },
   });
-  if (!row || row.run.agentId !== input.agentId) return false;
+  if (row?.run.agentId !== input.agentId) return false;
   return (await repo.lastCommitForPath(input.path)) === row.lastAgentCommitSha;
 }

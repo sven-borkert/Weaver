@@ -8,7 +8,6 @@ import {
   TOOL_ERROR_REASONS,
   utf8Bytes,
   type SharedReadToolContext,
-  type ToolErrorReason,
   type ToolOutcome,
 } from "../contract";
 
@@ -57,9 +56,7 @@ export const WIKI_UNTRUSTED_NOTICE =
 function teachingError(error: unknown): unknown {
   if (!isCoreError(error)) return error;
   const raw = error.details?.reason;
-  const reason = (TOOL_ERROR_REASONS as readonly unknown[]).includes(raw)
-    ? (raw as ToolErrorReason)
-    : undefined;
+  const reason = TOOL_ERROR_REASONS.find((known) => known === raw);
   if (error.code === "CONFLICT" || error.code === "PRECONDITION_FAILED")
     return new ToolError("CONFLICT", error.message.slice(0, 300), reason);
   if (error.code === "FORBIDDEN")
@@ -72,7 +69,7 @@ function writeTool<I>(tool: {
   description: string;
   kind?: "read" | "write";
   inputSchema: z.ZodType<I>;
-  run(input: I, wiki: WikiRunSession): Promise<unknown> | unknown;
+  run(input: I, wiki: WikiRunSession): unknown;
 }): WikiAgentTool {
   const kind = tool.kind ?? "write";
   return {
