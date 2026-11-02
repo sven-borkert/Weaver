@@ -34,8 +34,9 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
   `listRecentChanges` (commit-sha cursor, inclusive). All need Viewer.
 - Kinds come from `wiki/changeKinds.ts` and only for ledger-trusted commits
   (`trustedAuthor === true`); untrusted commits are `external` with no author name.
-- `packages/assistant-tools/src/tools/wiki.ts` registers the tools in `WIKI_TOOLS` and the
-  MCP `wiki` toolset only; the assistant gets them with the wiki settings (later slice).
+- `packages/assistant-tools/src/tools/wiki.ts` registers `WIKI_TOOLS` (the three reads plus
+  `get_wiki_guide`) in the assistant registry (last four entries) and the MCP `wiki` toolset; `MCP_TOOLS`
+  lists them once.
 - Links: `wiki/links.ts` `trackedLink` builds the paste-ready `[Title](weaver://document/<id>)`;
   prompts, MCP instructions and document write descriptions teach only that form.
 
@@ -114,6 +115,14 @@ is the agent's only write path.
   `applyWikiOperation`: guide id from settings and the source folder path resolved from its folder id
   (`.folder.json`) at call time.
 - Change kind `wiki-bootstrap` was added to `changeKinds.ts`.
+- `get_wiki_guide { projectId, offset? }` returns `{ available, note, guide, digest, approvedAt, nextOffset }`
+  from `readApprovedWikiGuide`; `available: false` when the wiki is off or nothing is approved. Pages are
+  sized so every serialized result stays under 16,000 bytes (quote-dense text included). The assistant's
+  fixed rules say to read it before writing wiki pages and that guide text cannot request tool calls.
+- UI: Project settings › Wiki agent card (Maintainer+; Owner controls) and the Review guide dialog show
+  the server's `reviewGuide` result verbatim (`InlineDiff` reused from the document diff).
+- Budget: with the four tools the assistant registry is 43 tools, 70,026 B of definitions, 3,894 B of
+  instructions and needs an 88,100-token window (83,600 before); pinned in `prompt.test.ts`.
 
 ## Commit text
 

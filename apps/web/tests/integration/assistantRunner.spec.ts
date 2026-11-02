@@ -1687,6 +1687,32 @@ describe("assistant runner", () => {
       await new Promise<void>((resolve) => mock.close(() => resolve()));
     }
   });
+  it("offers the wiki reads and the guide rule to every assistant run", async () => {
+    await seedTestLlmRouting();
+    const { db, run } = await fixture("wiki-tools");
+    const model = scriptedModel([[finish("stop")]]);
+    await executeAssistantRun(
+      {
+        db,
+        ring: testEncryptionKeys(),
+        workerId: "wiki-tools",
+        modelFactory: () => model,
+      },
+      run.id,
+    );
+    const call = model.doStreamCalls[0]!;
+    const names = call.tools?.map((tool) => tool.name) ?? [];
+    for (const name of [
+      "find_page",
+      "inspect_links",
+      "list_recent_changes",
+      "get_wiki_guide",
+    ])
+      expect(names).toContain(name);
+    expect(JSON.stringify(call.prompt)).toContain(
+      "read it with get_wiki_guide before writing wiki pages",
+    );
+  });
   describe("exam tools for trainers", () => {
     it.each([true, false])(
       "offers exam tools only to a trainer in the effective scope: %s",

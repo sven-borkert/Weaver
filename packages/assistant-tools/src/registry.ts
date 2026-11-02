@@ -87,6 +87,9 @@ import {
 // carried propose-kind tools; their MCP counterparts update_table_schema and
 // update_table_rows remain, and the persisted table.schema / table.rows
 // operation variants stay parseable so pending proposals are still acceptable.
+/** The read-only wiki tools: in the assistant registry and the MCP `wiki` toolset. */
+export const WIKI_TOOLS: readonly AnyToolContract[] = WIKI_READ_TOOLS;
+
 export const ASSISTANT_TOOLS: readonly AnyToolContract[] = [
   listProjectsTool,
   listDocumentsTool,
@@ -127,6 +130,7 @@ export const ASSISTANT_TOOLS: readonly AnyToolContract[] = [
   proposeTableChangeTool,
   proposeContentRestoreTool,
   proposeContentLifecycleTool,
+  ...WIKI_TOOLS,
 ];
 
 export function toolsForActor(actor: UserSecurityContext): AnyToolContract[] {
@@ -189,11 +193,10 @@ export function examToolsForActor(
   );
 }
 
-/** Wiki reads are MCP-only until the assistant gets them with the wiki settings. */
-export const WIKI_TOOLS: readonly AnyToolContract[] = WIKI_READ_TOOLS;
-
 export const MCP_TOOLS: readonly AnyToolContract[] = [
-  ...ASSISTANT_TOOLS.filter((tool) => tool.kind === "read"),
+  ...ASSISTANT_TOOLS.filter(
+    (tool) => tool.kind === "read" && !WIKI_TOOLS.includes(tool),
+  ),
   ...WIKI_TOOLS,
   ...WRITE_TOOLS,
   ...ADMIN_TOOLS,

@@ -40,6 +40,7 @@ vi.mock("./_components/DocumentReviewCard", () => ({
 vi.mock("./_components/DocumentMaintenanceCard", () => ({
   DocumentMaintenanceCard: () => null,
 }));
+vi.mock("./_components/WikiCard", () => ({ WikiCard: () => null }));
 vi.mock("./_components/GitRemoteCard", () => ({ GitRemoteCard: () => null }));
 vi.mock("./_components/KnowledgeIndexCard", () => ({
   KnowledgeIndexCard: () => null,

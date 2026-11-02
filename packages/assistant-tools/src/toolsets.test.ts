@@ -115,6 +115,7 @@ it("offers the wiki reads as their own read-only toolset", () => {
     "find_page",
     "inspect_links",
     "list_recent_changes",
+    "get_wiki_guide",
   ]);
   expect(toolsetsOf("find_page")).toEqual(["wiki"]);
   expect(CORE_TOOL_NAMES).not.toContain("find_page");
@@ -131,5 +132,5 @@ it("offers the wiki reads as their own read-only toolset", () => {
     ),
     "utf8",
   );
-  expect(bytes).toBeLessThanOrEqual(3_000);
+  expect(bytes).toBeLessThanOrEqual(3_700);
 });

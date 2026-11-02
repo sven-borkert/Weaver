@@ -77,16 +77,24 @@ describe("tool registry", () => {
       "propose_table_change",
       "propose_content_restore",
       "propose_content_lifecycle",
+      "find_page",
+      "inspect_links",
+      "list_recent_changes",
+      "get_wiki_guide",
     ]);
   });
-  it("keeps the wiki reads out of the assistant and in the MCP surface in order", () => {
-    const wiki = ["find_page", "inspect_links", "list_recent_changes"];
-    expect(ASSISTANT_TOOLS.map((t) => t.name)).not.toEqual(
-      expect.arrayContaining(wiki),
-    );
+  it("offers the wiki reads to the assistant and once, in order, on the MCP surface", () => {
+    const wiki = [
+      "find_page",
+      "inspect_links",
+      "list_recent_changes",
+      "get_wiki_guide",
+    ];
+    expect(ASSISTANT_TOOLS.map((t) => t.name).slice(-4)).toEqual(wiki);
     const names = MCP_TOOLS.map((t) => t.name);
+    expect(new Set(names).size).toBe(names.length);
     expect(
-      names.slice(names.indexOf("find_page"), names.indexOf("find_page") + 3),
+      names.slice(names.indexOf("find_page"), names.indexOf("find_page") + 4),
     ).toEqual(wiki);
   });
   it("filters by capability", () => {

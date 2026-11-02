@@ -18,6 +18,7 @@ import { MachineApiKeysCard } from "./_components/MachineApiKeysCard";
 import { MembersSection } from "./_components/MembersSection";
 import { ProjectSettingsForm } from "./_components/ProjectSettingsForm";
 import { TableMaintenanceCard } from "./_components/TableMaintenanceCard";
+import { WikiCard } from "./_components/WikiCard";
 
 function SettingsSkeleton() {
   return (
@@ -108,6 +109,14 @@ export default function ProjectSettingsPage() {
       ) : null}
 
       {canManageMembers ? <KnowledgeIndexCard projectId={project.id} /> : null}
+
+      {canManageMembers ? (
+        <WikiCard
+          key={`wiki:${project.id}`}
+          projectId={project.id}
+          isOwner={isOwner}
+        />
+      ) : null}
 
       {isOwner ? (
         <GitRemoteCard

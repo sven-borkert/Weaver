@@ -165,7 +165,7 @@ function useWideDiffLayout(): boolean {
   return wide;
 }
 
-function InlineDiff({ lines }: { lines: DiffLine[] }) {
+export function InlineDiff({ lines }: { lines: DiffLine[] }) {
   return (
     <div
       aria-label="Inline document diff"

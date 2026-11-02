@@ -7,6 +7,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 ### Added
 
 - Project wiki agent, first step: an Owner can enable a project's wiki through the new `wiki` settings API. Enabling creates the wiki agent identity, a `wiki/` folder with a `wiki/sources/` folder, a wiki guide page from Weaver's template (approved as it is) and an overview page. Maintainers review the exact guide text (hidden and bidirectional characters removed, changes since the last approval and lines that hand rules to somewhere else flagged) and approve it by digest; guides over 16,000 bytes are refused. Disabling keeps everything; revoking the agent disables the feature until it is enabled again with a new identity.
+- Project settings has a Wiki agent card for Maintainers and Owners: state, model route readiness, guide approval with a "Review guide" dialog (exact text, what was removed, changes since the approved text, advisory flags), guide suggestions, and Owner controls to enable, disable, revoke, pick the guide page and set the 24-hour budget.
+- The assistant and the MCP `wiki` toolset gain `get_wiki_guide` (the approved guide as reference data that cannot request tool calls), and the assistant gains `find_page`, `inspect_links` and `list_recent_changes`. The assistant now needs a model context window of about 88,100 tokens (was 83,600).
 - Administration › AI has an optional "Project wiki agent" route (chat and tool use). Unassigning it stops every project's agent.
 
 ## [0.1.227] - 2026-11-02

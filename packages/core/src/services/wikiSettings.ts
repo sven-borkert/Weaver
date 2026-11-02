@@ -8,7 +8,7 @@ import { openProjectRepo } from "@weaver/git-store";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
 import { loadFolderIdentityIndex } from "../projectApi/folderIdentity";
-import type { UserSecurityContext } from "../security/context";
+import type { SecurityContext, UserSecurityContext } from "../security/context";
 import {
   GUIDE_MAX_BYTES,
   guideAdvisoryFlags,
@@ -572,4 +572,34 @@ export async function wikiWriteGuardsFor(
     }
   }
   return { guideDocumentId: row?.guideDocumentId ?? null, sourceFolderPaths };
+}
+
+export type ApprovedWikiGuide = {
+  digest: string;
+  body: string;
+  approvedAt: Date | null;
+} | null;
+
+/** The approved text a run or tool may use; null when the wiki is off or nothing is approved. */
+export async function readApprovedWikiGuide(
+  db: PrismaClient,
+  actor: SecurityContext,
+  projectId: string,
+): Promise<ApprovedWikiGuide> {
+  await assertProjectRole(db, projectId, actor, "Viewer");
+  const row = await db.projectWikiSettings.findUnique({
+    where: { projectId },
+    select: {
+      enabled: true,
+      approvedGuideBody: true,
+      approvedGuideDigest: true,
+      approvedGuideAt: true,
+    },
+  });
+  if (!row?.enabled || row.approvedGuideBody === null) return null;
+  return {
+    digest: row.approvedGuideDigest!,
+    body: row.approvedGuideBody,
+    approvedAt: row.approvedGuideAt,
+  };
 }

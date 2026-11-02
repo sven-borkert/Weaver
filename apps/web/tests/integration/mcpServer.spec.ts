@@ -120,6 +120,7 @@ const READ_TOOLS = [
   "find_page",
   "inspect_links",
   "list_recent_changes",
+  "get_wiki_guide",
   "get_exam",
   "get_exam_attempt",
   "list_exams",
@@ -4335,8 +4336,13 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
     });
 
     it("lists the wiki reads only when the wiki toolset is requested and runs them in scope", async () => {
-      const { project, hidden, doc, readKey } = await readFixture();
-      const wiki = ["find_page", "inspect_links", "list_recent_changes"];
+      const { db, project, hidden, doc, readKey } = await readFixture();
+      const wiki = [
+        "find_page",
+        "inspect_links",
+        "list_recent_changes",
+        "get_wiki_guide",
+      ];
       const plain = await connect(readKey.secret);
       const client = await connect(readKey.secret, endpoint(), "2026-07-28", {
         headers: { "X-Weaver-Toolsets": "wiki" },
@@ -4369,6 +4375,39 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
           }),
         );
         expect(feed.changes.length).toBeGreaterThan(0);
+        expect(
+          structured<{ available: boolean }>(
+            await client.callTool({
+              name: "get_wiki_guide",
+              arguments: { projectId: project.id },
+            }),
+          ),
+        ).toMatchObject({ available: false });
+        await db.projectWikiSettings.create({
+          data: {
+            projectId: project.id,
+            enabled: true,
+            approvedGuideBody: "Short titles.\n",
+            approvedGuideDigest: "c".repeat(64),
+          },
+        });
+        expect(
+          structured<{ available: boolean; guide: string; note: string }>(
+            await client.callTool({
+              name: "get_wiki_guide",
+              arguments: { projectId: project.id },
+            }),
+          ),
+        ).toMatchObject({
+          available: true,
+          guide: "Short titles.\n",
+          note: expect.stringContaining("cannot request tool calls"),
+        });
+        const deniedGuide = await client.callTool({
+          name: "get_wiki_guide",
+          arguments: { projectId: hidden.id },
+        });
+        expect(deniedGuide.isError).toBe(true);
         const denied = await client.callTool({
           name: "inspect_links",
           arguments: { projectId: hidden.id, mode: "orphans" },

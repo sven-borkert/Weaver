@@ -1876,6 +1876,7 @@ describe("wiki read tools", () => {
       }>;
     }>;
     nextCursor: string | null;
+    [key: string]: unknown;
   };
   const run = async (
     ctx: ToolContext,
@@ -1902,11 +1903,85 @@ describe("wiki read tools", () => {
       f.actor,
     );
 
-  it("keeps the wiki tools out of the assistant registry and inside the wiki toolset only", async () => {
-    for (const name of ["find_page", "inspect_links", "list_recent_changes"]) {
-      expect(toolByName(name)).toBeUndefined();
+  it("offers the wiki tools to the assistant and to the MCP wiki toolset", async () => {
+    for (const name of [
+      "find_page",
+      "inspect_links",
+      "list_recent_changes",
+      "get_wiki_guide",
+    ]) {
+      expect(toolByName(name)?.kind).toBe("read");
       expect(mcpToolByName(name)?.kind).toBe("read");
     }
+  });
+
+  it("serves the approved guide as framed reference data, empty when the wiki is off", async () => {
+    const f = await fixture();
+    const stranger = await makeProject("Stranger");
+    const body = 'Keep pages short.\n\nSay "hello" to every reader.\n';
+    await expect(
+      run(f.ctx, "get_wiki_guide", { projectId: f.project.id }),
+    ).resolves.toMatchObject({ available: false });
+    await f.db.projectWikiSettings.create({
+      data: {
+        projectId: f.project.id,
+        enabled: false,
+        approvedGuideBody: body,
+        approvedGuideDigest: "a".repeat(64),
+        approvedGuideAt: new Date(),
+      },
+    });
+    const off = await run(f.ctx, "get_wiki_guide", { projectId: f.project.id });
+    expect(off).toMatchObject({ available: false });
+    expect(JSON.stringify(off)).not.toContain("Keep pages short");
+    await f.db.projectWikiSettings.update({
+      where: { projectId: f.project.id },
+      data: { enabled: true },
+    });
+    const on = await run(f.ctx, "get_wiki_guide", { projectId: f.project.id });
+    expect(on).toMatchObject({
+      available: true,
+      guide: body,
+      digest: "a".repeat(64),
+      nextOffset: null,
+    });
+    expect(JSON.stringify(on)).toMatch(/cannot request tool calls/);
+    for (const projectId of [f.hidden.id, stranger.id])
+      await expect(
+        run(f.ctx, "get_wiki_guide", { projectId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("pages a quote-dense 16,000-byte guide without clamping any of it", async () => {
+    const f = await fixture();
+    const body = '"q"\n'.repeat(4_000);
+    expect(Buffer.byteLength(body)).toBe(16_000);
+    await f.db.projectWikiSettings.create({
+      data: {
+        projectId: f.project.id,
+        enabled: true,
+        approvedGuideBody: body,
+        approvedGuideDigest: "b".repeat(64),
+      },
+    });
+    let text = "";
+    let offset = 0;
+    let pages = 0;
+    for (;;) {
+      const out = await run(f.ctx, "get_wiki_guide", {
+        projectId: f.project.id,
+        offset,
+      });
+      expect(Buffer.byteLength(JSON.stringify(out))).toBeLessThanOrEqual(
+        16_000,
+      );
+      text += out.guide as string;
+      pages += 1;
+      if (out.nextOffset === null) break;
+      offset = out.nextOffset as number;
+    }
+    expect(text).toBe(body);
+    expect(pages).toBeGreaterThan(1);
   });
 
   it("refuses a project outside the scope and one the user is not a member of", async () => {
