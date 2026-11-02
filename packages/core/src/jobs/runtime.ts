@@ -23,6 +23,8 @@ import { withDiagnosticContext } from "../diagnostics/context";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { safeErrorClass } from "../diagnostics/errorClass";
 import { runTaskTick } from "../scheduledTasks/tick";
+import { failRunWithoutRunner } from "../services/wikiRuns";
+import { reapWikiRuns, runWikiTick } from "../services/wikiTick";
 import {
   createKnowledgeRoutingSource,
   knowledgeAiIdentity,
@@ -63,6 +65,7 @@ import type {
   KnowledgeJobName,
   KnowledgeJobPayloads,
   TaskRunner,
+  WikiRunner,
 } from "./types";
 import { reconcileAssistantRuns } from "../services/assistantRuns";
 import {
@@ -121,6 +124,7 @@ function instrumentedJob<N extends KnowledgeJobName>(
     name === "project.git-sync" ||
     name === "task.tick" ||
     name === "exam.tick" ||
+    name === "wiki.tick" ||
     name === "assistant.reconcile"
       ? "debug"
       : "info";
@@ -250,6 +254,7 @@ export async function registerKnowledgeJobHandlers(input: {
   ingestionAnalyzeRunner?: IngestionAnalyzeRunner;
   ingestionLinkRunner?: IngestionLinkRunner;
   taskRunner?: TaskRunner;
+  wikiRunner?: WikiRunner;
   changeSummaries?: ChangeSummaryJobDeps;
 }): Promise<void> {
   const dataDir = input.dataDir ?? parseServerEnv(process.env).WEAVER_DATA_DIR;
@@ -266,6 +271,7 @@ export async function registerKnowledgeJobHandlers(input: {
     ["tasks", "task.tick"],
     ["tasks", "exam.tick"],
     ["git", "project.git-sync"],
+    ["wiki", "wiki.tick"],
   ] as const) {
     if (!enabledRoles.has(role)) {
       if (!input.queue.unschedule)
@@ -435,6 +441,7 @@ export async function registerKnowledgeJobHandlers(input: {
             }),
         ],
         ["ingestion", () => reconcileIngestionFiles(input.db)],
+        ["wiki_runs", () => reapWikiRuns(input.db)],
         [
           "artifact_notebooks",
           () => reconcileArtifactNotebooks(input.db, { dataDir }),
@@ -587,6 +594,26 @@ export async function registerKnowledgeJobHandlers(input: {
     );
     await input.queue.schedule("project.git-sync", "* * * * *");
   }
+  if (roles.has("wiki")) {
+    await input.queue.work(
+      "wiki.tick",
+      instrumentedJob("wiki.tick", async () => {
+        await runWikiTick(input.db);
+      }),
+    );
+    // Unlike task.run a delivery without a runner ends the run visibly; nothing would pick it up.
+    await input.queue.work(
+      "wiki.run",
+      instrumentedJob("wiki.run", async (payload, execution) => {
+        if (!input.wikiRunner) {
+          await failRunWithoutRunner(input.db, payload.runId);
+          return;
+        }
+        await input.wikiRunner(payload, execution);
+      }),
+    );
+    await input.queue.schedule("wiki.tick", "* * * * *");
+  }
   await input.queue.schedule("system.reconcile", input.config.reconcileCron);
   if (roles.has("assistant")) {
     await input.queue.schedule(
@@ -608,6 +635,7 @@ export async function startKnowledgeWorkers(
     ingestionAnalyzeRunner?: IngestionAnalyzeRunner;
     ingestionLinkRunner?: IngestionLinkRunner;
     taskRunner?: TaskRunner;
+    wikiRunner?: WikiRunner;
   } = {},
 ): Promise<void> {
   const config = parseKnowledgeConfig(process.env);
@@ -645,6 +673,7 @@ export async function startKnowledgeWorkers(
         ingestionAnalyzeRunner: options.ingestionAnalyzeRunner,
         ingestionLinkRunner: options.ingestionLinkRunner,
         taskRunner: options.taskRunner,
+        wikiRunner: options.wikiRunner,
       });
       state.queue = queue;
       state.systemContext = systemContext;

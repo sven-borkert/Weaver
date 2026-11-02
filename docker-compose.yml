@@ -101,8 +101,8 @@ services:
       NODE_OPTIONS: "--disable-warning=ExperimentalWarning"
       WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
       WEAVER_DATA_DIR: /data
-      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git
-      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git,wiki
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git,wiki}
       WEAVER_WORKER_HEALTH_PORT: 3101
     volumes:
       - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data
@@ -139,7 +139,7 @@ services:
       WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: ${WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX:-2}
       WEAVER_DATA_DIR: /data
       WEAVER_WORKER_ROLES: ingestion
-      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git}
+      WEAVER_ENABLED_WORKER_ROLES: ${WEAVER_ENABLED_WORKER_ROLES:-knowledge,assistant,ingestion,tasks,git,wiki}
       WEAVER_WORKER_HEALTH_PORT: 3102
     volumes:
       - ${WEAVER_DEPLOY_ROOT:-/srv/weaver}/data:/data

@@ -47,6 +47,7 @@ const schemas: Partial<Record<KnowledgeJobName, z.ZodType>> = {
     projectId: z.uuid(),
     repairDocumentIds: z.array(z.uuid()).min(1).max(100).optional(),
   }),
+  "wiki.run": z.strictObject({ runId: z.uuid() }),
   "project.generation-build": z.strictObject({
     ...generation,
     cursor: z.uuid().optional(),

@@ -324,7 +324,7 @@ test("the generic example runs every service from registry images on one host", 
   );
   assert.match(
     mappingBlock(services, "agent-worker", 2),
-    /WEAVER_WORKER_ROLES:\s*knowledge,assistant,tasks,git/,
+    /WEAVER_WORKER_ROLES:\s*knowledge,assistant,tasks,git,wiki/,
   );
   assert.match(example, /POSTGRES_PASSWORD_FILE: \/run\/secrets\/pg_password/);
 });

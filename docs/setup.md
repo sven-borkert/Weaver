@@ -205,7 +205,7 @@ Knowledge and provider server variables are:
 | `WEAVER_TASK_TICK_CRON`           | Cron for the scheduled-task tick that claims due tasks, re-dispatches stale runs, and expires abandoned leases; defaults to every minute.                                                                                                                                                      |
 | `WEAVER_ENCRYPTION_KEYS`          | Required before adding LLM connections; `<version>:<base64 32 bytes>[,…]`; the highest version encrypts. Generate a key with `openssl rand -base64 32`; `.env`, `.env.test`, and `.env.e2e` each need their own value.                                                                         |
 | `WEAVER_AUTH_RATE_LIMIT_ENABLED`  | Overrides Better Auth's sign-in/API rate limiting; defaults to on for production builds and off otherwise. The e2e config sets `false`.                                                                                                                                                        |
-| `WEAVER_WORKER_ROLES`             | Which pg-boss consumers a worker process registers; defaults to `knowledge,assistant,ingestion,tasks,git`. Compose runs `knowledge,assistant,tasks,git` and `ingestion` as two containers built from one image.                                                                                |
+| `WEAVER_WORKER_ROLES`             | Which pg-boss consumers a worker process registers; defaults to `knowledge,assistant,ingestion,tasks,git,wiki`. Compose runs `knowledge,assistant,tasks,git,wiki` and `ingestion` as two containers built from one image.                                                                                |
 | `WEAVER_INGESTION_MAX_OCR_PAGES`  | Vision (OCR) calls per file for scanned PDF pages and images; defaults to `50`, validated `0`–`500`. `0` disables OCR.                                                                                                                                                                         |
 
 ### Configure LLM providers
@@ -909,7 +909,7 @@ DB/data-directory pair guard. Host provisioning discovers `psql` on PATH;
 
 `WEAVER_WORKER_ROLES` assigns consumers to one worker process.
 `WEAVER_ENABLED_WORKER_ROLES` declares the deployment-wide union of enabled
-roles and defaults to all five roles. Set the same union on every worker;
+roles and defaults to all six roles. Set the same union on every worker;
 each worker refuses startup if its own assignment includes a disabled role.
 The split Compose workers share this variable, so an ingestion-only worker
 preserves the assistant, task and Git schedules used by the other worker.
@@ -917,7 +917,7 @@ preserves the assistant, task and Git schedules used by the other worker.
 To disable a role, stop its consumers, remove it from every affected process's
 `WEAVER_WORKER_ROLES` (override the Compose assignment where necessary), set
 `WEAVER_ENABLED_WORKER_ROLES` consistently, then restart all workers. Startup
-removes assistant/task/Git cron schedules excluded from the deployment union.
+removes assistant/task/Git/wiki cron schedules excluded from the deployment union.
 Previously queued jobs stay durable. Re-enable the role in both lists and
 restart its assigned worker to register its schedule again.
 

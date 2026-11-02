@@ -10,6 +10,10 @@ vi.mock("../services/projectRepo", () => ({
     async (_id: string, fn: (repo: unknown) => Promise<unknown>) => fn({}),
   ),
 }));
+vi.mock("../services/wikiTick", () => ({
+  reapWikiRuns: vi.fn(async () => ({ cancelled: 0, timedOut: 0 })),
+  runWikiTick: vi.fn(async () => undefined),
+}));
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiagnosticEmitInput } from "../diagnostics/writer";
 import type * as IngestionHandlers from "./ingestionHandlers";
@@ -22,6 +26,8 @@ const HANDLED_JOB_NAMES = KNOWLEDGE_JOB_NAMES.filter(
     ![
       "artifact.notebook.prepare",
       "task.tick",
+      "wiki.tick",
+      "wiki.run",
       "exam.tick",
       "task.run",
       "project.git-sync",
@@ -716,6 +722,19 @@ describe("knowledge worker runtime", () => {
     await gitQueue.run("project.git-pull", gitPullPayload);
     expect(gitRemoteOperations.pullProjectGitRemote).toHaveBeenCalledWith(
       expect.objectContaining({ db: baseInput.db, payload: gitPullPayload }),
+    );
+
+    const wikiQueue = new FakeJobQueue();
+    await registerKnowledgeJobHandlers({
+      ...baseInput,
+      queue: wikiQueue,
+      roles: new Set(["wiki"]),
+    });
+    expect([...wikiQueue.handlers.keys()].sort()).toEqual(
+      ["system.reconcile", "wiki.run", "wiki.tick"].sort(),
+    );
+    expect(wikiQueue.schedules).toEqual(
+      expect.arrayContaining([{ name: "wiki.tick", cron: "* * * * *" }]),
     );
 
     const tasksQueue = new FakeJobQueue();

@@ -59,6 +59,8 @@ export type KnowledgeJobPayloads = {
   "task.tick": Record<string, never>;
   "exam.tick": Record<string, never>;
   "task.run": { runId: string; taskId: string };
+  "wiki.tick": Record<string, never>;
+  "wiki.run": { runId: string };
 };
 
 export type IngestionStagePayload = {
@@ -81,6 +83,8 @@ export const INGESTION_PARSE_EXPIRE_IN_SECONDS = 60 * 60;
 export const TASK_RUN_EXPIRE_IN_SECONDS = 20 * 60;
 /** Longer than ASSISTANT_RUN_TIMEOUT_MS (two hours), so pg-boss never expires a live run. */
 export const ASSISTANT_RUN_EXPIRE_IN_SECONDS = 125 * 60;
+/** Longer than the two-hour ingest wall clock, so pg-boss never expires a live run. */
+export const WIKI_RUN_EXPIRE_IN_SECONDS = 125 * 60;
 
 export function knowledgeJobExpireInSeconds(name: string): number {
   if (name === "system.reconcile") return 60 * 60;
@@ -89,6 +93,7 @@ export function knowledgeJobExpireInSeconds(name: string): number {
   if (name === "ingestion.parse") return INGESTION_PARSE_EXPIRE_IN_SECONDS;
   if (name === "task.run") return TASK_RUN_EXPIRE_IN_SECONDS;
   if (name === "assistant.run") return ASSISTANT_RUN_EXPIRE_IN_SECONDS;
+  if (name === "wiki.run") return WIKI_RUN_EXPIRE_IN_SECONDS;
   return KNOWLEDGE_JOB_EXPIRE_IN_SECONDS;
 }
 
@@ -96,7 +101,11 @@ export function knowledgeJobWorkerConcurrency(
   name: string,
   configuredConcurrency: number,
 ): number {
-  return ["document.ai-enrich", "artifact.notebook.prepare"].includes(name)
+  return [
+    "document.ai-enrich",
+    "artifact.notebook.prepare",
+    "wiki.run",
+  ].includes(name)
     ? 1
     : configuredConcurrency;
 }
@@ -130,6 +139,11 @@ export type IngestionLinkRunner = (
 
 export type TaskRunner = (
   payload: KnowledgeJobPayloads["task.run"],
+  execution: JobExecution,
+) => Promise<void>;
+
+export type WikiRunner = (
+  payload: KnowledgeJobPayloads["wiki.run"],
   execution: JobExecution,
 ) => Promise<void>;
 
@@ -200,6 +214,10 @@ export function knowledgeJobSendOptions(
     const payload = data as Partial<KnowledgeJobPayloads["task.run"]>;
     return payload.taskId ? { singletonKey: payload.taskId } : undefined;
   }
+  if (name === "wiki.run") {
+    const payload = data as Partial<KnowledgeJobPayloads["wiki.run"]>;
+    return payload.runId ? { singletonKey: payload.runId } : undefined;
+  }
   if (name !== "document.ai-enrich") return undefined;
   const payload = data as Partial<KnowledgeJobPayloads["document.ai-enrich"]>;
   if (
@@ -242,6 +260,8 @@ export const KNOWLEDGE_JOB_NAMES = [
   "task.run",
   "project.git-push",
   "project.git-pull",
+  "wiki.tick",
+  "wiki.run",
 ] as const satisfies readonly KnowledgeJobName[];
 
 /** Job names with a cron schedule; each is registered once per worker runtime. */
@@ -251,5 +271,6 @@ export const SCHEDULED_JOB_NAMES = [
   "project.git-sync",
   "task.tick",
   "exam.tick",
+  "wiki.tick",
 ] as const;
 export type ScheduledJobName = (typeof SCHEDULED_JOB_NAMES)[number];

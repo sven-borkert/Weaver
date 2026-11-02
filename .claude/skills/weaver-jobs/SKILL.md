@@ -132,6 +132,9 @@ keep that distinction when expanding job operations.
 
 Dashboard composition, report shortcuts and pin admission use `weaver-dashboard`; project lifecycle uses `weaver-projects`; low-level repository locking uses `weaver-git-store`. Job claims, consumers and receipts remain here.
 
+The `wiki` role gates `wiki.tick` (minute) and `wiki.run` (concurrency 1, 125-minute expiry, `retryLimit: 0`, short policy keyed by run);
+without an injected `wikiRunner` a delivery ends the run `RUNNER_UNAVAILABLE`. See `weaver-wiki`.
+
 ## Job inventory
 
 Canonical payloads and queue names live in `packages/core/src/jobs/types.ts`;

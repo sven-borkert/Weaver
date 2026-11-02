@@ -543,6 +543,16 @@ access (`resolveProjectAccess`) requires `ProjectWikiSettings.enabled` and the a
 `get_wiki_guide` ([`tools/wiki.ts`](../packages/assistant-tools/src/tools/wiki.ts), via `readApprovedWikiGuide`) serves the
 approved body in byte-bounded pages.
 
+Wiki inputs and runs: [`wikiInputs.ts`](../packages/core/src/services/wikiInputs.ts) owns the queue
+(`WikiInputItem`, add, list, Process, Retry, Confirm, Remove; Viewer reads, Editor acts) and
+[`wikiRuns.ts`](../packages/core/src/services/wikiRuns.ts) run endings, which hand unfinished items back
+with a note, plus the preparing-phase fence. `WikiRun` has a partial unique index, one active run per
+project; states live in pure [`wiki/states.ts`](../packages/core/src/wiki/states.ts).
+[`wikiTick.ts`](../packages/core/src/services/wikiTick.ts) runs every minute on the `wiki` worker role;
+`reapWikiRuns` (no-worker cancel after 10 minutes, 75-minute preparing limit) also runs in `system.reconcile`
+on every worker, because a deployment with no `wiki` worker has no tick either. Until a runner is injected
+`wiki.run` fails the run with `RUNNER_UNAVAILABLE`.
+
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS
 transport in [`oidcProvider.ts`](../packages/auth/src/oidcProvider.ts). The web
@@ -2027,7 +2037,7 @@ writes ingestion content to Git.
 
 The compose deployment splits worker roles across two containers built from
 one `docker/worker.Dockerfile` image: `agent-worker` narrows to
-`WEAVER_WORKER_ROLES=knowledge,assistant,tasks,git` while a separate `ingestion-worker`
+`WEAVER_WORKER_ROLES=knowledge,assistant,tasks,git,wiki` while a separate `ingestion-worker`
 runs `WEAVER_WORKER_ROLES=ingestion` on its own health port (3102), so a slow
 vision call cannot starve assistant runs sharing the other container. See the
 [`weaver-ingestion` skill](../.claude/skills/weaver-ingestion/SKILL.md) and run

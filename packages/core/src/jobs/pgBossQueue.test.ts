@@ -65,6 +65,11 @@ describe("PgBossQueue", () => {
   });
 
   it("sets seven-day terminal history retention on new and existing worker queues", async () => {
+    expect(queueOptions("wiki.run")).toMatchObject({
+      retryLimit: 0,
+      policy: "short",
+      expireInSeconds: 125 * 60,
+    });
     expect(queueOptions("assistant.run")).toMatchObject({
       deleteAfterSeconds: 7 * 24 * 60 * 60,
     });

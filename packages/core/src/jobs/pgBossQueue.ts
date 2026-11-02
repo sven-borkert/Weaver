@@ -38,6 +38,7 @@ export function queueOptions(name: string) {
       "content.delete",
       "document.change-summary",
       "task.run",
+      "wiki.run",
       "artifact.notebook.prepare",
       "ingestion.parse",
       "ingestion.analyze",
@@ -49,6 +50,7 @@ export function queueOptions(name: string) {
     ...([
       "assistant.run",
       "task.run",
+      "wiki.run",
       "project.git-push",
       "project.git-pull",
       "system.reconcile",
@@ -112,6 +114,7 @@ export class PgBossQueue<
             "content.delete",
             "document.change-summary",
             "task.run",
+            "wiki.run",
             "artifact.notebook.prepare",
             "ingestion.parse",
             "ingestion.analyze",

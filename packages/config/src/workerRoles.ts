@@ -4,6 +4,7 @@ export const WORKER_ROLES = [
   "ingestion",
   "tasks",
   "git",
+  "wiki",
 ] as const;
 export type WorkerRole = (typeof WORKER_ROLES)[number];
 export const DEFAULT_WORKER_ROLES = WORKER_ROLES.join(",");

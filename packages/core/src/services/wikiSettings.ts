@@ -26,6 +26,11 @@ import { assertProjectRole } from "./projectAccess";
 import { runWikiBootstrap, type WikiBootstrapRecord } from "./wikiBootstrap";
 import { createWikiAgent, revokeWikiAgent } from "./wikiAgents";
 import type { WikiWriteGuards } from "./wikiOperations";
+import {
+  cancelActiveRunsInTx,
+  emitRunEnded,
+  type WikiRunEnded,
+} from "./wikiRuns";
 
 type Actor = UserSecurityContext;
 
@@ -310,13 +315,19 @@ export async function disableWiki(
   input: { projectId: string; expectedRevision: number },
 ): Promise<WikiSettingsView> {
   await requireRole(db, actor, input.projectId, "Owner", true);
+  let cancelled: WikiRunEnded[] = [];
   await db.$transaction(async (tx) => {
     await requireRow(tx, input.projectId, input.expectedRevision);
-    // TODO(wiki slice 5): cancel queued and preparing runs and abort a running one.
+    cancelled = await cancelActiveRunsInTx(
+      tx,
+      input.projectId,
+      "The wiki was disabled before this input was finished.",
+    );
     await guarded(tx, input.projectId, input.expectedRevision, {
       enabled: false,
     });
   });
+  cancelled.forEach(emitRunEnded);
   const result = await currentView(db, input.projectId);
   changed(input.projectId, "disabled", result.revision);
   return result;
@@ -328,13 +339,20 @@ export async function revokeAgent(
   input: { projectId: string; expectedRevision: number },
 ): Promise<WikiSettingsView> {
   await requireRole(db, actor, input.projectId, "Owner", true);
+  let cancelled: WikiRunEnded[] = [];
   await db.$transaction(async (tx) => {
     await requireRow(tx, input.projectId, input.expectedRevision);
     await revokeWikiAgent(tx, { projectId: input.projectId });
+    cancelled = await cancelActiveRunsInTx(
+      tx,
+      input.projectId,
+      "The wiki agent was revoked before this input was finished.",
+    );
     await guarded(tx, input.projectId, input.expectedRevision, {
       enabled: false,
     });
   });
+  cancelled.forEach(emitRunEnded);
   const result = await currentView(db, input.projectId);
   changed(input.projectId, "revoked", result.revision);
   return result;

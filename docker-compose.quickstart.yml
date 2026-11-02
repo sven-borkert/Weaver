@@ -124,8 +124,8 @@ services:
     depends_on: *app-depends-on
     environment:
       <<: *app-environment
-      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git
-      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git
+      WEAVER_WORKER_ROLES: knowledge,assistant,tasks,git,wiki
+      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git,wiki
       WEAVER_WORKER_HEALTH_PORT: 3101
     volumes:
       - app_data:/data
@@ -157,7 +157,7 @@ services:
     environment:
       <<: *app-environment
       WEAVER_WORKER_ROLES: ingestion
-      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git
+      WEAVER_ENABLED_WORKER_ROLES: knowledge,assistant,ingestion,tasks,git,wiki
       WEAVER_WORKER_HEALTH_PORT: 3102
     volumes:
       - app_data:/data

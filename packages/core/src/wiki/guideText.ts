@@ -9,6 +9,11 @@ export type GuideDiffLine = { type: "same" | "add" | "del"; text: string };
 
 const IGNORABLE = /[\p{Default_Ignorable_Code_Point}\p{Bidi_Control}]/gu;
 
+/** Default-ignorable and bidi control characters removed, nothing else changed. */
+export function stripIgnorable(text: string): string {
+  return text.replace(IGNORABLE, "");
+}
+
 function removalKind(codePoint: number): string {
   if (codePoint === 0x00ad) return "soft hyphen";
   if (codePoint >= 0x200b && codePoint <= 0x200d) return "zero-width character";

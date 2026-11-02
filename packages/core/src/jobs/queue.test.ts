@@ -44,6 +44,10 @@ describe("knowledge queue", () => {
       KNOWLEDGE_ENRICHMENT_DEADLINE_MS + MAX_REQUEST_TIMEOUT_MS,
     ).toBeLessThan(knowledgeJobExpireInSeconds("document.ai-enrich") * 1_000);
     expect(knowledgeJobExpireInSeconds("document.search-sync")).toBe(15 * 60);
+    expect(knowledgeJobExpireInSeconds("wiki.run")).toBeGreaterThanOrEqual(
+      125 * 60,
+    );
+    expect(knowledgeJobWorkerConcurrency("wiki.run", 2)).toBe(1);
   });
 
   it("keeps an assistant job alive past the run's own timeout", () => {
@@ -78,6 +82,7 @@ describe("knowledge queue", () => {
       | "assistant.reconcile"
       | "task.tick"
       | "exam.tick"
+      | "wiki.tick"
       | "project.git-sync"
     >();
   });

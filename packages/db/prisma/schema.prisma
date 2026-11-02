@@ -232,6 +232,10 @@ enum ExternalMcpApprovalState {
 }
 
 model User {
+  wikiRunsStarted WikiRun[] @relation("WikiRunStartedBy")
+  wikiInputsCreated WikiInputItem[] @relation("WikiInputCreatedBy")
+  wikiInputsProcessed WikiInputItem[] @relation("WikiInputProcessStartedBy")
+  wikiInputsConfirmed WikiInputItem[] @relation("WikiInputConfirmedBy")
   examOperations ExamOperation[]
   trainingRoles ProjectTrainingRole[] @relation("ProjectTrainingRoleUser")
   trainingRolesAssigned ProjectTrainingRole[] @relation("ProjectTrainingRoleAssignedBy")
@@ -418,6 +422,8 @@ model Project {
   projectApiOperations         ProjectApiOperation[]
   projectApiAuditEvents        ProjectApiAuditEvent[]
   wikiAgents                   WikiAgent[]
+  wikiRuns                     WikiRun[]
+  wikiInputItems               WikiInputItem[]
   assistantConversationPins    AssistantConversation[]       @relation("AssistantConversationPin")
   assistantProposals           AssistantProposal[]           @relation("AssistantProposalProject")
   scheduledTasks               ScheduledTask[]               @relation("ScheduledTaskOutputProject")
@@ -537,9 +543,10 @@ model Document {
   wikiTags            Json?
   wikiSources         Json?
   reviewExempt        Boolean  @default(false)
-  /// System-set marker of a wiki source page; no FK until WikiInputItem exists.
+  /// System-set marker of a wiki source page; re-derived from WikiInputItem.sourceDocumentId on rebuild.
   wikiSourceItemId    String?  @db.Uuid
 
+  wikiSourceItem WikiInputItem?      @relation("WikiSourceDocument", fields: [wikiSourceItemId], references: [id], onDelete: Restrict)
   project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   reviewedBy   User?                 @relation("DocumentReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewers    DocumentReviewer[]
@@ -563,6 +570,7 @@ model Document {
   @@index([projectId, lastReviewedAt, id])
   @@index([reviewedById])
   @@index([projectId, wikiType])
+  @@index([wikiSourceItemId])
 }
 
 /// A project's machine identity for wiki runs: no User or Member row, no bearer
@@ -577,6 +585,7 @@ model WikiAgent {
 
   project  Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
   settings ProjectWikiSettings[]
+  runs     WikiRun[]
 
   @@index([projectId])
 }
@@ -622,7 +631,6 @@ model ProjectWikiSettings {
 }
 
 /// Agent-written guide change proposals, plain text for a human to act on.
-/// runId is a plain uuid until WikiRun exists.
 model WikiGuideSuggestion {
   id           String    @id @default(uuid()) @db.Uuid
   projectId    String    @db.Uuid
@@ -632,10 +640,149 @@ model WikiGuideSuggestion {
   resolvedAt   DateTime?
   resolvedById String?   @db.Uuid
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run     WikiRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
 
   @@index([projectId, resolvedAt])
   @@index([runId])
+}
+
+enum WikiInputKind {
+  text
+  file
+}
+
+enum WikiInputStatus {
+  queued
+  preparing
+  ready
+  processing
+  processed
+  skipped
+  held
+  failed
+  reverted
+  removed
+}
+
+enum WikiRunKind {
+  ingest
+  lint
+  classify
+  revert
+}
+
+enum WikiRunTrigger {
+  manual
+  schedule
+}
+
+enum WikiRunStatus {
+  preparing
+  queued
+  running
+  succeeded
+  stopped
+  failed
+  cancelled
+}
+
+/// One unattended execution. Partial unique index in the migration: one row per project
+/// WHERE status IN (preparing, queued, running); P2002 maps to CONFLICT RUN_ACTIVE.
+model WikiRun {
+  id                String         @id @default(uuid()) @db.Uuid
+  projectId         String         @db.Uuid
+  agentId           String         @db.Uuid
+  kind              WikiRunKind
+  trigger           WikiRunTrigger @default(manual)
+  startedById       String?        @db.Uuid
+  status            WikiRunStatus
+  stopReason        String?        @db.VarChar(64)
+  startedAt         DateTime       @default(now())
+  /// When preparation finished; the no-worker timeout counts from here.
+  queuedAt          DateTime?
+  endedAt           DateTime?
+  leaseToken        String?        @db.Uuid
+  leaseExpiresAt    DateTime?
+  workerId          String?        @db.VarChar(128)
+  attempts          Int            @default(0)
+  steps             Int            @default(0)
+  writes            Int            @default(0)
+  grossCharsChanged Int            @default(0)
+  summary           String?        @db.VarChar(4000)
+  errorCode         String?        @db.VarChar(64)
+  errorMessage      String?        @db.VarChar(500)
+  routeSnapshot     Json?
+  usageTokens       Int            @default(0)
+  usageCostMicros   BigInt         @default(0)
+  planDigest        String?        @db.VarChar(64)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  project     Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agent       WikiAgent             @relation(fields: [agentId], references: [id], onDelete: NoAction)
+  startedBy   User?                 @relation("WikiRunStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
+  items       WikiInputItem[]
+  suggestions WikiGuideSuggestion[]
+
+  @@index([projectId, startedAt])
+  @@index([status, queuedAt])
+  @@index([agentId])
+  @@index([startedById])
+}
+
+/// One queued input. sourceDocumentId and sourceTableId are plain uuids into derived rows; the
+/// migration adds CHECKs for a non-blank title and text <= 200,000 characters.
+model WikiInputItem {
+  id                 String          @id @default(uuid()) @db.Uuid
+  projectId          String          @db.Uuid
+  kind               WikiInputKind
+  title              String          @db.VarChar(255)
+  text               String?
+  textDigest         String?         @db.VarChar(64)
+  artifactId         String?         @db.Uuid
+  artifactDigest     String?         @db.VarChar(64)
+  byteSize           Int
+  createdById        String?         @db.Uuid
+  createdAt          DateTime        @default(now())
+  status             WikiInputStatus @default(queued)
+  runId              String?         @db.Uuid
+  /// The human who pressed Process; never a Git author.
+  processStartedById String?         @db.Uuid
+  sourceDocumentId   String?         @db.Uuid
+  sourceTableId      String?         @db.Uuid
+  ingestionFileId    String?         @unique @db.Uuid
+  processedAt        DateTime?
+  outcomeNote        String?         @db.VarChar(2000)
+  errorCode          String?         @db.VarChar(64)
+  errorMessage       String?         @db.VarChar(500)
+  attempts           Int             @default(0)
+  revision           Int             @default(0)
+  /// Scanner findings of a held item: kinds and locations only, never values.
+  heldHits           Json?
+  heldDigest         String?         @db.VarChar(64)
+  confirmedById      String?         @db.Uuid
+  confirmedDigest    String?         @db.VarChar(64)
+  updatedAt          DateTime        @updatedAt
+
+  project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  artifact       Artifact?      @relation(fields: [artifactId], references: [id], onDelete: SetNull)
+  createdBy      User?          @relation("WikiInputCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  processedBy    User?          @relation("WikiInputProcessStartedBy", fields: [processStartedById], references: [id], onDelete: SetNull)
+  confirmedBy    User?          @relation("WikiInputConfirmedBy", fields: [confirmedById], references: [id], onDelete: SetNull)
+  run            WikiRun?       @relation(fields: [runId], references: [id], onDelete: SetNull)
+  ingestionFile  IngestionFile? @relation(fields: [ingestionFileId], references: [id], onDelete: SetNull)
+  sourceDocuments Document[]    @relation("WikiSourceDocument")
+  sourceTables    DataTable[]   @relation("WikiSourceTable")
+
+  @@index([projectId, status, createdAt])
+  @@index([runId])
+  @@index([artifactId])
+  @@index([createdById])
+  @@index([processStartedById])
+  @@index([confirmedById])
+  @@index([projectId, sourceDocumentId])
+  @@index([projectId, sourceTableId])
 }
 
 /// Derived projection of schema.json/data.jsonl under tables/**; the
@@ -663,9 +810,10 @@ model DataTable {
   lastEditedByName String?
   lastEditedAt        DateTime
   createdAt           DateTime
-  /// System-set marker of a wiki source table; no FK until WikiInputItem exists.
+  /// System-set marker of a wiki source table; re-derived from WikiInputItem.sourceTableId on rebuild.
   wikiSourceItemId    String?  @db.Uuid
 
+  wikiSourceItem WikiInputItem? @relation("WikiSourceTable", fields: [wikiSourceItemId], references: [id], onDelete: Restrict)
   project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   lastEditedBy User?   @relation(fields: [lastEditedById], references: [id], onDelete: SetNull)
 
@@ -675,6 +823,7 @@ model DataTable {
   @@index([projectId, lastEditedAt(sort: Desc), id(sort: Desc)])
   @@index([projectId, normalizedTitleHash, title, id])
   @@index([lastEditedById])
+  @@index([wikiSourceItemId])
 }
 
 /// Derived typed crossrefs keyed by source + target kind + target UUID.
@@ -1042,10 +1191,13 @@ model AiUsage {
   outcome           AiUsageOutcome
   costMicros        BigInt?
   currency          String?
+  /// The commit an enrichment call indexed; joined to a wiki run's commits at read time.
+  sourceCommitSha   String?        @db.VarChar(40)
   createdAt         DateTime       @default(now())
 
   project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
+  @@index([sourceCommitSha])
   @@index([projectId])
   @@index([connectionId])
   @@index([createdAt, id])
@@ -2071,6 +2223,7 @@ model OauthClientAssertion {
 enum IngestionOrigin {
   upload
   external
+  wiki
 }
 
 enum IngestionFileStatus {
@@ -2148,6 +2301,7 @@ model IngestionFile {
   batch   IngestionBatch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
   project Project         @relation("IngestionFileProject", fields: [projectId], references: [id], onDelete: Cascade)
   draft   IngestionDraft?
+  wikiInputItem WikiInputItem?
 
   @@index([projectId, status])
   @@index([batchId, createdAt])
@@ -2203,6 +2357,7 @@ model Artifact {
   uploadedBy User?   @relation("ArtifactUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   notebook ArtifactNotebook?
+  wikiInputItems WikiInputItem[]
 
   @@unique([projectId, filenameKey])
   @@index([projectId, updatedAt])
@@ -2218,6 +2373,7 @@ enum PersonalWorkKind {
   notebook
   git_sync
   exam
+  wiki
 }
 
 model BackgroundWorkReceipt {

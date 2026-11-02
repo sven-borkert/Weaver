@@ -9,6 +9,7 @@ describe("parseWorkerRoles", () => {
       "ingestion",
       "tasks",
       "git",
+      "wiki",
     ]);
   });
 

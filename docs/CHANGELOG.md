@@ -4,6 +4,11 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Changed
+
+- Workers gain a `wiki` role (`wiki.tick`, `wiki.run`), on by default and assigned to `agent-worker` in the Compose files. **Before upgrading:** operators who pinned `WEAVER_ENABLED_WORKER_ROLES` must add `wiki`, or a worker assigned that role refuses to start. Without a worker consuming the role, a queued wiki run cancels itself after 10 minutes with "no worker is consuming wiki runs".
+- Disabling the wiki agent or revoking its identity now cancels queued and preparing wiki runs and returns their inputs to the queue.
+
 ## [0.1.232] - 2026-11-02
 
 ### Added

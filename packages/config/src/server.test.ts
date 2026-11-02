@@ -312,6 +312,7 @@ describe("parseServerEnv", () => {
       "ingestion",
       "tasks",
       "git",
+      "wiki",
     ]);
   });
 
@@ -323,6 +324,7 @@ describe("parseServerEnv", () => {
       "ingestion",
       "tasks",
       "git",
+      "wiki",
     ]);
     expect(env.WEAVER_INGESTION_MAX_OCR_PAGES).toBe(50);
     const narrowed = parseServerEnv({

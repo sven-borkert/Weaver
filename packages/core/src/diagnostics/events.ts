@@ -32,6 +32,16 @@ export const DIAGNOSTIC_CATEGORY_OF = {
 
   "wiki.settings.changed": "wiki",
   "wiki.guide.approved": "wiki",
+  "wiki.input.added": "wiki",
+  "wiki.input.processed": "wiki",
+  "wiki.input.skipped": "wiki",
+  "wiki.input.held": "wiki",
+  "wiki.input.failed": "wiki",
+  "wiki.run.started": "wiki",
+  "wiki.run.succeeded": "wiki",
+  "wiki.run.stopped": "wiki",
+  "wiki.run.failed": "wiki",
+  "wiki.run.cancelled": "wiki",
 
   "external.call.prepared": "mcp",
   "external.call.dispatched": "mcp",

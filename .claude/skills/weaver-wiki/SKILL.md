@@ -133,8 +133,8 @@ is the agent's only write path.
   folder's resulting id is what settings record. A forged commit under a bootstrap id is `CONFLICT`. A
   failed first enable rolls back to off.
   Guide and overview headers get `type` and `reviewExempt: true` through the internal bootstrap writer
-  only; `applyWikiOperation` cannot set `reviewExempt`. Disable keeps everything (TODO: cancel runs in
-  slice 5); revoke disables and a later enable creates a new agent.
+  only; `applyWikiOperation` cannot set `reviewExempt`. Disable keeps pages, queue and history and cancels queued
+  and preparing runs (a running one is left to its fence); revoke does the same and a later enable creates a new agent.
 - Guide: `normalizeGuideText` (NFC, strip Default_Ignorable_Code_Point and bidi controls, then NFC) runs
   before the SHA-256, so the approver sees exactly what runs inject. `approveGuide` refuses a stale
   revision, a digest mismatch (`GUIDE_CHANGED`) and over 16,000 bytes (`GUIDE_TOO_LARGE`); re-pointing
@@ -156,6 +156,19 @@ is the agent's only write path.
   the server's `reviewGuide` result verbatim (`InlineDiff` reused from the document diff).
 - Budget: the assistant registry is 43 tools, 71,075 B of definitions, 3,894 B of instructions and needs an
   89,300-token window (88,100 before the property writers); pinned in `prompt.test.ts`.
+
+## Queue and runs
+
+- `wikiInputs.ts`: `addTextInput`, `addFileInputs`, `listInputs` (never returns note text), `processInputs`,
+  `retryInput`, `confirmInput`, `removeInput`. Admission and Process lock the settings row. Queue limit 200 open
+  items (everything except `processed` and `removed`), 10 oldest per run, `RUN_ACTIVE` from the active-run check or
+  from P2002 on the partial unique index.
+- `wikiRuns.ts`: `endRunInTx` is the only way a run ends: conditional on the expected status, and every item in
+  `preparing`/`ready`/`processing` returns to `queued` with an `outcomeNote`. `held` and `failed` stay under Needs attention.
+- `wikiTick.ts`: conditional transitions only, safe from several workers. A run with no `ready` item ends `stopped`
+  (`no_ready_items`) rather than queueing for a model. `reapWikiRuns` also runs from `system.reconcile`, since a deployment
+  without a `wiki` worker has no tick; "no active job" means no `pgboss.job` row in state `active` for `wiki.run`.
+- Without an injected runner, `wiki.run` ends the run `failed` with `RUNNER_UNAVAILABLE`.
 
 ## Commit text
 
