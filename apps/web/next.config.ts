@@ -61,6 +61,9 @@ const config: NextConfig = {
     "/*": [
       // The PDF route reads the Mermaid bundle from the app's node_modules at runtime.
       "./node_modules/mermaid/dist/mermaid.min.js",
+      // The same route inlines the KaTeX stylesheet and fonts into printed formulas.
+      "./node_modules/katex/dist/katex.min.css",
+      "./node_modules/katex/dist/fonts/*.woff2",
       // playwright-core requires browsers.json when it loads; the tracer misses it.
       `${playwrightCoreDir}/browsers.json`,
     ],

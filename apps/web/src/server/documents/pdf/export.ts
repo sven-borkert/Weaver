@@ -13,7 +13,8 @@ import {
 import { readProjectImage } from "@weaver/core/services/documentImages";
 import { getDocument, resolveRefs } from "@weaver/core/services/documents";
 import type { ProjectActor } from "@weaver/core/services/projectAccess";
-import { buildDocumentPrintHtml, type PrintImage } from "./html";
+import { buildDocumentPrintHtml, hasMath, type PrintImage } from "./html";
+import { mathStylesSource } from "./mathStyles";
 import { getPdfRenderer, mermaidBundleSource } from "./render";
 
 export const MAX_PDF_IMAGES = 100;
@@ -93,6 +94,7 @@ export async function exportDocumentPdf(
     images,
     crossrefTitles,
     mermaidScript: await mermaidBundleSource(),
+    mathStyles: hasMath(contentJson) ? await mathStylesSource() : "",
   });
   return {
     bytes: await getPdfRenderer().render(html),

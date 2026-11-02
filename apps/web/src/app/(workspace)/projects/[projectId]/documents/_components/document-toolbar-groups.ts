@@ -26,7 +26,9 @@ import {
   Quote,
   Redo2,
   RemoveFormatting,
+  Sigma,
   SquareCode,
+  SquareSigma,
   Strikethrough,
   Table2,
   TableProperties,
@@ -137,6 +139,7 @@ export function documentToolbarGroups({
   onImage,
   onReference,
   onMermaid,
+  onMath,
 }: {
   editor: Editor;
   disabled: boolean;
@@ -145,6 +148,7 @@ export function documentToolbarGroups({
   onImage: () => void;
   onReference: () => void;
   onMermaid?: () => void;
+  onMath?: (type: "inlineMath" | "mathBlock") => void;
 }): ToolbarGroup[] {
   const button = (
     label: string,
@@ -497,6 +501,23 @@ export function documentToolbarGroups({
       disabled,
       onSelect: onMermaid,
     });
+  if (onMath)
+    insertEntries.push(
+      {
+        kind: "item",
+        label: "Inline formula",
+        icon: Sigma,
+        disabled,
+        onSelect: () => onMath("inlineMath"),
+      },
+      {
+        kind: "item",
+        label: "Formula block",
+        icon: SquareSigma,
+        disabled,
+        onSelect: () => onMath("mathBlock"),
+      },
+    );
 
   const can = editor.can();
   return [

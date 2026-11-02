@@ -3,6 +3,7 @@ import { renderToHTMLString } from "@tiptap/static-renderer/pm/html-string";
 import { documentExtensions } from "@weaver/core/editor/extensions";
 import { imageWidth } from "@weaver/core/editor/imageTag";
 import { crossrefTargetKey } from "@weaver/core/editor/markdown";
+import { mathSource, renderMathHtml } from "~/lib/editor/math-render";
 import { PRINT_STYLES } from "./styles";
 
 export type PrintImage = { contentType: string; bytes: Uint8Array };
@@ -22,6 +23,8 @@ export type PrintHtmlInput = {
   crossrefTitles: ReadonlyMap<string, string>;
   /** the Mermaid browser bundle, inlined verbatim; empty renders Mermaid blocks as source */
   mermaidScript: string;
+  /** the KaTeX stylesheet with its fonts inlined, used only by a page with formulas */
+  mathStyles: string;
 };
 
 const MERMAID_WAIT_MS = 10_000;
@@ -50,6 +53,11 @@ function hasMermaid(node: JSONContent): boolean {
   return (node.content ?? []).some(hasMermaid);
 }
 
+export function hasMath(node: JSONContent): boolean {
+  if (node.type === "inlineMath" || node.type === "mathBlock") return true;
+  return (node.content ?? []).some(hasMath);
+}
+
 type NodeAttrs = Record<string, unknown>;
 const attr = (attrs: NodeAttrs, key: string) =>
   typeof attrs[key] === "string" ? attrs[key] : "";
@@ -75,6 +83,10 @@ function renderBody(input: PrintHtmlInput, mermaid: boolean): string {
             ? `<pre class="mermaid">${source}</pre>`
             : `<pre><code>${source}</code></pre>`;
         },
+        inlineMath: ({ node }) =>
+          `<span data-inline-math="">${renderMathHtml(mathSource(node.attrs), false)}</span>`,
+        mathBlock: ({ node }) =>
+          `<div data-math-block="">${renderMathHtml(mathSource(node.attrs), true)}</div>`,
         crossref: ({ node }) => {
           const targetType =
             node.attrs.targetType === "table" ? "table" : "document";
@@ -122,6 +134,9 @@ export function buildDocumentPrintHtml(input: PrintHtmlInput): string {
   const mermaid = Boolean(input.mermaidScript) && hasMermaid(input.contentJson);
   if (mermaid && /<\/script/i.test(input.mermaidScript))
     throw new Error("mermaid bundle contains a closing script tag");
+  const mathStyles = hasMath(input.contentJson) ? input.mathStyles : "";
+  if (/<\/style/i.test(mathStyles))
+    throw new Error("math styles contain a closing style tag");
   const body = renderBody(input, mermaid);
   const readyAttr = mermaid ? "" : ' data-weaver-ready="true"';
   const scripts = mermaid
@@ -132,7 +147,7 @@ export function buildDocumentPrintHtml(input: PrintHtmlInput): string {
 <head>
 <meta charset="utf-8">
 <title>${escapeHtml(input.title)}</title>
-<style>${PRINT_STYLES}</style>
+<style>${PRINT_STYLES}${mathStyles}</style>
 </head>
 <body>
 <h1 class="title">${escapeHtml(input.title)}</h1>

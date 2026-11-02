@@ -25,11 +25,36 @@ function html(
     images: new Map(),
     crossrefTitles: new Map(),
     mermaidScript: "",
+    mathStyles: "",
     ...extra,
   });
 }
 
 describe("buildDocumentPrintHtml", () => {
+  it("prints formulas with the math styles", () => {
+    const page = html("Sum $2 \\times 3$\n\n$$\\frac{a}{b}$$\n", {
+      mathStyles: ".katex{font-size:1em}",
+    });
+    expect(page).toContain("×");
+    expect(page).toContain("katex-display");
+    expect(page).toContain("frac-line");
+    expect(page).toContain(".katex{font-size:1em}");
+  });
+
+  it("leaves the math styles out of a page without formulas", () => {
+    const page = html("It costs $5 and $10.\n", {
+      mathStyles: ".katex{font-size:1em}",
+    });
+    expect(page).not.toContain(".katex{font-size:1em}");
+    expect(page).toContain("It costs $5 and $10.");
+  });
+
+  it("refuses math styles that would close the style element", () => {
+    expect(() =>
+      html("$x$\n", { mathStyles: "a{}</style><script>alert(1)</script>" }),
+    ).toThrow("math styles contain a closing style tag");
+  });
+
   it("escapes the title, author names and alt text", () => {
     const page = html('![a "quoted" <alt>](missing.png)\n');
     expect(page).toContain("<title>Plan &amp; &lt;Roadmap&gt;</title>");

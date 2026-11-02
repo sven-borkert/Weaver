@@ -1092,6 +1092,13 @@ temporarily lock raw typing so completion cannot overwrite a lexical draft.
 [`use-document-view-shortcuts.ts`](../apps/web/src/lib/editor/use-document-view-shortcuts.ts)
 scopes view shortcuts away from other inputs, dialogs, and composition events.
 The source textarea accepts Ctrl/Cmd+S; Escape blurs it without changing modes.
+Formulas are the atoms `inlineMath`/`mathBlock` in
+[`editor/math.ts`](../packages/core/src/editor/math.ts) (delimiter rules, repair of
+formulas saved as text); [`math-render.ts`](../apps/web/src/lib/editor/math-render.ts)
+is the one KaTeX call for the reader, the editor's
+[`MathNodeView`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/MathNodeView.tsx>)
+and the PDF, whose [`mathStyles.ts`](../apps/web/src/server/documents/pdf/mathStyles.ts)
+inlines the stylesheet and fonts.
 Mermaid source opens locally in
 [`MermaidNodeView`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/MermaidNodeView.tsx>).
 Code blocks show a copy button from
@@ -3125,8 +3132,8 @@ grace. CI refuses to overwrite immutable image tags, publishes cache aliases onl
 from the default branch, and executes the Next lifecycle preload as a smoke test.
 The web smoke test also launches Chromium through the traced `playwright-core`,
 which needs `browsers.json` from `outputFileTracingIncludes` in `next.config.ts`
-(named by the package's real pnpm path), and checks the Mermaid bundle the PDF
-export reads from `apps/web/node_modules/mermaid/dist/`.
+(named by the package's real pnpm path), and checks the Mermaid bundle and KaTeX
+stylesheet and fonts the PDF export reads from `apps/web/node_modules/`.
 [`upgrade-behavior.test.mjs`](../scripts/upgrade-behavior.test.mjs) covers strict
 pull, revision mismatch, unhealthy workers, and successful pinned deployment.
 

@@ -66,7 +66,7 @@ smoke tools 'DATABASE_URL=postgresql://weaver:smoke@localhost:5432/weaver?schema
 launch_chromium='node -e "require(process.argv[1]).chromium.launch({executablePath:process.env.WEAVER_CHROMIUM_PATH,args:process.argv.slice(2)}).then((browser)=>browser.close())"'
 launch_chromium="$launch_chromium"' -- "$PWD"/apps/web/.next/node_modules/playwright-core-* --no-sandbox --disable-setuid-sandbox'
 # The PDF export reads the Mermaid bundle from the app directory at runtime.
-smoke web 'test -f apps/web/server.js && test -s apps/web/node_modules/mermaid/dist/mermaid.min.js && node --import ./apps/web/server-lifecycle.mjs -e "" && '"$launch_chromium"
+smoke web 'test -f apps/web/server.js && test -s apps/web/node_modules/mermaid/dist/mermaid.min.js && test -s apps/web/node_modules/katex/dist/katex.min.css && test -s apps/web/node_modules/katex/dist/fonts/KaTeX_Main-Regular.woff2 && node --import ./apps/web/server-lifecycle.mjs -e "" && '"$launch_chromium"
 smoke worker 'test -x /usr/local/bin/weaver-onenote-reader && test -d packages/db/generated'
 smoke mcp 'test -d packages/db/generated && test -f apps/mcp-server/package.json'
 

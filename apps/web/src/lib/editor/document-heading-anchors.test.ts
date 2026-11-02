@@ -16,6 +16,25 @@ const heading = (text: string, level = 2) => ({
 });
 
 describe("document outline", () => {
+  it("shows a formula in a heading as its source", () => {
+    const node = schema.nodeFromJSON({
+      type: "doc",
+      content: [
+        {
+          type: "heading",
+          attrs: { level: 2 },
+          content: [
+            { type: "text", text: "The slope " },
+            { type: "inlineMath", attrs: { source: "w_1" } },
+          ],
+        },
+      ],
+    });
+    expect(documentOutline(node)).toMatchObject([
+      { level: 2, text: "The slope $w_1$" },
+    ]);
+  });
+
   it("lists top-level headings with text under the anchors the reader renders", () => {
     const content = {
       type: "doc",

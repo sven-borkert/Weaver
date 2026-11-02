@@ -52,7 +52,11 @@ export function documentHeadingAnchors(documentNode: Node) {
 const headingText = (node: Node) =>
   node
     .textBetween(0, node.content.size, " ", (leaf) =>
-      leaf.type.name === "crossref" ? String(leaf.attrs.label ?? "") : " ",
+      leaf.type.name === "crossref"
+        ? String(leaf.attrs.label ?? "")
+        : leaf.type.name === "inlineMath"
+          ? `$${String(leaf.attrs.source ?? "")}$`
+          : " ",
     )
     .replace(/\s+/gu, " ")
     .trim();

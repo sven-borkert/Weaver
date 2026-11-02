@@ -83,7 +83,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
   working directory in dev, `next start` and standalone, whose `server.js`
   changes into it; the integration suite starts in the repository root, so
   `apps/web` is the second candidate) and copy it there with an include through
-  `./node_modules/<package>/…`. The Mermaid bundle for PDF export works this
+  `./node_modules/<package>/…`. The Mermaid bundle and KaTeX stylesheet and fonts for PDF export work this
   way; the web smoke test checks it.
 - Compose is split: `docker-compose.yml` is deployable on its own and names
   registry images; `docker-compose.build.yml` is the only file with build

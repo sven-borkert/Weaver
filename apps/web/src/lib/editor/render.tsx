@@ -5,12 +5,32 @@ import { renderToReactElement } from "@tiptap/static-renderer/pm/react";
 import type { ReactNode } from "react";
 import { documentExtensions } from "@weaver/core/editor/extensions";
 import { documentHeadingAnchors } from "./document-heading-anchors";
+import { mathSource, renderMathHtml } from "./math-render";
 
 type RenderOptions = NonNullable<
   Parameters<typeof renderToReactElement>[0]["options"]
 >;
 
 export type RenderMappings = NonNullable<RenderOptions["nodeMapping"]>;
+
+const mathMapping: RenderMappings = {
+  inlineMath: ({ node }) => (
+    <span
+      data-inline-math=""
+      dangerouslySetInnerHTML={{
+        __html: renderMathHtml(mathSource(node.attrs), false),
+      }}
+    />
+  ),
+  mathBlock: ({ node }) => (
+    <div
+      data-math-block=""
+      dangerouslySetInnerHTML={{
+        __html: renderMathHtml(mathSource(node.attrs), true),
+      }}
+    />
+  ),
+};
 
 export function renderDocumentContent(
   content: JSONContent,
@@ -42,6 +62,8 @@ export function renderDocumentContent(
   return renderToReactElement({
     extensions: documentExtensions(),
     content: documentNode,
-    options: { nodeMapping: { ...nodeMapping, ...headingMapping } },
+    options: {
+      nodeMapping: { ...mathMapping, ...nodeMapping, ...headingMapping },
+    },
   });
 }

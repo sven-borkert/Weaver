@@ -467,6 +467,16 @@ select:disabled {
   overflow-wrap: anywhere;
 }
 
+/* A wide formula scrolls on its own instead of widening the page. */
+.document-prose [data-math-block] {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.document-prose .katex {
+  overflow-wrap: normal;
+}
+
 [data-document-section="true"] {
   scroll-margin-top: calc(var(--document-sticky-header-h, 0px) + 1rem);
 }

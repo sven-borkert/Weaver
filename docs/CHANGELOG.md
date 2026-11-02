@@ -6,6 +6,7 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Added
 
+- Documents render LaTeX formulas: `$…$` inline and `$$…$$` blocks in the editor, reader, assistant text, exam prompts and PDF export, also in table headers and cells. Click a formula to edit its source, type `$x^2$`, or use Insert › Inline formula / Formula block. Files keep plain LaTeX, and formulas Weaver had already saved with extra escapes (`\\times`, `w\_1`) are repaired when read. Amounts such as `$5 and $10` stay text.
 - GitHub Actions builds the Docker images and pushes them to GitHub Container Registry from `main` and tags, using the same build script and tags as GitLab CI.
 - A README and a self-contained quick start: `docker-compose.quickstart.yml` builds every service from the checkout, needs no registry or reverse proxy, and `scripts/quickstart-env.sh` generates its secrets and first Admin. It serves HTTP on loopback only.
 

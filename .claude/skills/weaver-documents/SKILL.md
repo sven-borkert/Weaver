@@ -53,6 +53,10 @@ Shared repository readers, advisory locks, recovery and transport primitives use
 | `apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/{DocumentReviewLine,MarkReviewedDialog,ReviewSettingsDialog}.tsx` | Header review line, mark-as-reviewed confirm, review settings dialog                                                   |
 | `packages/core/src/editor/markdown.ts`                                                                                                     | Deterministic TipTap JSON ↔ Markdown conversion and crossref labels                                                    |
 | `packages/core/src/editor/mermaid.ts`                                                                                                      | Dedicated Mermaid Markdown/HTML atom and adaptive fence handling                                                       |
+| `packages/core/src/editor/math.ts`                                                                                                         | `inlineMath`/`mathBlock` atoms, `$` delimiter rules, repair of formulas saved as text                                  |
+| `apps/web/src/lib/editor/math-render.ts`                                                                                                   | The one KaTeX call (`trust: false`, `maxSize`), shared by reader, editor and PDF                                       |
+| `apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/MathNodeView.tsx`                                                 | Rendered formula; click opens the LaTeX source popover when editable                                                   |
+| `apps/web/src/server/documents/pdf/mathStyles.ts`                                                                                          | KaTeX stylesheet with fonts inlined; PDF printing blocks every request                                                 |
 | `packages/core/src/editor/imageTag.ts`                                                                                                     | Image width bounds and the one accepted `<img>` tag: parse, render, tokenizers                                         |
 | `apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentCodeBlock.tsx`                                            | Code block copy button: reader mapping and client-only editor node view                                                |
 | `apps/web/src/lib/editor/mermaid-render.ts`                                                                                                | Rejection-safe strict initialize+render serialization across client diagrams                                           |
@@ -450,6 +454,22 @@ src>` can become an image without width and unknown attributes are dropped.
   `@weaver/git-store`.
 
 ## Invariants
+
+- Math: formula sources bypass Markdown escaping because they are atoms, so a file
+  stays plain LaTeX. Inline `$` must hug its content, and the first bare `$` after
+  the opener closes the formula or the text is no formula; a closer before a digit
+  or after a space fails it, so `$5 and $10 then $x$` reads only `$x$`. One line and
+  at most 5,000 characters. `$$` on its own line(s), with no blank line inside, is a
+  block; elsewhere it is an inline formula. A block leading a list item or in a table
+  cell becomes inline, because the schema or one-line cell cannot hold it.
+  `normalizeMathSource` repairs what saving formulas as text left behind: `\\` before a
+  letter, `\_ \* \[ \] \~` and the backtick escape (not inside `\text{}`), `&lt;`
+  and friends, and in inline formulas outside `\begin` a `\\` before a space. A real
+  `a\\b` is misread, and escapes the old parser removed (`\{`, `\,`, `\%`) are gone until
+  the file is imported again. `escapeMathInText` keeps literal text literal, per text
+  node: `$a **b** c$` as marked text reads back as a formula, and a formula followed
+  directly by a digit reads back as text. Marks do not apply to the atom, as for
+  crossrefs. Render only through `renderMathHtml`.
 
 - PDF export renders the saved revision only: `@tiptap/static-renderer` markup
   with `image` (data URI or "Image unavailable" box), `mermaid` (rendered in

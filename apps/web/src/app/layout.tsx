@@ -1,5 +1,6 @@
 import "@fontsource-variable/hanken-grotesk";
 import "@fontsource-variable/jetbrains-mono";
+import "katex/dist/katex.min.css";
 import "~/styles/globals.css";
 
 import { type Metadata } from "next";

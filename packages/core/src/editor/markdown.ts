@@ -16,6 +16,7 @@ import {
   literalAngleBrackets,
   withInlineCodeFences,
 } from "./markdownEscapes";
+import { escapeMathInText } from "./math";
 
 let schema: ReturnType<typeof getSchema> | undefined;
 
@@ -74,6 +75,11 @@ function validateContentBounds(json: unknown): void {
         )
           throw new Error("invalid image attributes");
       }
+      if (object.type === "inlineMath" || object.type === "mathBlock") {
+        const attrs = object.attrs as Record<string, unknown> | undefined;
+        if (typeof attrs?.source !== "string")
+          throw new Error("invalid math attributes");
+      }
       if (object.type === "tableCell" || object.type === "tableHeader") {
         const attrs = object.attrs as Record<string, unknown> | undefined;
         if (Number(attrs?.colspan ?? 1) > 1 || Number(attrs?.rowspan ?? 1) > 1)
@@ -130,7 +136,9 @@ function getManager(): MarkdownManager {
     const hook = manager as unknown as TextEncoderHook;
     const encode = hook.encodeTextForMarkdown.bind(manager);
     hook.encodeTextForMarkdown = (...args) =>
-      literalAmpersands(literalAngleBrackets(encode(...args)));
+      escapeMathInText(
+        literalAmpersands(literalAngleBrackets(encode(...args))),
+      );
   }
   return manager;
 }
@@ -276,9 +284,18 @@ function liftInlineImages(node: JSONContent): JSONContent {
 function withItemParagraphs(node: JSONContent): JSONContent {
   if (!node.content) return node;
   const content = node.content.map(withItemParagraphs);
-  return node.type === "listItem" && content.length === 0
-    ? { ...node, content: [{ type: "paragraph", content: [] }] }
-    : { ...node, content };
+  if (node.type === "listItem" && content.length === 0)
+    return { ...node, content: [{ type: "paragraph", content: [] }] };
+  // Items must start with a paragraph, so a leading formula stays in the line.
+  if (
+    (node.type === "listItem" || node.type === "taskItem") &&
+    content[0]?.type === "mathBlock"
+  )
+    content[0] = {
+      type: "paragraph",
+      content: [{ type: "inlineMath", attrs: content[0].attrs }],
+    };
+  return { ...node, content };
 }
 
 export function parseDocumentBody(markdown: string): JSONContent {

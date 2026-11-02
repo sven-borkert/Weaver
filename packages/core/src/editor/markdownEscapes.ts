@@ -169,6 +169,8 @@ function inlineRuns(
   block: JSONContent,
   isInline: (type: string) => boolean,
 ): JSONContent[][] {
+  if (block.type === "mathBlock")
+    return [[{ type: "inlineMath", attrs: block.attrs }]];
   if (!block.content) return block.type === "paragraph" ? [[]] : [];
   if (block.content.every((child) => isInline(child.type ?? "")))
     return [block.content];

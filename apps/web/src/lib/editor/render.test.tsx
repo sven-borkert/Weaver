@@ -1,7 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { withMermaidRendererMapping } from "~/app/(workspace)/projects/[projectId]/documents/_components/MermaidRenderer";
-import { serializeDocumentBody } from "@weaver/core/editor/markdown";
+import {
+  parseDocumentBody,
+  serializeDocumentBody,
+} from "@weaver/core/editor/markdown";
 import { chunkMarkdown } from "@weaver/core/knowledge/chunking";
 import { renderDocumentContent } from "./render";
 
@@ -9,6 +12,28 @@ const existingTargetId = "11111111-1111-1111-1111-111111111111";
 const missingTargetId = "22222222-2222-2222-2222-222222222222";
 
 describe("renderDocumentContent", () => {
+  it("renders formulas in table headers, cells and blocks", () => {
+    const html = renderToStaticMarkup(
+      renderDocumentContent(
+        parseDocumentBody(
+          [
+            "| Input $x$ | Calculation |",
+            "| --- | --- |",
+            "| 0 | $2 \\\\times 0 + 1$ |",
+            "",
+            "$$\\frac{a}{b}$$",
+            "",
+          ].join("\n"),
+        ),
+      ),
+    );
+    expect(html).toContain("×");
+    expect(html).not.toContain("\\\\times");
+    expect(html).toContain('data-inline-math=""');
+    expect(html).toContain('data-math-block=""');
+    expect(html).toContain("katex-display");
+  });
+
   it("prefixes document link marks for a deployed base path", () => {
     const content = {
       type: "doc",

@@ -39,6 +39,7 @@ import {
   linkDestination,
   quotedTitle,
 } from "./markdownEscapes";
+import { InlineMath, MathBlock } from "./math";
 import { Mermaid } from "./mermaid";
 
 export const codeBlockLowlight = createLowlight(common);
@@ -165,6 +166,8 @@ export function documentExtensions(
     image?: AnyExtension;
     crossref?: AnyExtension;
     codeBlock?: AnyExtension;
+    inlineMath?: AnyExtension;
+    mathBlock?: AnyExtension;
   } = {},
 ): AnyExtension[] {
   return [
@@ -184,6 +187,8 @@ export function documentExtensions(
     // Markdown permits emphasis and links around inline code.
     MarkdownCode,
     overrides.mermaid ?? Mermaid,
+    overrides.mathBlock ?? MathBlock,
+    overrides.inlineMath ?? InlineMath,
     (overrides.codeBlock ?? MarkdownCodeBlock).configure({
       lowlight: codeBlockLowlight,
     }),

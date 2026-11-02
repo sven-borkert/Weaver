@@ -39,6 +39,7 @@ type EditorToolbarProps = {
   crossReferenceOpen: boolean;
   onCrossReferenceOpenChange: (open: boolean) => void;
   onMermaid?: () => void;
+  onMath?: (type: "inlineMath" | "mathBlock") => void;
   onUploadImage?: (file: File) => void;
   onTransientOpenChange?: (open: boolean) => void;
   onViewSource: () => void;
@@ -52,6 +53,7 @@ export function EditorToolbar({
   crossReferenceOpen,
   onCrossReferenceOpenChange,
   onMermaid,
+  onMath,
   onUploadImage,
   onTransientOpenChange,
   onViewSource,
@@ -139,6 +141,14 @@ export function EditorToolbar({
         bookmark.current = null;
       }
     : undefined;
+  const insertMath = onMath
+    ? (type: "inlineMath" | "mathBlock") => {
+        if (!capture() || !restore()) return;
+        editor.commands.focus(undefined, { scrollIntoView: false });
+        onMath(type);
+        bookmark.current = null;
+      }
+    : undefined;
 
   return (
     <>
@@ -155,6 +165,7 @@ export function EditorToolbar({
           onImage={() => showForm("image")}
           onReference={showReference}
           onMermaid={insertMermaid}
+          onMath={insertMath}
           canOpenMenu={() => !liveDisabled.current && editor.isEditable}
           onCommandMenuClosed={closeAutoFocus}
           onMenuOpenChange={setMenuOpen}

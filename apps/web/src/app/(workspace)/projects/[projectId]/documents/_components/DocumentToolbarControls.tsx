@@ -277,6 +277,7 @@ export function DocumentFormattingControls({
   onImage,
   onReference,
   onMermaid,
+  onMath,
   canOpenMenu,
   onCommandMenuClosed,
   onMenuOpenChange,
@@ -288,6 +289,7 @@ export function DocumentFormattingControls({
   onImage: () => void;
   onReference: () => void;
   onMermaid?: () => void;
+  onMath?: (type: "inlineMath" | "mathBlock") => void;
   canOpenMenu: () => boolean;
   /** Restores the editor selection and focus after a menu command. */
   onCommandMenuClosed: (event: Event) => void;
@@ -305,6 +307,7 @@ export function DocumentFormattingControls({
     onImage,
     onReference,
     onMermaid,
+    onMath,
   });
   const { rowRef, visible } = useToolbarOverflow(
     groups.map((group) => group.id).join(" "),

@@ -494,6 +494,7 @@ describe("EditorToolbar", () => {
     vi.spyOn(editor, "isDestroyed", "get").mockReturnValue(false);
     liveEditors.push(editor);
     const mermaid = vi.fn();
+    const math = vi.fn();
     const reference = vi.fn();
     const props = {
       projectId: "project",
@@ -503,6 +504,7 @@ describe("EditorToolbar", () => {
       onCrossReferenceOpenChange: reference,
       onViewSource: vi.fn(),
       onMermaid: mermaid,
+      onMath: math,
     };
     await act(() => {
       tree = create(<EditorToolbar {...props} />);
@@ -513,6 +515,8 @@ describe("EditorToolbar", () => {
       "Table",
       "Reference",
       "Mermaid diagram",
+      "Inline formula",
+      "Formula block",
       "Warning",
     ].map((label) => button(label).props as { onClick: () => void });
     const before = editor.getJSON();
@@ -522,6 +526,7 @@ describe("EditorToolbar", () => {
     expect(editor.getJSON()).toEqual(before);
     expect(editor.state.storedMarks).toBeNull();
     expect(mermaid).not.toHaveBeenCalled();
+    expect(math).not.toHaveBeenCalled();
     expect(reference).not.toHaveBeenCalled();
     for (const control of tree!.root
       .findAllByType("button")

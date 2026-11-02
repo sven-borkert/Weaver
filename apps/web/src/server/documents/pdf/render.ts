@@ -1,7 +1,6 @@
-import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { chromium, type Browser } from "playwright-core";
 import { env } from "~/env";
+import { readAppFile } from "./appFiles";
 import { createLimiter } from "./limiter";
 
 export class PdfTimeoutError extends Error {}
@@ -128,25 +127,10 @@ export function getPdfRenderer(): PdfRenderer {
 }
 
 const MERMAID_BUNDLE = "node_modules/mermaid/dist/mermaid.min.js";
-// Server runtimes start in the app directory, the integration suite in the repository root.
-const APP_DIRECTORIES = [".", "apps/web"];
-
-async function readMermaidBundle(): Promise<string> {
-  let failure: unknown;
-  for (const directory of APP_DIRECTORIES) {
-    try {
-      return await readFile(path.resolve(directory, MERMAID_BUNDLE), "utf8");
-    } catch (error) {
-      failure = error;
-    }
-  }
-  throw failure;
-}
 
 let bundle: Promise<string> | undefined;
-// Read by path, where next.config's tracing include copies it: the bundler compiles a
-// module lookup into a module id.
+// Read by path, where next.config's tracing include copies it.
 export function mermaidBundleSource(): Promise<string> {
-  bundle ??= readMermaidBundle();
+  bundle ??= readAppFile(MERMAID_BUNDLE).then((file) => file.toString("utf8"));
   return bundle;
 }
