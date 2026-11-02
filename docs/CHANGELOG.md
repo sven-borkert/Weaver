@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.227] - 2026-11-02
+
 ### Security
 
 - Accounts can no longer use an `@weaver.invalid` email address, through the admin form or OIDC sign-in. Weaver reserves the domain for machine commit authors.
