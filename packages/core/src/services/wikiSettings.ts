@@ -20,6 +20,7 @@ import {
   type GuideRemoval,
 } from "../wiki/guideText";
 import { getDocumentAtSnapshot } from "./documents";
+import type { FolderScope } from "./folders";
 import { resolveLlmRoute } from "./llmRoutes";
 import { assertProjectRole } from "./projectAccess";
 import { runWikiBootstrap, type WikiBootstrapRecord } from "./wikiBootstrap";
@@ -555,23 +556,32 @@ export async function wikiWriteGuardsFor(
 ): Promise<WikiWriteGuards> {
   const row = await db.projectWikiSettings.findUnique({
     where: { projectId },
-    select: { guideDocumentId: true, sourcesFolderId: true },
+    select: {
+      guideDocumentId: true,
+      sourcesFolderId: true,
+      sourceTablesFolderId: true,
+    },
   });
+  const repo = await openProjectRepo(projectId);
+  if (!repo) throw new CoreError("NOT_FOUND", "Project repository is missing");
+  const head = await repo.resolveHead();
   const sourceFolderPaths: string[] = [];
-  if (row?.sourcesFolderId) {
-    const repo = await openProjectRepo(projectId);
-    if (repo) {
-      const index = await loadFolderIdentityIndex(
-        repo,
-        projectId,
-        "documents",
-        await repo.resolveHead(),
-      );
-      const entry = index.byId.get(row.sourcesFolderId);
-      if (entry) sourceFolderPaths.push(entry.path.join("/"));
-    }
-  }
-  return { guideDocumentId: row?.guideDocumentId ?? null, sourceFolderPaths };
+  let sourceFoldersUnresolved = false;
+  const resolve = async (id: string | null | undefined, scope: FolderScope) => {
+    if (!id) return;
+    const index = await loadFolderIdentityIndex(repo, projectId, scope, head);
+    const entry = index.byId.get(id);
+    if (!entry) sourceFoldersUnresolved = true;
+    else if (scope === "documents")
+      sourceFolderPaths.push(entry.path.join("/"));
+  };
+  await resolve(row?.sourcesFolderId, "documents");
+  await resolve(row?.sourceTablesFolderId, "tables");
+  return {
+    guideDocumentId: row?.guideDocumentId ?? null,
+    sourceFolderPaths,
+    sourceFoldersUnresolved,
+  };
 }
 
 export type ApprovedWikiGuide = {

@@ -97,10 +97,13 @@ is the agent's only write path.
   plain uuids without FKs. Columns for later slices (`lint*`, `destructive*`, `sourceTablesFolderId`,
   `reportDocumentId`, `WikiGuideSuggestion.runId`) exist but only budgets and the guide are edited.
 - `enableWiki`: creates or reuses the live agent in one transaction, then `runWikiBootstrap` writes
-  folders, guide, overview as the agent (ids `wiki-bootstrap:<projectId>:0001..0004`, request hash per
+  folders, guide, overview as the agent (ids `wiki-bootstrap:<agentId>:0001..0004`, so a successor agent never meets a revoked agent's commits; request hash per
   step, no `Weaver-Run-Id`; `commitAll` allows a missing run id only for that prefix). It is idempotent by
-  operation id and skips anchors already recorded; an existing human `wiki/` folder is reused, an existing
-  `wiki/sources` folder or page is never adopted (`CONFLICT`). A failed first enable rolls back to off.
+  operation id (the step's own verified commit is found by id whatever suffix it got) and skips anchors
+  already recorded. It never adopts or fails on an occupied path: a taken `wiki/` or `sources` takes the next
+  free suffix (`wiki-2`, `sources-2`) under the lock, pages use the writer's slug suffix, and the sources
+  folder's resulting id is what settings record. A forged commit under a bootstrap id is `CONFLICT`. A
+  failed first enable rolls back to off.
   Guide and overview headers get `type` and `reviewExempt: true` through the internal bootstrap writer
   only; `applyWikiOperation` cannot set `reviewExempt`. Disable keeps everything (TODO: cancel runs in
   slice 5); revoke disables and a later enable creates a new agent.
@@ -112,7 +115,10 @@ is the agent's only write path.
 - `resolveProjectAccess` gives the agent access only while `ProjectWikiSettings.enabled` and
   `agentId` equals the agent. `wikiWriteGuardsFor(db, projectId)` is the `guards` provider for
   `applyWikiOperation`: guide id from settings and the source folder path resolved from its folder id
-  (`.folder.json`) at call time.
+  (`.folder.json`) at call time. A recorded source folder id (documents or tables) that no longer resolves
+  (deleted, duplicated or invalid id) sets `sourceFoldersUnresolved`: `document.create` and `folder_create`
+  then fail `CONFLICT` / `SOURCE_FOLDER_UNRESOLVED` while patches stay allowed; a missing repo throws and an
+  unset (null) table folder id is fine.
 - Change kind `wiki-bootstrap` was added to `changeKinds.ts`.
 - `get_wiki_guide { projectId, offset? }` returns `{ available, note, guide, digest, approvedAt, nextOffset }`
   from `readApprovedWikiGuide`; `available: false` when the wiki is off or nothing is approved. Pages are

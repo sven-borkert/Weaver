@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "@weaver/db/client";
-import type { ProjectRepoWriter } from "@weaver/git-store";
 import { z } from "zod";
 import { slugify } from "../documents/slug";
 import { CoreError } from "../errors";
@@ -37,6 +36,8 @@ export type WikiWriteFence = {
 export type WikiWriteGuards = {
   guideDocumentId: string | null;
   sourceFolderPaths: string[];
+  /** A recorded source folder id does not resolve; creates are refused until it does. */
+  sourceFoldersUnresolved: boolean;
 };
 
 // Strict: no title on a patch and no author metadata, structurally.
@@ -184,6 +185,12 @@ function assertOperationLocation(
   operation: WikiOperation,
   guards: WikiWriteGuards,
 ): void {
+  if (guards.sourceFoldersUnresolved && operation.kind !== "document.patch")
+    throw new CoreError(
+      "CONFLICT",
+      "The wiki sources folder cannot be resolved; creating content is paused",
+      { reason: "SOURCE_FOLDER_UNRESOLVED" },
+    );
   if (operation.kind === "document.create")
     assertOutsideSourceFolders(operation.folderPath, guards);
   if (operation.kind === "content.lifecycle")

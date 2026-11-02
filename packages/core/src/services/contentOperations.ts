@@ -644,7 +644,7 @@ export type RecoveryIdentity =
   | { requestHash: string; toolName: string }
   | { wikiAgentId: string; wikiRequestHash: string };
 
-function matchesRecoveryIdentity(
+export function matchesRecoveryIdentity(
   entry: GitLogEntry,
   identity: RecoveryIdentity,
 ): boolean {

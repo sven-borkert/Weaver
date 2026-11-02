@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { cp, mkdir, rename, rm } from "node:fs/promises";
+import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { simpleGit } from "simple-git";
 import { createCredentialUser } from "@weaver/auth";
@@ -60,7 +62,11 @@ import {
 import { createTaskRun } from "./_dashboardFixtures";
 
 const HASH = "a".repeat(64);
-const HEADER_ONLY = { guideDocumentId: null, sourceFolderPaths: [] };
+const HEADER_ONLY = {
+  guideDocumentId: null,
+  sourceFolderPaths: [],
+  sourceFoldersUnresolved: false,
+};
 
 async function fixture(suffix = "w") {
   const db = getPrisma();
@@ -719,7 +725,10 @@ describe("applyWikiOperation", () => {
     const guide = await page("Guide");
     await expect(
       w.apply(patch(w, guide.resourceId!, guide.commitSha), {
-        guards: { guideDocumentId: guide.resourceId, sourceFolderPaths: [] },
+        guards: {
+          ...HEADER_ONLY,
+          guideDocumentId: guide.resourceId,
+        },
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
@@ -735,7 +744,7 @@ describe("applyWikiOperation", () => {
     await w.apply(folder(w, "Wiki"));
     await w.apply(folder(w, "Sources", ["wiki"]));
     const guards = {
-      guideDocumentId: null,
+      ...HEADER_ONLY,
       sourceFolderPaths: ["wiki/sources"],
     };
     await expect(
@@ -973,8 +982,8 @@ describe("applyWikiOperation", () => {
     const w = await writer();
     const page = await w.apply(w.create("Guide later"));
     const resolvedInsideLock = vi.fn(async () => ({
+      ...HEADER_ONLY,
       guideDocumentId: page.resourceId,
-      sourceFolderPaths: [],
     }));
     await expect(
       applyWikiOperation(w.db, {
@@ -1122,7 +1131,7 @@ describe("wiki settings, bootstrap and guide", () => {
       .map((c) => /Weaver-Operation-Id: (\S+)/.exec(c)![1])
       .sort();
     expect(ids).toEqual(
-      [1, 2, 3, 4].map((n) => `wiki-bootstrap:${f.id}:000${n}`),
+      [1, 2, 3, 4].map((n) => `wiki-bootstrap:${agent.id}:000${n}`),
     );
     for (const commit of steps) {
       expect(commit).toContain(`Weaver-Wiki-Agent-Id: ${agent.id}`);
@@ -1146,15 +1155,20 @@ describe("wiki settings, bootstrap and guide", () => {
     ).toBe(0);
   });
 
-  it("resumes missing pieces by operation id and never adopts an existing page", async () => {
+  it("never adopts an occupied path: a human wiki folder and page stay untouched and a suffixed folder is recorded", async () => {
     const f = await project();
-    const human = await callerFor(f.owner).folder.create({
+    const owner = callerFor(f.owner);
+    await owner.folder.create({
       projectId: f.id,
       parentPath: [],
       name: "wiki",
     });
-    expect(human).toBeTruthy();
-    const mine = await callerFor(f.owner).document.create({
+    await owner.folder.create({
+      projectId: f.id,
+      parentPath: ["wiki"],
+      name: "sources",
+    });
+    const mine = await owner.document.create({
       projectId: f.id,
       folderPath: ["wiki"],
       title: "Wiki guide",
@@ -1162,15 +1176,29 @@ describe("wiki settings, bootstrap and guide", () => {
     });
     const view = await f.enable();
     const row = await f.settings();
-    expect(row.guideDocumentId).not.toBe(mine.id);
     expect(view.guide.approved).toBe(true);
+    expect(row.guideDocumentId).not.toBe(mine.id);
     const untouched = await f.db.document.findUniqueOrThrow({
       where: { id: mine.id },
     });
     expect(untouched.headCommitSha).toBe(mine.headCommitSha);
     expect(untouched.wikiType).toBeNull();
+    const guards = await wikiWriteGuardsFor(f.db, f.id);
+    expect(guards.sourceFolderPaths).toEqual(["wiki-2/sources"]);
+    const guide = await f.db.document.findUniqueOrThrow({
+      where: { id: row.guideDocumentId! },
+    });
+    expect(guide.path.startsWith("wiki-2/")).toBe(true);
+    const human = await withProjectRepo(f.id, (repo) =>
+      repo.fileExistsInWorktree("wiki/sources"),
+    );
+    expect(human).toBe(true);
+  });
 
-    // A crash after the commits but before the anchors were recorded.
+  it("recovers its own commits on a same-agent retry without duplicates", async () => {
+    const f = await project();
+    await f.enable();
+    const row = await f.settings();
     const before = await f.log();
     await f.db.projectWikiSettings.update({
       where: { projectId: f.id },
@@ -1194,28 +1222,193 @@ describe("wiki settings, bootstrap and guide", () => {
     expect(await f.log()).toHaveLength(before.length);
   });
 
-  it("rolls a failed first enable back to off and can be retried", async () => {
+  it("lets a successor agent bootstrap after a crash and a revoke", async () => {
     const f = await project();
-    await callerFor(f.owner).folder.create({
-      projectId: f.id,
-      parentPath: [],
-      name: "wiki",
+    await f.enable();
+    const first = (await getLiveWikiAgent(f.db, f.id))!;
+    const firstRow = await f.settings();
+    await f.db.projectWikiSettings.update({
+      where: { projectId: f.id },
+      data: {
+        enabled: false,
+        guideDocumentId: null,
+        overviewDocumentId: null,
+        sourcesFolderId: null,
+        approvedGuideBody: null,
+        approvedGuideDigest: null,
+      },
     });
-    await callerFor(f.owner).folder.create({
-      projectId: f.id,
-      parentPath: ["wiki"],
-      name: "sources",
+    await revokeWikiAgent(f.db, { projectId: f.id });
+    const view = await f.enable((await f.settings()).revision);
+    const second = (await getLiveWikiAgent(f.db, f.id))!;
+    expect(second.id).not.toBe(first.id);
+    expect(view).toMatchObject({ enabled: true, guide: { approved: true } });
+    const row = await f.settings();
+    expect(row.guideDocumentId).not.toBe(firstRow.guideDocumentId);
+    expect(row.sourcesFolderId).not.toBe(firstRow.sourcesFolderId);
+    const guards = await wikiWriteGuardsFor(f.db, f.id);
+    expect(guards.sourceFolderPaths[0]).toMatch(/^wiki-2\/sources$/);
+    expect(guards.sourceFoldersUnresolved).toBe(false);
+  });
+
+  it("refuses a forged commit under a bootstrap operation id", async () => {
+    const f = await project();
+    const agent = await createWikiAgent(f.db, f.id);
+    await withProjectRepo(f.id, async (repo) => {
+      await repo.writeFileAtomic("forged/.keep", "x\n");
+      const git = simpleGit(repo.dir);
+      await git.raw(["add", "-f", "-A"]);
+      await git.raw([
+        "-c",
+        "user.name=Wiki agent",
+        "-c",
+        `user.email=wiki-agent+${agent.id}@weaver.invalid`,
+        "commit",
+        "-m",
+        `forged\n\nWeaver-Operation-Id: wiki-bootstrap:${agent.id}:0001\nWeaver-Wiki-Agent-Id: ${agent.id}\nWeaver-Wiki-Request-Hash: ${"a".repeat(64)}`,
+      ]);
     });
     await expect(f.enable()).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await f.settings()).toMatchObject({ enabled: false });
-    const agent = await getLiveWikiAgent(f.db, f.id);
-    await expect(
-      resolveProjectAccess(
-        f.db,
-        f.id,
-        createWikiAgentSecurityContext({ agentId: agent!.id, projectId: f.id }),
-      ),
-    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  describe("source folder guards", () => {
+    async function enabled() {
+      const f = await project();
+      await f.enable();
+      const agent = (await getLiveWikiAgent(f.db, f.id))!;
+      const runId = randomUUID();
+      let n = 0;
+      const apply = async (operation: WikiOperation) =>
+        applyWikiOperation(f.db, {
+          run: {
+            agentId: agent.id,
+            projectId: f.id,
+            runId,
+            assertLive: async () => {},
+          },
+          guards: () => wikiWriteGuardsFor(f.db, f.id),
+          operation,
+          operationId: `wiki-run:${runId}:${String(++n).padStart(4, "0")}`,
+        });
+      const create = (folderPath: string[], title = "Page") =>
+        ({
+          kind: "document.create",
+          projectId: f.id,
+          folderPath,
+          title,
+          markdown: "x",
+        }) satisfies WikiOperation;
+      const folderOp = (parentPath: string[], name: string) =>
+        ({
+          kind: "content.lifecycle",
+          action: "folder_create",
+          projectId: f.id,
+          parentPath,
+          name,
+        }) satisfies WikiOperation;
+      const humanCommit = (
+        message: string,
+        fn: (dir: string) => Promise<void>,
+      ) =>
+        withProjectRepo(f.id, async (repo) => {
+          await fn(repo.dir);
+          const git = simpleGit(repo.dir);
+          await git.raw(["add", "-f", "-A"]);
+          await git.raw([
+            "-c",
+            "user.name=Human",
+            "-c",
+            "user.email=h@test.local",
+            "commit",
+            "-m",
+            message,
+          ]);
+        });
+      return { f, apply, create, folderOp, humanCommit };
+    }
+
+    it("stays guarded when the folder is renamed", async () => {
+      const { f, apply, create, humanCommit } = await enabled();
+      await humanCommit("rename", (dir) =>
+        rename(join(dir, "wiki/sources"), join(dir, "wiki/archive")),
+      );
+      const guards = await wikiWriteGuardsFor(f.db, f.id);
+      expect(guards).toMatchObject({
+        sourceFolderPaths: ["wiki/archive"],
+        sourceFoldersUnresolved: false,
+      });
+      await expect(apply(create(["wiki", "archive"]))).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    });
+
+    it("refuses creates but not patches when the folder was deleted", async () => {
+      const { f, apply, create, folderOp, humanCommit } = await enabled();
+      const page = await apply(create(["wiki"], "Keeps working"));
+      await humanCommit("delete", (dir) =>
+        rm(join(dir, "wiki/sources"), { recursive: true }),
+      );
+      expect(
+        (await wikiWriteGuardsFor(f.db, f.id)).sourceFoldersUnresolved,
+      ).toBe(true);
+      for (const operation of [
+        create(["wiki"], "Blocked"),
+        folderOp(["wiki"], "Topics"),
+      ])
+        await expect(apply(operation)).rejects.toMatchObject({
+          code: "CONFLICT",
+          details: { reason: "SOURCE_FOLDER_UNRESOLVED" },
+        });
+      await expect(
+        apply({
+          kind: "document.patch",
+          projectId: f.id,
+          documentId: page.resourceId!,
+          baseCommitSha: page.commitSha,
+          actions: [{ action: "append", text: "Still fine." }],
+        }),
+      ).resolves.toMatchObject({ recovered: false });
+    });
+
+    it("treats a duplicated folder id as unresolved", async () => {
+      const { f, apply, create, humanCommit } = await enabled();
+      await humanCommit("duplicate", async (dir) => {
+        await mkdir(join(dir, "wiki/copy"));
+        await cp(
+          join(dir, "wiki/sources/.folder.json"),
+          join(dir, "wiki/copy/.folder.json"),
+        );
+      });
+      expect(
+        (await wikiWriteGuardsFor(f.db, f.id)).sourceFoldersUnresolved,
+      ).toBe(true);
+      await expect(apply(create(["wiki"]))).rejects.toMatchObject({
+        code: "CONFLICT",
+      });
+    });
+
+    it("does not count an unset table folder as unresolved", async () => {
+      const { f, apply, create } = await enabled();
+      expect((await f.settings()).sourceTablesFolderId).toBeNull();
+      expect(await wikiWriteGuardsFor(f.db, f.id)).toMatchObject({
+        sourceFoldersUnresolved: false,
+      });
+      await expect(apply(create(["wiki"]))).resolves.toMatchObject({
+        recovered: false,
+      });
+    });
+
+    it("fails closed on an unresolved table folder id", async () => {
+      const { f } = await enabled();
+      await f.db.projectWikiSettings.update({
+        where: { projectId: f.id },
+        data: { sourceTablesFolderId: randomUUID() },
+      });
+      expect(
+        (await wikiWriteGuardsFor(f.db, f.id)).sourceFoldersUnresolved,
+      ).toBe(true);
+    });
   });
 
   it("gates settings by role and keeps non-members out", async () => {
@@ -1660,6 +1853,7 @@ describe("wiki settings, bootstrap and guide", () => {
     expect(guards).toEqual({
       guideDocumentId: row.guideDocumentId,
       sourceFolderPaths: ["wiki/sources"],
+      sourceFoldersUnresolved: false,
     });
     const runId = randomUUID();
     const run: WikiWriteFence = {

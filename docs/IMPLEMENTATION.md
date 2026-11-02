@@ -532,7 +532,7 @@ disable, revoke, edit budgets and pick the guide document; Maintainers read sett
 guide; session actors only. Enable creates or reuses the agent, then
 [`wikiBootstrap.ts`](../packages/core/src/services/wikiBootstrap.ts) writes `wiki/`, `wiki/sources/`, the
 guide (from [`wiki/templates/guide-v1.md.ts`](../packages/core/src/wiki/templates/guide-v1.md.ts)) and an
-overview as the agent, one commit per step under `wiki-bootstrap:<projectId>:<nnnn>` ids (no run id).
+overview as the agent, one commit per step under `wiki-bootstrap:<agentId>:<nnnn>` ids (no run id, suffixing occupied paths).
 [`wiki/guideText.ts`](../packages/core/src/wiki/guideText.ts) normalizes the guide (NFC, no
 default-ignorables or bidi controls) before its SHA-256, and approval stores the exact text. Agent
 access (`resolveProjectAccess`) requires `ProjectWikiSettings.enabled` and the agent equal to `agentId`;

@@ -5,9 +5,11 @@ import { parseDocumentBody } from "../editor/markdown";
 import { CoreError } from "../errors";
 import { createWikiAgentSecurityContext } from "../security/context";
 import {
-  parseFolderMetadata,
+  FOLDER_METADATA_FILE,
   folderMetadataPath,
+  parseFolderMetadata,
 } from "../documents/folderMetadata";
+import { slugify } from "../documents/slug";
 import { normalizeGuideText } from "../wiki/guideText";
 import {
   GUIDE_TEMPLATE_V1,
@@ -20,6 +22,8 @@ import { wikiAgentContentAuthor } from "./contentAuthor";
 import {
   applyFolderCreate,
   createdResourceId,
+  matchesRecoveryIdentity,
+  RECOVERY_LOG_LIMIT,
   recoverCheckApply,
   type AppliedOperation,
   type ContentOperation,
@@ -59,8 +63,9 @@ export type WikiBootstrapRecord = {
   overviewDocumentId?: string;
 };
 
-function operationId(projectId: string, n: number): string {
-  const id = `wiki-bootstrap:${projectId}:${String(n).padStart(4, "0")}`;
+/** Keyed by agent, so a successor never meets a revoked agent's commits. */
+function operationId(agentId: string, n: number): string {
+  const id = `wiki-bootstrap:${agentId}:${String(n).padStart(4, "0")}`;
   if (!WIKI_BOOTSTRAP_OPERATION_ID_RE.test(id))
     throw new CoreError("BAD_REQUEST", "Invalid wiki bootstrap operation id");
   return id;
@@ -98,7 +103,7 @@ export async function runWikiBootstrap(
     step: unknown,
     body: (repo: ProjectRepoWriter, id: string, hash: string) => Promise<T>,
   ): Promise<T> => {
-    const id = operationId(projectId, n);
+    const id = operationId(agentId, n);
     const hash = stepHash({ n, step });
     const result = await withProjectRepo(projectId, async (repo) => {
       await assertLive();
@@ -117,16 +122,61 @@ export async function runWikiBootstrap(
     beforeCommit: assertLive,
   });
 
+  // The step's own prior commit, found by operation id and verified; its name may carry a suffix.
+  const recoverFolder = async (
+    repo: ProjectRepoWriter,
+    id: string,
+    hash: string,
+  ): Promise<{ segments: string[]; folderId: string | null } | null> => {
+    const entries = await repo.logForPath(".", {
+      skip: 0,
+      limit: RECOVERY_LOG_LIMIT + 1,
+      operationId: id,
+    });
+    const matching = entries.filter((entry) => entry.operationId === id);
+    if (matching.length === 0) return null;
+    const entry = matching[0]!;
+    if (matching.length > 1 || !matchesRecoveryIdentity(entry, identity(hash)))
+      throw new CoreError(
+        "CONFLICT",
+        "A commit under this bootstrap id cannot be verified",
+        { reason: "IDEMPOTENCY_KEY_REUSED" },
+      );
+    const [change] = await repo.logChangesBefore(entry.sha, { limit: 1 });
+    const meta = change?.changes.find(
+      (item) =>
+        item.status !== "D" && item.path.endsWith(`/${FOLDER_METADATA_FILE}`),
+    );
+    if (!meta)
+      throw new CoreError("CONFLICT", "Bootstrap folder commit is malformed");
+    const rel = meta.path.slice(0, -`/${FOLDER_METADATA_FILE}`.length);
+    const text = (
+      await repo.readBlobsAt(entry.sha, [meta.path], 64 * 1024)
+    ).get(meta.path);
+    return {
+      segments: rel.split("/"),
+      folderId: (text ? parseFolderMetadata(text)?.id : undefined) ?? null,
+    };
+  };
+
+  // Never adopts or fails on an occupied path: the next free suffix is taken under the lock.
   const folder = async (
     n: number,
     parentPath: string[],
-    name: string,
-    reuse: boolean,
-  ): Promise<string | null> =>
-    run(n, { folder: [...parentPath, name] }, async (repo, id, hash) => {
-      const rel = [...parentPath, name].join("/");
-      // A human-made container folder is reused; the recorded sources folder never is.
-      if (reuse && (await repo.fileExistsInWorktree(rel))) return null;
+    baseName: string,
+  ): Promise<{ segments: string[]; folderId: string | null }> =>
+    run(n, { folder: baseName }, async (repo, id, hash) => {
+      const prior = await recoverFolder(repo, id, hash);
+      if (prior) return prior;
+      const parentRel = parentPath.join("/");
+      let name = baseName;
+      for (let suffix = 2; ; suffix += 1) {
+        const rel = [parentRel, slugify(name)].filter(Boolean).join("/");
+        if (!(await repo.fileExistsInWorktree(rel))) break;
+        if (suffix > 1000)
+          throw new CoreError("CONFLICT", "No free folder name was found");
+        name = `${baseName}-${suffix}`;
+      }
       const operation: ContentOperation = {
         kind: "content.lifecycle",
         action: "folder_create",
@@ -136,23 +186,21 @@ export async function runWikiBootstrap(
         name,
         baseProjectCommitSha: await repo.resolveHead(),
       };
-      await recoverCheckApply({
-        db,
+      const applied = await applyFolderCreate(
         repo,
         operation,
-        operationId: id,
-        identity: identity(hash),
-        apply: (): Promise<AppliedOperation> =>
-          applyFolderCreate(repo, operation, author, audit(id, hash)),
-      });
-      const meta = parseFolderMetadata(
-        await repo.readFileFromWorktree(folderMetadataPath(rel)),
+        author,
+        audit(id, hash),
       );
-      return meta?.id ?? null;
+      const meta = parseFolderMetadata(
+        await repo.readFileFromWorktree(folderMetadataPath(applied.path)),
+      );
+      return { segments: applied.path.split("/"), folderId: meta?.id ?? null };
     });
 
   const page = async (
     n: number,
+    folderPath: string[],
     title: string,
     markdown: string,
     type: "guide" | "overview",
@@ -164,7 +212,7 @@ export async function runWikiBootstrap(
         const operation: ContentOperation = {
           kind: "document.create",
           projectId,
-          folderPath: [WIKI_FOLDER],
+          folderPath,
           title,
           markdown,
         };
@@ -182,7 +230,7 @@ export async function runWikiBootstrap(
               {
                 kind: "create",
                 id: createdResourceId(id),
-                folderPath: [WIKI_FOLDER],
+                folderPath,
                 title,
                 content: {
                   kind: "markdown",
@@ -212,20 +260,26 @@ export async function runWikiBootstrap(
       },
     );
 
+  const needed =
+    existing.sourcesFolderId === null ||
+    existing.guideDocumentId === null ||
+    existing.overviewDocumentId === null;
+  if (!needed) return;
+  const root = await folder(1, [], WIKI_FOLDER);
   if (existing.sourcesFolderId === null) {
-    await folder(1, [], WIKI_FOLDER, true);
-    const sourcesFolderId = await folder(
-      2,
-      [WIKI_FOLDER],
-      WIKI_SOURCES_FOLDER,
-      false,
-    );
-    if (sourcesFolderId === null)
+    const sources = await folder(2, root.segments, WIKI_SOURCES_FOLDER);
+    if (sources.folderId === null)
       throw new CoreError("INTERNAL_SERVER_ERROR", "Sources folder has no id");
-    await input.record({ sourcesFolderId });
+    await input.record({ sourcesFolderId: sources.folderId });
   }
   if (existing.guideDocumentId === null) {
-    const created = await page(3, GUIDE_TITLE, GUIDE_TEMPLATE_V1, "guide");
+    const created = await page(
+      3,
+      root.segments,
+      GUIDE_TITLE,
+      GUIDE_TEMPLATE_V1,
+      "guide",
+    );
     const read = await getDocumentAtSnapshot(
       db,
       {
@@ -248,6 +302,7 @@ export async function runWikiBootstrap(
   if (existing.overviewDocumentId === null) {
     const created = await page(
       4,
+      root.segments,
       OVERVIEW_TITLE,
       OVERVIEW_TEMPLATE,
       "overview",
