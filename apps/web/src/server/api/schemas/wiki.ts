@@ -56,6 +56,9 @@ export const confirmWikiInput = inputItem.extend({
 export const cancelWikiRunInput = wikiProjectInput.extend({
   runId: z.uuid(),
 });
+export const listWikiRunsInput = wikiProjectInput.extend({
+  cursor: z.uuid().optional(),
+});
 export const resolveWikiSuggestionInput = wikiProjectInput.extend({
   suggestionId: z.uuid(),
 });

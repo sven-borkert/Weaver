@@ -151,6 +151,15 @@ export default async function globalSetup() {
       capabilities: ["chat"],
     });
     await setLlmRoute(db, actor, { purpose: "jobs", modelId: jobs.id });
+    const wiki = await createLlmModel(db, actor, {
+      connectionId: connection.id,
+      providerModelId: "e2e-wiki",
+      displayName: "E2E wiki",
+      capabilities: ["chat", "tool_use"],
+      contextWindow: 128_000,
+      maxOutputTokens: 8_192,
+    });
+    await setLlmRoute(db, actor, { purpose: "wiki", modelId: wiki.id });
   } finally {
     await db.$disconnect();
   }

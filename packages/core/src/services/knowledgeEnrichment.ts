@@ -1773,6 +1773,7 @@ async function recordEnrichmentUsage(
     jobId: input.jobId,
     runId: input.runId,
     documentId: input.documentId,
+    sourceCommitSha: input.sourceCommitSha,
     provider: isExtraction ? input.extractionProviderName : input.providerName,
     connectionId: isExtraction
       ? input.extractionConnectionId

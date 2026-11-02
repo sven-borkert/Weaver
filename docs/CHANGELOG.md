@@ -9,6 +9,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 - The wiki agent now works: with a `wiki` route assigned, pressing Process runs an unattended agent that reads each input and creates and patches wiki pages. It writes under its own identity and is confined to the project; the guide, source pages and source folders are refused by construction.
 - Limits on what a run may do to pages the agent does not own, per page and per run. Three refusals stop the run, and a rolling 24-hour budget pauses new runs and tells Owners through the bell until the sum falls.
 - An optional daily spend alert tells Owners and never stops a run.
+- A Runs tab in the Wiki section lists every run with its inputs, pages, tokens and cost, and a detail view with the agent's summary, inputs with outcomes and commits with links to version comparisons. Maintainers also see the indexing cost attributed to each run.
+- **Revert run** undoes a finished run under the name of the Editor who starts it: created pages are removed, changed pages go back with their old properties. A page someone edited since, or a later run changed, is left alone and listed. It works while the wiki is disabled, revoked or paused.
 
 ## [0.1.233] - 2026-11-02
 

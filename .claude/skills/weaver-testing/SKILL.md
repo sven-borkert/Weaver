@@ -3,6 +3,7 @@ name: weaver-testing
 description: Use when writing or running tests in the Weaver workspace — app/package Vitest tests, apps/web integration or browser specs, worker/package boundaries, cross-process Git locking, or the RUN_FULL_TESTS consent gate.
 ---
 
+Wiki runner specs: `wikiRunner.spec.ts` (scripted `MockLanguageModelV4` over real tools), `wikiBudget.spec.ts`, `wikiRevert.spec.ts`, sharing `_wikiRunHarness.ts`; `resetDb` hooks there take 60 s because a timed-out TRUNCATE keeps running and blocks the next. Mock wiki persona: `mock-ai-server.mjs` (`pnpm test:mock-ai`).
 Wiki queue specs: `wikiInputs.spec.ts`, `wikiSources.spec.ts`, `wikiBridge.spec.ts` (in `test:integration:ingestion`) and `wikiAiExempt.spec.ts`
 (in `test:integration:knowledge`). `makeWikiInputItem` gives a real target for the `wikiSourceItemId` FK.
 

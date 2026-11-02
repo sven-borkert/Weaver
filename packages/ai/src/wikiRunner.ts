@@ -466,6 +466,7 @@ export async function executeWikiRun(
               displayName: route!.displayName,
               contextWindow: route!.contextWindow,
               maxOutputTokens: route!.maxOutputTokens ?? null,
+              currency: route!.currency,
             },
           },
         });

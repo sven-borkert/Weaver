@@ -58,7 +58,7 @@ async function setup() {
   await addMembership(project.id, owner.id, "Owner");
   const security = {
     ...securityContextFor(owner),
-    name: owner.name,
+    name: "Run owner",
     email: owner.email,
   };
   await enableWiki(db, security, {

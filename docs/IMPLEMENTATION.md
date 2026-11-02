@@ -550,8 +550,8 @@ with a note, plus the preparing-phase fence. `WikiRun` has a partial unique inde
 project; states live in pure [`wiki/states.ts`](../packages/core/src/wiki/states.ts).
 [`wikiTick.ts`](../packages/core/src/services/wikiTick.ts) runs every minute on the `wiki` worker role;
 `reapWikiRuns` (no-worker cancel after 10 minutes, 75-minute preparing limit) also runs in `system.reconcile`
-on every worker, because a deployment with no `wiki` worker has no tick either. Until a runner is injected
-`wiki.run` fails the run with `RUNNER_UNAVAILABLE`. [`wikiPrepare.ts`](../packages/core/src/services/wikiPrepare.ts) drives
+on every worker, because a deployment with no `wiki` worker has no tick either. `wiki.run` runs
+[`packages/ai/src/wikiRunner.ts`](../packages/ai/src/wikiRunner.ts), injected in the worker; a worker without it fails the run `RUNNER_UNAVAILABLE`. [`wikiPrepare.ts`](../packages/core/src/services/wikiPrepare.ts) drives
 each item (scan with [`security/secretScan.ts`](../packages/core/src/security/secretScan.ts), then write) and
 [`wikiSourceWriter.ts`](../packages/core/src/services/wikiSourceWriter.ts) commits source pages as the agent under the
 preparing-phase fence; `Document.wikiSourceItemId` is re-derived from `WikiInputItem` wherever a projection row is recreated.
@@ -562,6 +562,12 @@ carry-forward, delivery and the route-block paths, and `flipDocumentAiExempt` ha
 Runs keep a ledger: `WikiRunOperation` (one row per reserved write), `WikiPageBudget` (non-owned counters per page per run) and the
 `WikiOwnedPage` cache, maintained by [`wikiOwnership.ts`](../packages/core/src/services/wikiOwnership.ts) from the projection writers and verified
 against Git at write time. `wikiRuns.ts` also holds the run lease and `assertLiveWikiRun`.
+The runner reaches content only through [`wikiRunSession.ts`](../packages/core/src/services/wikiRunSession.ts) and the tools in
+[`wikiAgentRegistry.ts`](../packages/assistant-tools/src/wikiAgentRegistry.ts); `applyWikiOperation` enforces ownership and budgets
+([`wiki/budget.ts`](../packages/core/src/wiki/budget.ts)) under the project lock. Elision, prompts and restart: `wikiElision.ts`, `wikiPrompt.ts`,
+[`wikiRunStart.ts`](../packages/core/src/services/wikiRunStart.ts). [`wikiRevert.ts`](../packages/core/src/services/wikiRevert.ts) is a separate no-model run authored by the Editor who
+started it. The Runs tab is [`wiki/runs`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/runs/page.tsx>) over [`wikiRunViews.ts`](../packages/core/src/services/wikiRunViews.ts);
+`AiUsage.sourceCommitSha`, set by enrichment, is joined to a run's commits at read time for its indexing cost.
 The Input page is [`wiki/_components/WikiInputScreen.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/_components/WikiInputScreen.tsx>) over the
 `wiki.input` router; the sidebar link depends on `project.get`'s `wikiEnabled`. Runs reach the bell and Activity through
 [`backgroundWork/wikiSource.ts`](../packages/core/src/services/backgroundWork/wikiSource.ts) (`PersonalWorkKind.wiki`).

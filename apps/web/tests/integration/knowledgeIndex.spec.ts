@@ -2385,6 +2385,15 @@ describe("local knowledge indexing", () => {
     ).toBe(true);
     expect(calls).toHaveLength(1);
 
+    // A wiki run's indexing cost joins on this column at read time.
+    expect(
+      await fixture.db.aiUsage.count({
+        where: {
+          projectId: fixture.project.id,
+          sourceCommitSha: { not: null },
+        },
+      }),
+    ).toBeGreaterThan(0);
     expect(
       await fixture.db.aiUsage.findMany({
         where: { projectId: fixture.project.id },

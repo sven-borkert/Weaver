@@ -445,6 +445,92 @@ async function handleAssistant(body, response) {
   await streamText(response, "Here is a plain answer with no sources.");
 }
 
+/** The wiki agent's system prompt names it; the persona follows the ingest protocol in order. */
+function wikiRequest(body) {
+  return (
+    assistantRequest(body) &&
+    body.messages.some(
+      (m) =>
+        m.role === "system" &&
+        typeof m.content === "string" &&
+        m.content.includes("wiki agent of one Weaver project"),
+    )
+  );
+}
+
+function orderedToolCalls(messages) {
+  const calls = [];
+  for (const message of messages) {
+    if (message.role !== "assistant" || !Array.isArray(message.tool_calls))
+      continue;
+    for (const call of message.tool_calls) {
+      const reply = messages.find(
+        (m) => m.role === "tool" && m.tool_call_id === call.id,
+      );
+      let result = null;
+      let args = {};
+      try {
+        result = JSON.parse(reply?.content ?? "null");
+        args = JSON.parse(call.function.arguments);
+      } catch {
+        result = null;
+      }
+      calls.push({ name: call.function.name, args, result });
+    }
+  }
+  return calls;
+}
+
+function handleWiki(body, response) {
+  const calls = orderedToolCalls(body.messages);
+  const listed = calls.find((call) => call.name === "list_inputs")?.result;
+  if (!listed) {
+    streamToolCall(response, "list_inputs", {});
+    return;
+  }
+  const completed = new Set(
+    calls
+      .filter((call) => call.name === "complete_input")
+      .map((call) => call.args.id),
+  );
+  const next = listed.inputs.find((input) => !completed.has(input.id));
+  if (!next) {
+    streamToolCall(response, "finish_run", {
+      summary: `Integrated ${completed.size} inputs.`,
+    });
+    return;
+  }
+  const forItem = calls.slice(
+    calls.findLastIndex(
+      (call) => call.name === "read_input" && call.args.id === next.id,
+    ),
+  );
+  const opened = forItem.find((call) => call.name === "read_input");
+  if (!opened?.result) {
+    streamToolCall(response, "read_input", { id: next.id });
+    return;
+  }
+  const sourceId = opened.result.sourceDocumentId;
+  if (sourceId && !forItem.some((call) => call.name === "read_document")) {
+    streamToolCall(response, "read_document", { documentId: sourceId });
+    return;
+  }
+  if (!forItem.some((call) => call.name === "wiki_create_page")) {
+    streamToolCall(response, "wiki_create_page", {
+      folderPath: ["wiki"],
+      title: `Summary ${next.id.slice(0, 8)}`,
+      markdown: "A summary written by the mock wiki agent.",
+      properties: { type: "summary", summary: "Mock summary" },
+    });
+    return;
+  }
+  streamToolCall(response, "complete_input", {
+    id: next.id,
+    outcome: "integrated",
+    note: "Integrated by the mock agent.",
+  });
+}
+
 export function createMockAiServer() {
   const retriedChunkIds = new Set();
 
@@ -490,6 +576,11 @@ export function createMockAiServer() {
         return;
       }
       sendJson(response, 400, { error: { message: "Invalid JSON request" } });
+      return;
+    }
+
+    if (pathname === "/chat/completions" && wikiRequest(body)) {
+      handleWiki(body, response);
       return;
     }
 

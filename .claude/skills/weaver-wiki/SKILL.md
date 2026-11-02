@@ -256,6 +256,18 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - `reconcileReservedOperations` runs before each attempt: only a trusted commit with this agent's trailer and the reserved hash counts as committed; anything else under the id is failed and reported.
 - `destructivePausedAt` refuses Process, stops a new run at lease and clears in the tick once the sum falls. Pause and spend alert reach Owners through `wikiAlertSourceSql`, a personal bell row whose revision changes per incident.
 
+## Revert and the Runs tab
+
+- `wikiRevert.ts`: `startRevert` (Editor session, terminal run, not a revert, not already reverted, one active run per project) and `executeWikiRevert`, called by the `wiki.run` handler for a
+  `revert` run, so it works without the injected runner and while the wiki is disabled, revoked or paused. No tool reaches it. It acts as the starter (task context, Editor re-checked in `beforeCommit`).
+- A page is written only if every commit from the run's first commit on that page to head is a trusted commit of that run or of this revert; otherwise it is skipped and listed in `WikiRun.report`
+  (`edited_after_run`, `later_run`, `gone`, `source_page`). Created pages are soft-deleted because a first version has nothing to restore; others restore to the run's first base with
+  `exactProperties`, so properties and `reviewExempt` return exactly. Items move to `reverted`.
+- Ids `wiki-revert:<runId>:<nnnn>` with `Weaver-Wiki-Request-Hash`, the Editor as author, no agent trailer and no `Weaver-Run-Id`; recovery uses the `wikiRevertRequestHash` identity (`trustedAuthor === true`,
+  no agent trailer, matching hash). Revert operations do not count toward the 24-hour sum.
+- `wikiRunViews.ts`: `listRuns`, `getRun`, `wikiUsageSummary`. Viewer+ read; `indexingCostMicros` is null below Maintainer. The "Wiki agent" badge needs `verified`: the commit's trust, operation id and agent
+  trailer from Git, never the ledger row alone. Maintenance and Classify actions arrive with their slice.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

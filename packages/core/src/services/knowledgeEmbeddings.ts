@@ -507,6 +507,7 @@ async function recordDocumentUsage(
     jobId: input.jobId,
     runId: input.runId,
     documentId: input.documentId,
+    sourceCommitSha: input.sourceCommitSha,
     connectionId: input.embeddingConnectionId,
     provider: input.providerName,
     model: input.embeddingModel,

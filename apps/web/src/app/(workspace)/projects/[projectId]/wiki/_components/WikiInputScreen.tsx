@@ -24,6 +24,7 @@ import {
 import { api } from "~/trpc/react";
 import { formatBytes } from "../../imports/_components/upload";
 import { uploadInputFiles } from "./uploadInputFiles";
+import { WikiTabs } from "./WikiTabs";
 import {
   WIKI_INPUT_ACCEPT,
   wikiActiveRunLabel,
@@ -251,6 +252,7 @@ export function WikiInputScreen({
 
   return (
     <div className="flex max-w-4xl flex-col gap-6 p-6">
+      <WikiTabs projectId={projectId} active="input" />
       <header className="flex flex-col gap-1">
         <h1 className="text-text m-0 text-[18px] font-semibold">Wiki input</h1>
         <p className="text-text-2 m-0 text-[13px]">

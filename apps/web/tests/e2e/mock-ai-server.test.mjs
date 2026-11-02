@@ -305,3 +305,114 @@ describe("external synthetic personas", () => {
     );
   });
 });
+
+describe("wiki agent persona", () => {
+  const WIKI_SYSTEM = "You are the wiki agent of one Weaver project.";
+  const INPUT = "33333333-3333-4333-8333-333333333333";
+  const SOURCE = "44444444-4444-4444-8444-444444444444";
+  let nextCall = 0;
+  const turn = (name, args, result) => {
+    nextCall += 1;
+    const id = `call_${nextCall}`;
+    return [
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id,
+            type: "function",
+            function: { name, arguments: JSON.stringify(args) },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: id, content: JSON.stringify(result) },
+    ];
+  };
+  const called = async (messages) => {
+    const chunks = await chatWithSystem(WIKI_SYSTEM, [
+      { role: "user", content: "Start the run." },
+      ...messages,
+    ]);
+    const [call] = toolCalls(chunks);
+    return {
+      name: call.function.name,
+      args: JSON.parse(call.function.arguments),
+    };
+  };
+
+  it("follows the ingest protocol from nothing to finish_run", async () => {
+    const history = [];
+    assert.equal((await called(history)).name, "list_inputs");
+    history.push(
+      ...turn("list_inputs", {}, { inputs: [{ id: INPUT, status: "ready" }] }),
+    );
+    const opened = await called(history);
+    assert.deepEqual(opened, { name: "read_input", args: { id: INPUT } });
+    history.push(
+      ...turn(opened.name, opened.args, {
+        id: INPUT,
+        sourceDocumentId: SOURCE,
+      }),
+    );
+    const read = await called(history);
+    assert.deepEqual(read, {
+      name: "read_document",
+      args: { documentId: SOURCE },
+    });
+    history.push(...turn(read.name, read.args, { markdown: "Source text" }));
+    const created = await called(history);
+    assert.equal(created.name, "wiki_create_page");
+    assert.deepEqual(created.args.folderPath, ["wiki"]);
+    assert.equal(created.args.properties.type, "summary");
+    assert.equal("projectId" in created.args, false);
+    history.push(...turn(created.name, created.args, { documentId: SOURCE }));
+    const completed = await called(history);
+    assert.equal(completed.name, "complete_input");
+    assert.equal(completed.args.outcome, "integrated");
+    history.push(
+      ...turn(completed.name, completed.args, { status: "processed" }),
+    );
+    const finished = await called(history);
+    assert.equal(finished.name, "finish_run");
+    assert.match(finished.args.summary, /1 inputs/);
+  });
+
+  it("works through several inputs and reads a table source without read_document", async () => {
+    const SECOND = "55555555-5555-4555-8555-555555555555";
+    const history = [
+      ...turn(
+        "list_inputs",
+        {},
+        {
+          inputs: [
+            { id: INPUT, status: "ready" },
+            { id: SECOND, status: "ready" },
+          ],
+        },
+      ),
+      ...turn("read_input", { id: INPUT }, { sourceTableId: SOURCE }),
+    ];
+    const created = await called(history);
+    assert.equal(created.name, "wiki_create_page");
+    history.push(
+      ...turn(created.name, created.args, { documentId: SOURCE }),
+      ...turn(
+        "complete_input",
+        { id: INPUT, outcome: "integrated", note: "x" },
+        { status: "processed" },
+      ),
+    );
+    assert.deepEqual(await called(history), {
+      name: "read_input",
+      args: { id: SECOND },
+    });
+  });
+
+  it("leaves the assistant persona alone", async () => {
+    const chunks = await chat([
+      { role: "user", content: "say something plain" },
+    ]);
+    assert.ok(text(chunks).length > 0);
+  });
+});

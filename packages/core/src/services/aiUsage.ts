@@ -17,6 +17,8 @@ export type RecordAiUsageInput = {
   jobId?: string | null;
   runId?: string | null;
   documentId?: string | null;
+  /** The commit an enrichment call indexed; a wiki run's indexing cost joins on it. */
+  sourceCommitSha?: string | null;
   connectionId?: string | null;
   provider: string;
   model: string;
@@ -76,6 +78,7 @@ export async function recordAiUsage(db: Db, input: RecordAiUsageInput) {
     jobId: input.jobId ?? null,
     runId: input.runId ?? null,
     documentId: input.documentId ?? null,
+    sourceCommitSha: input.sourceCommitSha ?? null,
     connectionId: input.connectionId ?? null,
     provider: input.provider,
     model: input.model,

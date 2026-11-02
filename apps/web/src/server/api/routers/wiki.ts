@@ -2,12 +2,19 @@ import { authedProcedure, createTRPCRouter } from "~/server/api/trpc";
 import * as wiki from "@weaver/core/services/wikiSettings";
 import * as inputs from "@weaver/core/services/wikiInputs";
 import { cancelRun } from "@weaver/core/services/wikiRuns";
+import { startRevert } from "@weaver/core/services/wikiRevert";
+import {
+  getRun,
+  listRuns,
+  wikiUsageSummary,
+} from "@weaver/core/services/wikiRunViews";
 import { env } from "~/env";
 import {
   addWikiFilesInput,
   addWikiTextInput,
   cancelWikiRunInput,
   confirmWikiInput,
+  listWikiRunsInput,
   processWikiInputs,
   wikiInputItemInput,
   approveWikiGuideInput,
@@ -67,6 +74,18 @@ export const wikiRouter = createTRPCRouter({
   cancelRun: authedProcedure
     .input(cancelWikiRunInput)
     .mutation(({ ctx, input }) => cancelRun(ctx.db, ctx.security, input)),
+  runs: authedProcedure
+    .input(listWikiRunsInput)
+    .query(({ ctx, input }) => listRuns(ctx.db, ctx.security, input)),
+  run: authedProcedure
+    .input(cancelWikiRunInput)
+    .query(({ ctx, input }) => getRun(ctx.db, ctx.security, input)),
+  usage: authedProcedure
+    .input(projectInput)
+    .query(({ ctx, input }) => wikiUsageSummary(ctx.db, ctx.security, input)),
+  revertRun: authedProcedure
+    .input(cancelWikiRunInput)
+    .mutation(({ ctx, input }) => startRevert(ctx.db, ctx.security, input)),
   settings: authedProcedure
     .input(projectInput)
     .query(({ ctx, input }) =>
