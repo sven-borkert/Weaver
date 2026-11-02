@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.233] - 2026-11-02
+
 ### Fixed
 
 - The activity feed no longer fails with "Invalid dashboard result" when a released exam attempt, a finished notebook or a failing Git sync falls inside its window.
