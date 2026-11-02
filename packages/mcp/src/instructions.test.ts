@@ -21,6 +21,8 @@ describe("buildMcpInstructions", () => {
     expect(text).toContain("Admin tools read internal state");
     expect(text).toContain("ext_<connection>__<tool>");
     expect(text).toContain("every toolset is active");
+    expect(text).not.toContain("Resources use");
+    expect(text).toContain("[Title](weaver://document/<id>)");
   });
 
   it("names active and available toolsets and omits the optional sentences", () => {
@@ -38,7 +40,7 @@ describe("buildMcpInstructions", () => {
     expect(text).not.toContain("ext_<connection>");
     expect(
       text.endsWith(
-        "Resources use weaver://projects/{projectId}/documents|tables|entities/{id}.",
+        "Link documents and tables as [Title](weaver://document/<id>) or [Title](weaver://table/<id>) using ids from tools; only that form is tracked.",
       ),
     ).toBe(true);
   });

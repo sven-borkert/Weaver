@@ -2718,8 +2718,14 @@ Toolsets and meta-tools
 returns a curated core list by default (project, folder and document listing
 and reading, hybrid search, entities, tables, file overviews, `create_document`,
 `patch_document`; about 26 KB). The `X-Weaver-Toolsets` header adds named
-toolsets to core (`documents`, `tables`, `files`, `graph`, `write`,
-`connections`, `admin`, `external`, or `all`); unknown names are ignored.
+toolsets to core (`documents`, `tables`, `files`, `graph`, `write`, `exams`,
+`wiki`, `connections`, `admin`, `external`, or `all`); unknown names are ignored.
+The `wiki` toolset holds the read-only `find_page`, `inspect_links` and
+`list_recent_changes` ([`tools/wiki.ts`](../packages/assistant-tools/src/tools/wiki.ts) over
+[`wikiReads.ts`](../packages/core/src/services/wikiReads.ts); change kinds in
+[`wiki/changeKinds.ts`](../packages/core/src/wiki/changeKinds.ts)); the assistant does not
+get them yet. Instructions teach the tracked `[Title](weaver://document/<id>)` link form
+instead of the resource URI shape.
 Capability filtering runs after selection, so a toolset never grants a tool the
 credential could not use. Connected-app tools (`ext_…`) are listed only with
 `external`. Three meta-tools are always listed: `search_tools` finds a permitted

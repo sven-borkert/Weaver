@@ -117,6 +117,9 @@ const ENVELOPE = {
 };
 
 const READ_TOOLS = [
+  "find_page",
+  "inspect_links",
+  "list_recent_changes",
   "get_exam",
   "get_exam_attempt",
   "list_exams",
@@ -4324,6 +4327,54 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
         );
         expect(names.some((n) => ADMIN_TOOLS.includes(n as never))).toBe(false);
       } finally {
+        await client.close();
+      }
+    });
+
+    it("lists the wiki reads only when the wiki toolset is requested and runs them in scope", async () => {
+      const { project, hidden, doc, readKey } = await readFixture();
+      const wiki = ["find_page", "inspect_links", "list_recent_changes"];
+      const plain = await connect(readKey.secret);
+      const client = await connect(readKey.secret, endpoint(), "2026-07-28", {
+        headers: { "X-Weaver-Toolsets": "wiki" },
+      });
+      try {
+        expect(
+          (await plain.listTools()).tools.some((t) => wiki.includes(t.name)),
+        ).toBe(false);
+        expect(
+          (await client.listTools()).tools
+            .map((t) => t.name)
+            .filter((name) => wiki.includes(name))
+            .sort(),
+        ).toEqual([...wiki].sort());
+        const found = structured<{
+          pages: Array<{ id: string; link: string }>;
+        }>(
+          await client.callTool({
+            name: "find_page",
+            arguments: { projectId: project.id, title: doc.title ?? "Roadmap" },
+          }),
+        );
+        expect(found.pages[0]!.link).toContain(
+          `](weaver://document/${found.pages[0]!.id})`,
+        );
+        const feed = structured<{ changes: Array<{ kind: string }> }>(
+          await client.callTool({
+            name: "list_recent_changes",
+            arguments: { projectId: project.id },
+          }),
+        );
+        expect(feed.changes.length).toBeGreaterThan(0);
+        const denied = await client.callTool({
+          name: "inspect_links",
+          arguments: { projectId: hidden.id, mode: "orphans" },
+        });
+        expect(denied.isError).toBe(true);
+        expect(client.getInstructions()).toContain("toolsets core, wiki");
+        expect(client.getInstructions()).not.toContain("Resources use");
+      } finally {
+        await plain.close();
         await client.close();
       }
     });

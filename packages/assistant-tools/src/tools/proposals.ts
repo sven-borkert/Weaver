@@ -95,7 +95,7 @@ export const proposeDocumentCreateTool = defineTool({
   kind: "propose",
   capability: "content:propose",
   description:
-    "Propose a new Markdown document. folderPath is an existing folder from list_content_folders, or [] for the project root. Weaver applies it if the user enabled auto-approve; otherwise it awaits review. Check the returned status.",
+    "Propose a new Markdown document. folderPath is an existing folder from list_content_folders, or [] for the project root. Weaver applies it if the user enabled auto-approve; otherwise it awaits review. Check the returned status. Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docCreate.extend({ summary }),
   execute: ({ summary: text, ...operation }, ctx) =>
     propose(ctx, { kind: "document.create", ...operation }, text),
@@ -106,7 +106,7 @@ export const proposeDocumentEditTool = defineTool({
   kind: "propose",
   capability: "content:propose",
   description:
-    "Propose replacing a document's Markdown body (and optionally its title). Provide the full new body and the commitSha you read.",
+    "Propose replacing a document's Markdown body (and optionally its title). Provide the full new body and the commitSha you read. Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docEdit.extend({ baseCommitSha: sha, summary }),
   execute: ({ summary: text, ...operation }, ctx) =>
     propose(ctx, { kind: "document.edit", ...operation }, text),
@@ -128,7 +128,7 @@ export const proposeDocumentPatchTool = defineTool({
   kind: "propose",
   capability: "content:propose",
   description:
-    "Propose a small, exact document change: replace literal text, insert around an anchor, or replace/remove a section from navigate_document. Prefer this over propose_document_edit; only unchanged text is preserved automatically.",
+    "Propose a small, exact document change: replace literal text, insert around an anchor, or replace/remove a section from navigate_document. Prefer this over propose_document_edit; only unchanged text is preserved automatically. Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docPatch.extend({ baseCommitSha: sha, summary }),
   execute: ({ summary: text, ...operation }, ctx) =>
     propose(ctx, { kind: "document.patch", ...operation }, text),

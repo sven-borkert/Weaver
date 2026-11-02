@@ -521,6 +521,8 @@ for admin inspection services, all in one commit. Keep the exact `ADMIN_TOOLS`
 list and write annotations synchronized. Core additions must respect the 26,000-byte
 ceiling pinned in `toolsets.test.ts`. Admin tools
 must never enter `ASSISTANT_TOOLS`.
+Wiki reads (`WIKI_TOOLS`, `find_page` etc.) are MCP-only until the wiki settings slice; see `weaver-wiki`.
+The assistant prompt pins moved with the link-teaching rule (tool definitions 66,313 B, instructions 3,724 B).
 The admin read surface includes ingestion inspection
 (`ingestionInspection.ts` → `list_ingestion_batches`, `list_ingestion_files`,
 `get_ingestion_file`); draft markdown is clamped to the tool output budget.

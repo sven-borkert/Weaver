@@ -6,6 +6,7 @@ export const MCP_TOOLSET_NAMES = [
   "graph",
   "write",
   "exams",
+  "wiki",
   "connections",
   "admin",
   "external",
@@ -25,6 +26,7 @@ export const MCP_TOOLSET_SUMMARIES: Readonly<Record<McpToolsetName, string>> = {
     "Every direct write: full document replace, table create and change, restore, folders and moves.",
   exams:
     "Trainer tools: define exams, find attempts waiting for grading, read answers beside the correct ones, and propose grades.",
+  wiki: "Find pages by title, check orphan, dangling and backlink structure, and read the recent commit feed.",
   connections: "Manage your personal MCP connections.",
   admin:
     "Administration: LLM configuration, diagnostics, queue, knowledge index, ingestion and scheduled tasks (admin keys only).",

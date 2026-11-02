@@ -288,6 +288,7 @@ describe("registerMetaTools", () => {
         "graph",
         "write",
         "exams",
+        "wiki",
         "connections",
         "admin",
         "external",

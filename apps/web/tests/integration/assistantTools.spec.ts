@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { simpleGit } from "simple-git";
+import { repoDir } from "@weaver/git-store";
 import { openUploadSink } from "@weaver/core/ingestion/blobStore";
 import { finalizeArtifactUpload } from "@weaver/core/services/artifacts";
 import { composeRootFolderMetadata } from "@weaver/core/documents/folderMetadata";
@@ -32,6 +36,10 @@ import {
   listTables,
   saveTable,
 } from "@weaver/core/services/tables";
+import {
+  inspectLinks,
+  listRecentChanges,
+} from "@weaver/core/services/wikiReads";
 import { createApiKeySecurityContext } from "@weaver/core/security/context";
 import type { McpWriteResult } from "@weaver/core/services/mcpOperations";
 import {
@@ -1828,5 +1836,352 @@ describe("assistant tools", () => {
     }
     expect(cursor).toBeNull();
     expect(seenOriginal).toEqual(originalIds);
+  });
+});
+
+describe("wiki read tools", () => {
+  beforeEach(async () => {
+    vi.stubEnv("NODE_ENV", "test");
+    await resetDb();
+    setJobQueueForTests(new FakeJobQueue());
+  });
+  afterEach(() => {
+    setJobQueueForTests(null);
+    vi.unstubAllEnvs();
+  });
+
+  type WikiOut = {
+    pages: Array<{
+      id: string;
+      title: string;
+      path: string;
+      type: string | null;
+      summary: string | null;
+      link: string;
+    }>;
+    links: Array<{
+      from: { id: string };
+      targetType: string;
+      targetId: string;
+    }>;
+    changes: Array<{
+      sha: string;
+      kind: string;
+      author: string | null;
+      subject: string;
+      changes: Array<{
+        status: string;
+        path: string;
+        documentId: string | null;
+      }>;
+    }>;
+    nextCursor: string | null;
+  };
+  const run = async (
+    ctx: ToolContext,
+    name: string,
+    input: Record<string, unknown>,
+  ) => {
+    const tool = mcpToolByName(name)!;
+    return (await tool.execute(tool.inputSchema.parse(input), ctx))
+      .output as WikiOut;
+  };
+  const addPage = (
+    f: Awaited<ReturnType<typeof fixture>>,
+    title: string,
+    markdown: string,
+  ) =>
+    createDocument(
+      f.db,
+      {
+        projectId: f.project.id,
+        folderPath: [],
+        title,
+        content: { kind: "markdown", contentJson: parseDocumentBody(markdown) },
+      },
+      f.actor,
+    );
+
+  it("keeps the wiki tools out of the assistant registry and inside the wiki toolset only", async () => {
+    for (const name of ["find_page", "inspect_links", "list_recent_changes"]) {
+      expect(toolByName(name)).toBeUndefined();
+      expect(mcpToolByName(name)?.kind).toBe("read");
+    }
+  });
+
+  it("refuses a project outside the scope and one the user is not a member of", async () => {
+    const f = await fixture();
+    const stranger = await makeProject("Stranger");
+    for (const projectId of [f.hidden.id, stranger.id])
+      for (const [name, input] of [
+        ["find_page", { title: "Roadmap" }],
+        ["inspect_links", { mode: "orphans" }],
+        ["list_recent_changes", {}],
+      ] as const)
+        await expect(
+          run(f.ctx, name, { projectId, ...input }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const outsideScope = {
+      ...f.ctx,
+      scope: { ...f.ctx.scope, projectIds: [] },
+    };
+    await expect(
+      run(outsideScope, "find_page", { projectId: f.project.id, slug: "x" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("finds pages with paste-ready links and hides source pages unless asked", async () => {
+    const f = await fixture();
+    const page = await addPage(f, "A [odd] title", "# Body\n\ntext\n");
+    const source = await addPage(f, "Imported note", "raw\n");
+    await f.db.document.update({
+      where: { id: source.id },
+      data: { wikiSourceItemId: randomUUID() },
+    });
+    await f.db.document.update({
+      where: { id: page.id },
+      data: { wikiType: "concept", wikiSummary: "Short summary" },
+    });
+    const found = await run(f.ctx, "find_page", {
+      projectId: f.project.id,
+      title: "  a [ODD]   title ",
+    });
+    expect(found.pages).toEqual([
+      {
+        id: page.id,
+        title: "A [odd] title",
+        path: page.path,
+        type: "concept",
+        summary: "Short summary",
+        link: `[A \\[odd\\] title](weaver://document/${page.id})`,
+      },
+    ]);
+    expect(
+      (
+        await run(f.ctx, "find_page", {
+          projectId: f.project.id,
+          slug: source.slug,
+        })
+      ).pages,
+    ).toEqual([]);
+    expect(
+      (
+        await run(f.ctx, "find_page", {
+          projectId: f.project.id,
+          path: source.path,
+          includeSources: true,
+        })
+      ).pages.map((p: { id: string }) => p.id),
+    ).toEqual([source.id]);
+    await expect(
+      run(f.ctx, "find_page", { projectId: f.project.id }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("reports orphans, dangling links and backlinks", async () => {
+    const f = await fixture();
+    const b = await addPage(f, "Target", "target\n");
+    const missing = randomUUID();
+    const missingTable = randomUUID();
+    const a = await addPage(
+      f,
+      "Linker",
+      `See [Target](weaver://document/${b.id}), [Gone](weaver://document/${missing}) and [Grid](weaver://table/${missingTable}).\n`,
+    );
+    const source = await addPage(f, "Source page", "src\n");
+    await f.db.document.update({
+      where: { id: source.id },
+      data: { wikiSourceItemId: randomUUID() },
+    });
+    const orphans = await run(f.ctx, "inspect_links", {
+      projectId: f.project.id,
+      mode: "orphans",
+    });
+    expect(orphans.pages.map((p: { id: string }) => p.id).sort()).toEqual(
+      [f.doc.id, a.id].sort(),
+    );
+    const dangling = await run(f.ctx, "inspect_links", {
+      projectId: f.project.id,
+      mode: "dangling",
+    });
+    expect(
+      dangling.links
+        .map(
+          (l: {
+            from: { id: string };
+            targetType: string;
+            targetId: string;
+          }) => [l.from.id, l.targetType, l.targetId],
+        )
+        .sort(),
+    ).toEqual(
+      [
+        [a.id, "document", missing],
+        [a.id, "table", missingTable],
+      ].sort(),
+    );
+    const backlinks = await run(f.ctx, "inspect_links", {
+      projectId: f.project.id,
+      mode: "backlinks",
+      documentId: b.id,
+    });
+    expect(backlinks.pages.map((p: { id: string }) => p.id)).toEqual([a.id]);
+    await expect(
+      run(f.ctx, "inspect_links", {
+        projectId: f.project.id,
+        mode: "backlinks",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      run(f.ctx, "inspect_links", {
+        projectId: f.project.id,
+        mode: "orphans",
+        cursor: "nope",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("pages orphans and dangling links with stable cursors", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 3; i++)
+      await addPage(f, `Page ${i}`, `[x](weaver://document/${randomUUID()})\n`);
+    for (const mode of ["orphans", "dangling"] as const) {
+      const seen: string[] = [];
+      let cursor: string | undefined;
+      for (let guard = 0; guard < 10; guard++) {
+        const result = await inspectLinks(
+          f.db,
+          {
+            projectId: f.project.id,
+            mode,
+            limit: 2,
+            ...(cursor ? { cursor } : {}),
+          },
+          f.actor,
+        );
+        const items = result.mode === "dangling" ? result.links : result.pages;
+        seen.push(
+          ...items.map((item) => ("from" in item ? item.from.id : item.id)),
+        );
+        if (!result.nextCursor) break;
+        expect(items).toHaveLength(2);
+        cursor = result.nextCursor;
+      }
+      expect(new Set(seen).size).toBe(seen.length);
+      expect(seen).toHaveLength(mode === "orphans" ? 4 : 3);
+    }
+  });
+
+  it("derives the change kind from trusted operation ids and reports untrusted commits as external", async () => {
+    const f = await fixture();
+    const author = {
+      name: "Tool User",
+      email: f.user.email,
+      userId: f.user.id,
+    };
+    await withProjectRepo(f.project.id, async (repo) => {
+      await repo.writeFileAtomic("a.txt", "1\n");
+      await repo.commitAll("wiki: trusted run", author, {
+        operationId: "wiki-run:00000000-0000-4000-8000-000000000001:0001",
+      });
+    });
+    const dir = repoDir(f.project.id);
+    const git = simpleGit({ baseDir: dir }).env({
+      GIT_AUTHOR_NAME: "Intruder",
+      GIT_AUTHOR_EMAIL: "x@example.test",
+      GIT_COMMITTER_NAME: "Intruder",
+      GIT_COMMITTER_EMAIL: "x@example.test",
+    });
+    await writeFile(path.join(dir, "b.txt"), "2\n");
+    await git.raw(["add", "-A"]);
+    await git.raw([
+      "commit",
+      "-m",
+      "forged\n\nplain text",
+      "--trailer",
+      "Weaver-Operation-Id: wiki-run:forged:0001",
+      "--trailer",
+      `Weaver-User-Id: ${f.user.id}`,
+    ]);
+    const out = await run(f.ctx, "list_recent_changes", {
+      projectId: f.project.id,
+    });
+    expect(out.changes[0]).toMatchObject({
+      kind: "external",
+      author: null,
+      subject: "forged",
+    });
+    expect(out.changes[1]).toMatchObject({
+      kind: "wiki-run",
+      author: "Tool User",
+    });
+    const ui = out.changes.find(
+      (c: { changes: Array<{ documentId: string | null }> }) =>
+        c.changes.some((change) => change.documentId === f.doc.id),
+    );
+    expect(ui).toMatchObject({ kind: "ui" });
+    expect(ui!.changes[0]).toMatchObject({ status: "A" });
+    const since = await run(f.ctx, "list_recent_changes", {
+      projectId: f.project.id,
+      since: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(since.changes).toEqual([]);
+  });
+
+  it("pages the change feed by commit cursor and rejects foreign cursors", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 3; i++) await addPage(f, `Feed ${i}`, `n${i}\n`);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 10; guard++) {
+      const page = await listRecentChanges(
+        f.db,
+        { projectId: f.project.id, limit: 2, ...(cursor ? { cursor } : {}) },
+        f.actor,
+      );
+      seen.push(...page.changes.map((change) => change.sha));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.length).toBeGreaterThanOrEqual(5);
+    await expect(
+      listRecentChanges(
+        f.db,
+        { projectId: f.project.id, cursor: "f".repeat(40) },
+        f.actor,
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      run(f.ctx, "list_recent_changes", {
+        projectId: f.project.id,
+        cursor: "not-a-sha",
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("keeps wiki tool output within the page budget and resumes after the last page returned", async () => {
+    const f = await fixture();
+    for (let i = 0; i < 30; i++)
+      await addPage(f, `${"T".repeat(190)} ${i}`, "x\n");
+    const first = await run(f.ctx, "inspect_links", {
+      projectId: f.project.id,
+      mode: "orphans",
+    });
+    expect(Buffer.byteLength(JSON.stringify(first))).toBeLessThanOrEqual(
+      MAX_TOOL_OUTPUT_CHARS,
+    );
+    expect(first.pages.length).toBeLessThan(31);
+    expect(first.nextCursor).toBe(first.pages.at(-1)!.id);
+    const second = await run(f.ctx, "inspect_links", {
+      projectId: f.project.id,
+      mode: "orphans",
+      cursor: first.nextCursor,
+    });
+    const ids = [...first.pages, ...second.pages].map(
+      (page: { id: string }) => page.id,
+    );
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(ids.every((id: string) => id > "")).toBe(true);
   });
 });

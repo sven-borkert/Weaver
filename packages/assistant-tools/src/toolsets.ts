@@ -6,6 +6,7 @@ import type { AnyToolContract } from "./contract";
 import {
   ADMIN_TOOLS,
   EXAM_TOOLS,
+  WIKI_TOOLS,
   CONNECTION_TOOLS,
   MCP_TOOLS,
   WRITE_TOOLS,
@@ -75,6 +76,7 @@ export const MCP_TOOLSET_MEMBERS: Readonly<
   ],
   write: WRITE_TOOLS.map((tool) => tool.name),
   exams: EXAM_TOOLS.map((tool) => tool.name),
+  wiki: WIKI_TOOLS.map((tool) => tool.name),
   connections: CONNECTION_TOOLS.map((tool) => tool.name),
   admin: ADMIN_TOOLS.map((tool) => tool.name),
 };

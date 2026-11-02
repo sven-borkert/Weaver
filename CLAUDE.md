@@ -128,6 +128,7 @@ harness has not auto-loaded it, open the file directly:
 | `weaver-admin`            | Admin area, LLM providers/models/routing, outbound MCP transport/catalog, diagnostics and operational tools              |
 | `weaver-diagnostics`      | Diagnostic log, level/retention, runtime hooks, and admin MCP tools                                                      |
 | `weaver-scheduled-tasks`  | Scheduled AI tasks: model, tick, runner, run history, Tasks UI                                                           |
+| `weaver-wiki`             | Wiki-agent foundations: page properties, wiki reads, MCP `wiki` toolset, change kinds, tracked-link teaching             |
 | `weaver-artifacts`        | Artifact storage/routes, Word/Excel/PDF/JSON/text/Markdown/CSV/YAML readers and OneNote cache/preparation                |
 
 When a convention a skill documents changes, update the skill in the same

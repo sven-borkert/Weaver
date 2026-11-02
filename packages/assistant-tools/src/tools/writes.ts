@@ -94,7 +94,7 @@ export const createDocumentTool = defineTool({
   kind: "write",
   capability: "content:write",
   description:
-    "Create a Markdown document directly (no review). folderPath must be an existing folder from list_content_folders, or [] for the project root; folders are never created implicitly. Requires content:write, an explicit projectId, and an idempotencyKey.",
+    "Create a Markdown document directly (no review). folderPath must be an existing folder from list_content_folders, or [] for the project root; folders are never created implicitly. Requires content:write, an explicit projectId, and an idempotencyKey. Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docCreate.extend({ idempotencyKey, summary }),
   execute: ({ idempotencyKey: key, summary: text, ...operation }, ctx) =>
     write(
@@ -111,7 +111,7 @@ export const updateDocumentTool = defineTool({
   kind: "write",
   capability: "content:write",
   description:
-    "Replace a document's body (Markdown, or the full source text of a Python file), and optionally its title, directly. Provide the full new body and the commitSha you read.",
+    "Replace a document's body (Markdown, or the full source text of a Python file), and optionally its title, directly. Provide the full new body and the commitSha you read. Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docEdit.extend({ baseCommitSha: sha, idempotencyKey, summary }),
   execute: ({ idempotencyKey: key, summary: text, ...operation }, ctx) =>
     write(
@@ -193,7 +193,7 @@ export const patchDocumentTool = defineTool({
   kind: "write",
   capability: "content:write",
   description:
-    "Apply a small, exact document change directly: replace literal text, insert around an anchor, or replace/remove a section from navigate_document. Works on Python files too (plain text; section ids come from navigate_document's def/class outline).",
+    "Apply a small, exact document change directly: replace literal text, insert around an anchor, or replace/remove a section from navigate_document. Works on Python files too (plain text; section ids come from navigate_document's def/class outline). Cross-reference pages as [Title](weaver://document/<id>) or weaver://table/<id> with ids from tools.",
   inputSchema: docPatch.extend({ baseCommitSha: sha, idempotencyKey, summary }),
   execute: ({ summary: text, idempotencyKey: key, ...operation }, ctx) =>
     write(

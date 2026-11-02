@@ -79,6 +79,16 @@ describe("tool registry", () => {
       "propose_content_lifecycle",
     ]);
   });
+  it("keeps the wiki reads out of the assistant and in the MCP surface in order", () => {
+    const wiki = ["find_page", "inspect_links", "list_recent_changes"];
+    expect(ASSISTANT_TOOLS.map((t) => t.name)).not.toEqual(
+      expect.arrayContaining(wiki),
+    );
+    const names = MCP_TOOLS.map((t) => t.name);
+    expect(
+      names.slice(names.indexOf("find_page"), names.indexOf("find_page") + 3),
+    ).toEqual(wiki);
+  });
   it("filters by capability", () => {
     const session = createSessionSecurityContext({
       userId: "u",

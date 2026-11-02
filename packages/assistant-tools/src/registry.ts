@@ -36,6 +36,7 @@ import { KNOWLEDGE_READ_ADMIN_TOOLS } from "./tools/admin/knowledgeRead";
 import { KNOWLEDGE_WRITE_ADMIN_TOOLS } from "./tools/admin/knowledgeWrite";
 import { OPERATIONS_ADMIN_TOOLS } from "./tools/admin/operations";
 import { INGESTION_READ_ADMIN_TOOLS } from "./tools/admin/ingestionRead";
+import { WIKI_READ_TOOLS } from "./tools/wiki";
 import { resolveCitationTool } from "./tools/citations";
 import { listDocumentsTool, readDocumentTool } from "./tools/documents";
 import { listContentFoldersTool } from "./tools/folders";
@@ -186,8 +187,12 @@ export function examToolsForActor(actor: SecurityContext): AnyToolContract[] {
   );
 }
 
+/** Wiki reads are MCP-only until the assistant gets them with the wiki settings. */
+export const WIKI_TOOLS: readonly AnyToolContract[] = WIKI_READ_TOOLS;
+
 export const MCP_TOOLS: readonly AnyToolContract[] = [
   ...ASSISTANT_TOOLS.filter((tool) => tool.kind === "read"),
+  ...WIKI_TOOLS,
   ...WRITE_TOOLS,
   ...ADMIN_TOOLS,
   ...CONNECTION_TOOLS,

@@ -108,3 +108,28 @@ it("selects optional exam tools by capability", () => {
     selectMcpTools(actor(["read", "write"]), ["exams"]).tools,
   ).toHaveLength(7);
 });
+
+it("offers the wiki reads as their own read-only toolset", () => {
+  expect(parseToolsets("wiki")).toEqual(["core", "wiki"]);
+  expect(MCP_TOOLSET_MEMBERS.wiki).toEqual([
+    "find_page",
+    "inspect_links",
+    "list_recent_changes",
+  ]);
+  expect(toolsetsOf("find_page")).toEqual(["wiki"]);
+  expect(CORE_TOOL_NAMES).not.toContain("find_page");
+  const selected = selectMcpTools(actor(["read"]), ["wiki"]).tools;
+  expect(selected.map((t) => t.name)).toEqual(MCP_TOOLSET_MEMBERS.wiki);
+  expect(selected.every((t) => t.kind === "read")).toBe(true);
+  const bytes = Buffer.byteLength(
+    JSON.stringify(
+      selected.map((t) => ({
+        name: t.name,
+        description: t.description,
+        inputSchema: z.toJSONSchema(t.inputSchema, { io: "input" }),
+      })),
+    ),
+    "utf8",
+  );
+  expect(bytes).toBeLessThanOrEqual(3_000);
+});

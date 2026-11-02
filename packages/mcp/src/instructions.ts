@@ -35,7 +35,7 @@ export function buildMcpInstructions(input: {
     );
   }
   sentences.push(
-    "Resources use weaver://projects/{projectId}/documents|tables|entities/{id}.",
+    "Link documents and tables as [Title](weaver://document/<id>) or [Title](weaver://table/<id>) using ids from tools; only that form is tracked.",
   );
   return sentences.join(" ");
 }
