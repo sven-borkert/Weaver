@@ -1,3 +1,6 @@
+import type { JSONContent } from "@tiptap/core";
+import { parseDocumentBody, serializeDocumentBody } from "../editor/markdown";
+import { CoreError } from "../errors";
 import { trackedLink } from "./links";
 
 export type AgentLinkTarget = { id: string; title: string };
@@ -18,7 +21,7 @@ export type UnresolvedLink = {
 };
 export type InvalidLink = {
   target: string;
-  reason: "near_miss" | "unknown_target";
+  reason: "near_miss" | "unknown_target" | "unverified";
 };
 export type PreprocessedMarkdown = {
   markdown: string;
@@ -28,9 +31,10 @@ export type PreprocessedMarkdown = {
 
 const MAX_RESOLVED_TARGETS = 200;
 const MAX_REPORTED_TARGET_CHARS = 300;
+const MAX_DEMOTION_ROUNDS = 4;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const TRACKED_RE = new RegExp(`^weaver://(document|table)/(${UUID})$`);
-const NEAR_MISS_RE = /^weaver:/i;
+const NEAR_MISS_RE = /^\s*weaver:/i;
 const EXTERNAL_RE = /^[a-z][a-z0-9+.-]*:|^\/\/|^#/i;
 const LINK_RE =
   /\[\[([^\[\]\r\n|]{1,300})\]\]|(?<!!)\[((?:\\.|[^\[\]\\\r\n])*)\]\(([^()\s]+)\)/g;
@@ -85,7 +89,7 @@ function splitProse(markdown: string): Array<{ text: string; prose: boolean }> {
     const marker = FENCE_RE.exec(line)?.[1];
     if (fence !== null) {
       parts.push({ text: line, prose: false });
-      if (marker?.[0] === fence[0] && marker.length >= fence.length)
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length)
         fence = null;
       continue;
     }
@@ -101,17 +105,97 @@ function splitProse(markdown: string): Array<{ text: string; prose: boolean }> {
   return parts;
 }
 
+function demote(
+  node: JSONContent,
+  parent: string,
+  verified: ReadonlySet<string>,
+  invalid: InvalidLink[],
+): JSONContent[] {
+  const report = (target: string) =>
+    invalid.push({ target: bounded(target), reason: "unverified" });
+  const textNode = (text: string): JSONContent[] =>
+    text ? [{ type: "text", text }] : [];
+  if (node.type === "crossref") {
+    const type = node.attrs?.targetType === "table" ? "table" : "document";
+    const id = String(node.attrs?.targetId);
+    if (verified.has(`${type}:${id}`)) return [node];
+    report(`weaver://${type}/${id}`);
+    return textNode(String(node.attrs?.label ?? "Untitled"));
+  }
+  if (node.type === "image" && NEAR_MISS_RE.test(String(node.attrs?.src))) {
+    report(String(node.attrs?.src));
+    const text = textNode(String(node.attrs?.alt ?? "") || "image");
+    // A lifted image sits between blocks, where bare text is not valid.
+    return parent === "doc" ? [{ type: "paragraph", content: text }] : text;
+  }
+  const next: JSONContent = { ...node };
+  if (node.marks) {
+    next.marks = node.marks.filter((mark) => {
+      const href = mark.type === "link" ? String(mark.attrs?.href) : "";
+      if (!NEAR_MISS_RE.test(href)) return true;
+      const tracked = TRACKED_RE.exec(href);
+      if (tracked && verified.has(`${tracked[1]}:${tracked[2]}`)) return true;
+      report(href);
+      return false;
+    });
+    if (next.marks.length === 0) delete next.marks;
+  }
+  if (node.content)
+    next.content = node.content.flatMap((child) =>
+      demote(child, node.type ?? "", verified, invalid),
+    );
+  return [next];
+}
+
+/**
+ * What the writer's own parser sees is what counts: regexes cannot agree with it on
+ * every destination form, and stripping a link can re-form another one.
+ */
+function demoteUnverifiedLinks(
+  markdown: string,
+  verified: ReadonlySet<string>,
+  maxRounds: number,
+): { markdown: string; invalid: InvalidLink[] } {
+  const invalid: InvalidLink[] = [];
+  let current = markdown;
+  for (let round = 0; round < maxRounds; round++) {
+    const found: InvalidLink[] = [];
+    let demoted: JSONContent | undefined;
+    try {
+      [demoted] = demote(parseDocumentBody(current), "", verified, found);
+    } catch {
+      throw unstableLinks();
+    }
+    if (found.length === 0) return { markdown: current, invalid };
+    invalid.push(...found);
+    const serialized = serializeDocumentBody(demoted!);
+    current = markdown.endsWith("\n")
+      ? serialized
+      : serialized.replace(/\n$/, "");
+  }
+  // Only a clean parse of the final text may leave this function.
+  throw unstableLinks();
+}
+
+function unstableLinks(): CoreError {
+  return new CoreError(
+    "BAD_REQUEST",
+    "The Markdown's links could not be verified; rewrite them as [Title](weaver://document/<id>) with an id a tool returned",
+    { reason: "UNVERIFIABLE_LINKS" },
+  );
+}
+
 /** Turns the agent's link forms into tracked links; nothing unresolved becomes a link. */
 export async function preprocessAgentMarkdown(
   markdown: string,
   resolver: AgentLinkResolver,
-  options: { folderPath: readonly string[] },
+  options: { folderPath: readonly string[]; maxDemotionRounds?: number },
 ): Promise<PreprocessedMarkdown> {
   const unresolvedLinks: UnresolvedLink[] = [];
   const invalidLinks: InvalidLink[] = [];
   const cache = new Map<string, Promise<unknown>>();
+  const verified = new Set<string>();
   let lookups = 0;
-  let overBudget = false;
   const remember = <T>(
     key: string,
     load: () => Promise<T>,
@@ -124,14 +208,11 @@ export async function preprocessAgentMarkdown(
     cache.set(key, pending);
     return pending;
   };
-  const refuseOverBudget = (target: string) => {
-    if (overBudget) return;
-    overBudget = true;
+  const refuseOverBudget = (target: string) =>
     unresolvedLinks.push({
       target: bounded(target),
       reason: "too_many_links",
     });
-  };
 
   const rewrite = async (
     match: RegExpExecArray | RegExpMatchArray,
@@ -145,8 +226,10 @@ export async function preprocessAgentMarkdown(
         return whole;
       }
       const hits = await lookup;
-      if (hits.length === 1)
+      if (hits.length === 1) {
+        verified.add(`document:${hits[0]!.id}`);
         return trackedLink("document", hits[0]!.id, hits[0]!.title);
+      }
       unresolvedLinks.push({
         target: bounded(title),
         reason: hits.length === 0 ? "not_found" : "ambiguous",
@@ -162,9 +245,12 @@ export async function preprocessAgentMarkdown(
       );
       if (lookup === null) {
         refuseOverBudget(target);
+        return label!;
+      }
+      if (await lookup) {
+        verified.add(`${kind}:${tracked[2]}`);
         return whole;
       }
-      if (await lookup) return whole;
       invalidLinks.push({ target: bounded(target), reason: "unknown_target" });
       return label!;
     }
@@ -185,10 +271,13 @@ export async function preprocessAgentMarkdown(
     const lookup = remember(`p:${path}`, () => resolver.byPath(path));
     if (lookup === null) {
       refuseOverBudget(target);
-      return whole;
+      return label!;
     }
     const hit = await lookup;
-    if (hit) return trackedLink("document", hit.id, hit.title);
+    if (hit) {
+      verified.add(`document:${hit.id}`);
+      return trackedLink("document", hit.id, hit.title);
+    }
     unresolvedLinks.push({ target: bounded(target), reason: "not_found" });
     return label!;
   };
@@ -207,5 +296,11 @@ export async function preprocessAgentMarkdown(
     }
     out.push(part.text.slice(last));
   }
-  return { markdown: out.join(""), unresolvedLinks, invalidLinks };
+  const checked = demoteUnverifiedLinks(
+    out.join(""),
+    verified,
+    options.maxDemotionRounds ?? MAX_DEMOTION_ROUNDS,
+  );
+  invalidLinks.push(...checked.invalid);
+  return { markdown: checked.markdown, unresolvedLinks, invalidLinks };
 }

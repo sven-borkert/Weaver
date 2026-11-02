@@ -1,4 +1,6 @@
+import type { JSONContent } from "@tiptap/core";
 import { describe, expect, it } from "vitest";
+import { parseDocumentBody } from "../editor/markdown";
 import {
   preprocessAgentMarkdown,
   type AgentLinkResolver,
@@ -27,6 +29,22 @@ const resolver: AgentLinkResolver = {
     return null;
   },
 };
+
+function weaverTargets(markdown: string): string[] {
+  const found: string[] = [];
+  const walk = (node: JSONContent) => {
+    if (node.type === "crossref")
+      found.push(`weaver://${node.attrs?.targetType}/${node.attrs?.targetId}`);
+    if (node.type === "image" && /weaver:/i.test(String(node.attrs?.src)))
+      found.push(String(node.attrs?.src));
+    for (const mark of node.marks ?? [])
+      if (mark.type === "link" && /^\s*weaver:/i.test(String(mark.attrs?.href)))
+        found.push(String(mark.attrs?.href));
+    node.content?.forEach(walk);
+  };
+  walk(parseDocumentBody(markdown));
+  return found;
+}
 
 const run = (markdown: string, folderPath: string[] = ["wiki", "topics"]) =>
   preprocessAgentMarkdown(markdown, resolver, { folderPath });
@@ -132,11 +150,132 @@ describe("preprocessAgentMarkdown", () => {
     expect(result.markdown).toBe(`[Odd \\[x\\]](weaver://document/${DOC})`);
   });
 
-  it("bounds how many targets one write may resolve", async () => {
+  it("reports every wikilink the lookup budget refuses and leaves it as text", async () => {
     const source = Array.from({ length: 300 }, (_, i) => `[[T${i}]]`).join(" ");
     const result = await run(source);
     expect(result.markdown).toBe(source);
-    expect(result.unresolvedLinks.length).toBeLessThanOrEqual(201);
-    expect(result.unresolvedLinks.at(-1)?.reason).toBe("too_many_links");
+    const refused = result.unresolvedLinks.filter(
+      (link) => link.reason === "too_many_links",
+    );
+    expect(refused).toHaveLength(100);
+    expect(refused[0]?.target).toBe("T200");
+    expect(refused.at(-1)?.target).toBe("T299");
+  });
+
+  it("falls back to plain text for tracked and .md forms past the budget", async () => {
+    const filler = Array.from({ length: 200 }, (_, i) => `[[T${i}]]`).join(" ");
+    const result = await run(
+      `${filler} [tracked](weaver://document/${DOC}) [path](alpha.md)`,
+    );
+    expect(result.markdown).toBe(`${filler} tracked path`);
+    expect(
+      result.unresolvedLinks
+        .filter((link) => link.reason === "too_many_links")
+        .map((link) => link.target),
+    ).toEqual([`weaver://document/${DOC}`, "alpha.md"]);
+    expect(weaverTargets(result.markdown)).toEqual([]);
+  });
+
+  describe("what the writer's parser sees", () => {
+    it.each([
+      ["angle-bracket destination", `[a](<weaver://document/${OTHER}>)`, "a"],
+      ["titled destination", `[a](weaver://document/${OTHER} "t")`, "a"],
+      ["angle-bracket near miss", `[a](<weaver://doc/${OTHER}>)`, "a"],
+      [
+        "reference definition",
+        `[a]: weaver://document/${OTHER}\n\nsee [a]`,
+        "see a",
+      ],
+      [
+        "autolink",
+        `<weaver://document/${OTHER}>`,
+        `weaver://document/${OTHER}`,
+      ],
+      ["image", `![pic](weaver://document/${OTHER})`, "pic"],
+    ])("demotes an unverified %s", async (_name, source, text) => {
+      const result = await run(source);
+      expect(weaverTargets(result.markdown)).toEqual([]);
+      expect(result.markdown.trim()).toBe(text);
+      expect(result.invalidLinks).toHaveLength(1);
+      expect(result.invalidLinks[0]?.reason).toBe("unverified");
+    });
+
+    it("demotes a known target reached only through a form this pass never checked", async () => {
+      const result = await run(`[a](<weaver://document/${DOC}>)`);
+      expect(result.markdown).toBe("a");
+      expect(result.invalidLinks).toEqual([
+        { target: `weaver://document/${DOC}`, reason: "unverified" },
+      ]);
+    });
+
+    it("demotes a crossref inside a code span the parser splits across blocks", async () => {
+      const result = await run(`\`x\n\n[a](weaver://document/${OTHER}) \``);
+      expect(weaverTargets(result.markdown)).toEqual([]);
+      expect(result.invalidLinks).toEqual([
+        { target: `weaver://document/${OTHER}`, reason: "unverified" },
+      ]);
+    });
+
+    it("demotes a link re-formed by stripping an inner one", async () => {
+      const result = await run(`[[x](missing.md)](weaver://document/${OTHER})`);
+      expect(result.markdown).toBe("x");
+      expect(result.unresolvedLinks).toEqual([
+        { target: "missing.md", reason: "not_found" },
+      ]);
+      expect(result.invalidLinks).toEqual([
+        { target: `weaver://document/${OTHER}`, reason: "unverified" },
+      ]);
+    });
+
+    it("keeps a verified inner link; the parser reads the outer form as text", async () => {
+      const result = await run(`[[x](alpha.md)](weaver://document/${OTHER})`);
+      expect(weaverTargets(result.markdown)).toEqual([
+        `weaver://document/${DOC}`,
+      ]);
+      expect(result.invalidLinks).toEqual([]);
+    });
+
+    it("leaves Markdown without offenders byte-identical", async () => {
+      const source = `  Intro [a](weaver://document/${DOC})\n\n\n* odd   spacing\n`;
+      const result = await run(source);
+      expect(result.markdown).toBe(source);
+      expect(result.invalidLinks).toEqual([]);
+    });
+
+    it("does not treat fenced code as a link", async () => {
+      const source = `\`\`\`\n[a](weaver://document/${OTHER})\n\`\`\`\n`;
+      const result = await run(source);
+      expect(result.markdown).toBe(source);
+      expect(result.invalidLinks).toEqual([]);
+    });
+
+    it("converges on a label that spells a link", async () => {
+      const result = await run(
+        `[\\[b\\](weaver://document/${OTHER})](<weaver://document/${OTHER}>)`,
+      );
+      expect(weaverTargets(result.markdown)).toEqual([]);
+      expect(result.invalidLinks.length).toBeGreaterThan(0);
+    });
+
+    it("settles nested destinations within the round cap", async () => {
+      const nested = Array.from({ length: 8 }).reduce<string>(
+        (inner) => `[${inner}](<weaver://document/${OTHER}>)`,
+        "x",
+      );
+      const result = await run(nested);
+      expect(weaverTargets(result.markdown)).toEqual([]);
+    });
+
+    it("refuses the write when the links do not settle within the cap", async () => {
+      await expect(
+        preprocessAgentMarkdown(`[a](<weaver://document/${OTHER}>)`, resolver, {
+          folderPath: [],
+          maxDemotionRounds: 1,
+        }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        details: { reason: "UNVERIFIABLE_LINKS" },
+      });
+    });
   });
 });
