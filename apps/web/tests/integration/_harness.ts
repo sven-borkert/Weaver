@@ -209,6 +209,15 @@ export async function bindWikiSettings(
   });
 }
 
+/** A queue item for specs that need a real target for wikiSourceItemId. */
+export async function makeWikiInputItem(projectId: string): Promise<string> {
+  const item = await getPrisma().wikiInputItem.create({
+    data: { projectId, kind: "text", title: "Input", byteSize: 0 },
+    select: { id: true },
+  });
+  return item.id;
+}
+
 export function securityContextFor(user: { id: string; role: Role }) {
   return createSessionSecurityContext({
     userId: user.id,

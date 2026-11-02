@@ -111,7 +111,7 @@ is the agent's only write path.
 - Refused: Python, task output (task and run), the guide, `wikiSourceItemId` pages, source folders,
   `weaver-image:`, `<img>`. A patch may not raise either count in the canonical body, so
   markup cannot be assembled from existing text. Existing images stay. Budgets belong to the runner.
-- Operation ids: `wiki-run:<fence runId>:<nnnn>`, `wiki-input:<id>`, `wiki-revert:<id>:<nnnn>`.
+- Operation ids: only `wiki-run:<fence runId>:<nnnn>`. The agent cannot mint `wiki-input:`, `wiki-revert:` or `ingestion:` ids.
 - Recovery goes through `recoverCheckApply` with identity `{ wikiAgentId, wikiRequestHash }`: a
   match needs `trustedAuthor === true`, the agent trailer and the hash, else `CONFLICT`. A patch
   retried with a newer base still finds its own commit first, so it cannot apply twice.
@@ -169,6 +169,29 @@ is the agent's only write path.
   (`no_ready_items`) rather than queueing for a model. `reapWikiRuns` also runs from `system.reconcile`, since a deployment
   without a `wiki` worker has no tick; "no active job" means no `pgboss.job` row in state `active` for `wiki.run`.
 - Without an injected runner, `wiki.run` ends the run `failed` with `RUNNER_UNAVAILABLE`.
+
+## Source writer
+
+- `wikiSourceWriter.ts` is reachable only from `wikiPrepare.ts` (the tick), never from tool dispatch. Its ids
+  (`wiki-input:<itemId>`, `ingestion:<fileId>`) have their own pattern, separate from the agent's. It commits as the agent
+  with `Weaver-Wiki-Agent-Id`, `Weaver-Run-Id`, `Weaver-Wiki-Request-Hash` and `Weaver-Wiki-Input-Id`; the hash covers item and
+  content, not run or folder, so resume matches. Recovery goes through `recoverPriorOperation` with the agent identity: an
+  untrusted or foreign match is `CONFLICT` and the item fails.
+- `assertPreparingFence` runs before the lock, on entry and in `beforeCommit`. A closed fence (`WIKI_FENCE_CLOSED`) leaves the
+  item alone, because whoever closed it already moved the item.
+- The item's `sourceDocumentId`/`sourceTableId` is written in `beforeCommit`, before the commit. Every path that recreates a
+  projection row (`persistDocumentProjection`, `rebuildIndex`, table upsert, `rebuildTableIndex`) derives `wikiSourceItemId` from it,
+  so the guard survives a crash between commit and projection and any rebuild. Do not write it after the commit.
+- `resolveSourceFolder` resolves by id; a deleted or duplicated id gets a fresh folder (next free suffix), recorded without a
+  revision bump, which clears `sourceFoldersUnresolved`. It never writes into an ambiguous folder.
+- A recovered commit whose page no longer exists fails the item `SOURCE_DELETED`; the id cannot be reused.
+
+## Secrets in titles
+
+A title is authored text that Viewers see, so `safeInputTitle` scans the whole candidate (a secret past the cut-off cannot leave
+its start behind) and stores `Note <date>` or `File <date>` on a hit. Every held note gets the neutral title and keeps it after
+Confirm; the title is outside the hold digest. `removeInput` overwrites the title and clears text, digests, notes, errors and
+people, keeping id, kind, status, timestamps and the source link the guard needs. Outcome notes and diagnostics never carry a title.
 
 ## Commit text
 

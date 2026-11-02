@@ -57,6 +57,7 @@ import {
   resetDb,
   securityContextFor,
   seedTestLlmRouting,
+  makeWikiInputItem,
   testAuth,
 } from "./_harness";
 import { createTaskRun } from "./_dashboardFixtures";
@@ -735,7 +736,7 @@ describe("applyWikiOperation", () => {
     const source = await page("Source");
     await w.db.document.update({
       where: { id: source.resourceId! },
-      data: { wikiSourceItemId: randomUUID() },
+      data: { wikiSourceItemId: await makeWikiInputItem(w.project.id) },
     });
     await expect(
       w.apply(patch(w, source.resourceId!, source.commitSha)),
@@ -1940,7 +1941,6 @@ describe("wiki settings, bootstrap and guide", () => {
     const suggestion = await f.db.wikiGuideSuggestion.create({
       data: {
         projectId: f.id,
-        runId: randomUUID(),
         text: "Prefer short titles.",
       },
     });

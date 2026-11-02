@@ -113,6 +113,7 @@ export type FolderAudit = {
   mcpToolName?: string;
   runId?: string;
   wikiRequestHash?: string;
+  wikiInputId?: string;
   beforeCommit?: () => Promise<void>;
 };
 

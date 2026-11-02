@@ -61,6 +61,7 @@ import {
   resetDb,
   securityContextFor,
   markdownContent,
+  makeWikiInputItem,
 } from "./_harness";
 
 // Table column/row ids must be canonical lowercase UUIDs (packages/core's
@@ -2043,7 +2044,7 @@ describe("wiki read tools", () => {
     const source = await addPage(f, "Imported note", "raw\n");
     await f.db.document.update({
       where: { id: source.id },
-      data: { wikiSourceItemId: randomUUID() },
+      data: { wikiSourceItemId: await makeWikiInputItem(f.project.id) },
     });
     await f.db.document.update({
       where: { id: page.id },
@@ -2098,7 +2099,7 @@ describe("wiki read tools", () => {
     const source = await addPage(f, "Source page", "src\n");
     await f.db.document.update({
       where: { id: source.id },
-      data: { wikiSourceItemId: randomUUID() },
+      data: { wikiSourceItemId: await makeWikiInputItem(f.project.id) },
     });
     const orphans = await run(f.ctx, "inspect_links", {
       projectId: f.project.id,

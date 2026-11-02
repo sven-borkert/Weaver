@@ -775,19 +775,25 @@ async function upsertOwnedTableProjection(
     data: TableProjectionData;
   },
 ): Promise<void> {
+  // Rows are derived and can be rebuilt; the item's link is what survives.
+  const sourceItem = await tx.wikiInputItem.findFirst({
+    where: { projectId: input.projectId, sourceTableId: input.id },
+    select: { id: true },
+  });
+  const data = { ...input.data, wikiSourceItemId: sourceItem?.id ?? null };
   const updated = await tx.dataTable.updateMany({
     where: { id: input.id, projectId: input.projectId },
-    data: input.data,
+    data,
   });
   if (updated.count === 1) return;
 
   await tx.dataTable.createMany({
-    data: [{ id: input.id, projectId: input.projectId, ...input.data }],
+    data: [{ id: input.id, projectId: input.projectId, ...data }],
     skipDuplicates: true,
   });
   const converged = await tx.dataTable.updateMany({
     where: { id: input.id, projectId: input.projectId },
-    data: input.data,
+    data,
   });
   if (converged.count === 1) return;
 
@@ -1089,6 +1095,11 @@ type TableWriteMetadata = {
   apiOperation?: string;
   /** Assistant run that produced the change, as a Weaver-Run-Id commit trailer. */
   runId?: string;
+  /** Source writer only: the wiki agent's recovery key and input trailer. */
+  wikiRequestHash?: string;
+  wikiInputId?: string;
+  /** Runs under the project lock immediately before the commit; a throw aborts it. */
+  beforeCommit?: () => Promise<void>;
 };
 
 /** Audit trailers a restore may carry, so MCP replay can recognise its own commit. */
@@ -1223,6 +1234,9 @@ async function commitTableWrite(
       apiRequestHash: metadata.apiRequestHash,
       apiOperation: metadata.apiOperation,
       runId: metadata.runId,
+      wikiRequestHash: metadata.wikiRequestHash,
+      wikiInputId: metadata.wikiInputId,
+      beforeCommit: metadata.beforeCommit,
     },
   );
   await updateTableProjection(db, repo, { ...prepared, sha });
@@ -2212,6 +2226,17 @@ export async function rebuildTableIndex(
 
       let indexed = 0;
       await db.$transaction(async (tx) => {
+        const sourceItems = new Map(
+          (
+            await tx.wikiInputItem.findMany({
+              where: {
+                projectId: input.projectId,
+                sourceTableId: { in: rows.map((row) => row.id) },
+              },
+              select: { id: true, sourceTableId: true },
+            })
+          ).map((item) => [item.sourceTableId!, item.id]),
+        );
         await tx.dataTable.deleteMany({
           where: { projectId: input.projectId },
         });
@@ -2232,6 +2257,7 @@ export async function rebuildTableIndex(
                 lastEditedByName: row.head.authorName,
                 lastEditedAt: row.head.date,
                 createdAt: row.createdAt,
+                wikiSourceItemId: sourceItems.get(row.id) ?? null,
               },
             ],
             skipDuplicates: true,

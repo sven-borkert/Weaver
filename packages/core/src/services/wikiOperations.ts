@@ -75,9 +75,8 @@ export type WikiWriteResult = {
 };
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-const OPERATION_ID_RE = new RegExp(
-  `^(?:wiki-run:(${UUID}):\\d{4}|wiki-input:${UUID}|wiki-revert:${UUID}:\\d{4})$`,
-);
+// The agent mints only run ids; source and revert writers have their own entry points.
+const OPERATION_ID_RE = new RegExp(`^wiki-run:(${UUID}):\\d{4}$`);
 const IMAGE_REFERENCE_RE = /weaver-image:/gi;
 const IMG_TAG_RE = /<\s*img\b/gi;
 

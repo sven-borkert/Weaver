@@ -135,6 +135,8 @@ type WriteMetadata = {
   runId?: string;
   /** Weaver-Wiki-Request-Hash; the wiki agent's recovery key. */
   wikiRequestHash?: string;
+  /** Weaver-Wiki-Input-Id on a source writer commit. */
+  wikiInputId?: string;
   /** Runs under the project lock immediately before the commit; a throw aborts it. */
   beforeCommit?: () => Promise<void>;
 };
@@ -198,6 +200,8 @@ type WriteRequest =
       properties?: WikiPageProperties;
       /** Public writer input, validated and merged over `properties`. */
       propertiesInput?: WikiPagePropertiesInput;
+      /** Source writer only: the WikiInputItem this page records. */
+      wikiSourceItemId?: string;
     }
   | {
       kind: "update";
@@ -229,6 +233,8 @@ type Projection = {
   meta: DocumentMeta;
   targets: CrossrefTarget[];
   create: boolean;
+  /** Set by the source writer; otherwise re-derived from WikiInputItem in the projection write. */
+  wikiSourceItemId?: string;
 };
 
 type PreparedWrite = Omit<Projection, "sha"> & {
@@ -252,6 +258,20 @@ function dueAtFrom(review: DocumentReview, now: Date): Date {
 
 /** Projection columns mirroring the frontmatter; an author id links only when
  *  that user exists here (a pulled or restored file may name unknown ids). */
+/** Rows are derived and can be rebuilt; the item's link is what survives. */
+async function wikiSourceItemIds(
+  db: Db,
+  projectId: string,
+  documentIds: readonly string[],
+): Promise<Map<string, string>> {
+  if (documentIds.length === 0) return new Map();
+  const items = await db.wikiInputItem.findMany({
+    where: { projectId, sourceDocumentId: { in: [...documentIds] } },
+    select: { id: true, sourceDocumentId: true },
+  });
+  return new Map(items.map((item) => [item.sourceDocumentId!, item.id]));
+}
+
 export async function documentMetadataColumns(
   db: Db,
   metas: readonly DocumentMeta[],
@@ -761,7 +781,14 @@ async function persistDocumentProjection(
   const committedAt = await repo.commitDate(projection.sha);
   await db.$transaction(async (tx) => {
     const [metadata] = await documentMetadataColumns(tx, [projection.meta]);
+    const wikiSourceItemId =
+      projection.wikiSourceItemId ??
+      (await wikiSourceItemIds(tx, projection.projectId, [projection.id])).get(
+        projection.id,
+      ) ??
+      null;
     const data = {
+      wikiSourceItemId,
       path: projection.path,
       kind: documentKindOfPath(projection.path),
       slug: projection.slug,
@@ -937,6 +964,7 @@ async function commitPreparedWrite(
       apiOperation: metadata.apiOperation,
       runId: metadata.runId,
       wikiRequestHash: metadata.wikiRequestHash,
+      wikiInputId: metadata.wikiInputId,
       beforeCommit: metadata.beforeCommit,
       metadataOverride: overridden,
     },
@@ -1318,6 +1346,9 @@ export async function writeDocumentInRepo(
       meta,
       targets: saved.targets,
       create: true,
+      ...(request.wikiSourceItemId && {
+        wikiSourceItemId: request.wikiSourceItemId,
+      }),
       oldPath: null,
       body: saved.body,
       assets: request.assets ?? [],
@@ -2048,6 +2079,11 @@ export async function rebuildIndex(
         db,
         rows.map((row) => row.meta),
       );
+      const sourceItems = await wikiSourceItemIds(
+        db,
+        input.projectId,
+        rows.map((row) => row.id),
+      );
 
       await db.$transaction(async (tx) => {
         await tx.document.deleteMany({
@@ -2091,6 +2127,7 @@ export async function rebuildIndex(
             ...machineEditorColumns(machineRefOf(attribution[index])),
             lastEditedByName: row.head.authorName,
             lastEditedAt: row.head.date,
+            wikiSourceItemId: sourceItems.get(row.id) ?? null,
             ...metadata[index]!,
           };
           await tx.document.upsert({

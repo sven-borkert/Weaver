@@ -6,6 +6,7 @@ import {
   WIKI_NO_WORKER_LIMIT_MS,
   WIKI_PREPARING_LIMIT_MS,
 } from "../wiki/states";
+import { prepareRunItems } from "./wikiPrepare";
 import {
   emitRunEnded,
   endRun,
@@ -171,15 +172,10 @@ async function dispatchQueuedRuns(db: PrismaClient): Promise<number> {
   return queued.length;
 }
 
-export type PrepareRunItems = (
-  db: PrismaClient,
-  run: PreparingRun,
-) => Promise<void>;
-
 /** One minute delivery; every transition is conditional, so several workers may run it at once. */
 export async function runWikiTick(
   db: PrismaClient,
-  options: WikiTickOptions & { prepare?: PrepareRunItems } = {},
+  options: WikiTickOptions = {},
 ): Promise<{ prepared: number; dispatched: number; cancelled: number }> {
   const now = options.now ?? new Date();
   const preparing = await db.wikiRun.findMany({
@@ -191,7 +187,7 @@ export async function runWikiTick(
   const errors: unknown[] = [];
   for (const run of preparing) {
     try {
-      await options.prepare?.(db, run);
+      await prepareRunItems(db, run);
       await failUnparsedAtLimit(db, run, now);
       await concludePreparation(db, run, now);
     } catch (error) {

@@ -93,6 +93,73 @@ describe("wiki input queue", () => {
     expect((await addNote(f, "\u200b\n  \ntext line")).title).toBe("text line");
   }, 15_000);
 
+  const SECRET = ["ghp_", "abcdefghijklmnopqrstuvwxyz0123456789"].join("");
+  const NEUTRAL = /^Note \d{4}-\d{2}-\d{2}$/;
+
+  it.each([
+    ["derived from the first line", `key ${SECRET}\n\nbody`, undefined],
+    ["supplied", "body", `Rotate ${SECRET}`],
+    ["past the title cut-off", `${"word ".repeat(30)}${SECRET}`, undefined],
+  ])(
+    "a title with a secret %s is stored neutral",
+    async (_label, text, title) => {
+      const f = await fixture();
+      const created = await addNote(f, text, title);
+      expect(created.title).toMatch(NEUTRAL);
+      const list = await listInputs(f.db, f.viewerContext, {
+        projectId: f.projectId,
+      });
+      expect(JSON.stringify(list)).not.toContain(SECRET);
+      expect(JSON.stringify(list)).not.toContain("ghp_");
+    },
+    15_000,
+  );
+
+  it("remove keeps only the id, kind, status, timestamps and the source link", async () => {
+    const f = await fixture();
+    const created = await addNote(f, "Private first line\n\nbody");
+    const digest = "a".repeat(64);
+    await f.db.wikiInputItem.update({
+      where: { id: created.id },
+      data: {
+        status: "held",
+        heldDigest: digest,
+        heldHits: [{ kind: "jwt", location: "note, line 1" }],
+        confirmedDigest: digest,
+        outcomeNote: "note",
+        errorCode: "X",
+        errorMessage: "message",
+      },
+    });
+    await removeInput(f.db, f.editorContext, {
+      projectId: f.projectId,
+      itemId: created.id,
+    });
+    const row = await f.db.wikiInputItem.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    expect(row).toMatchObject({
+      status: "removed",
+      kind: "text",
+      title: "Removed input",
+      text: null,
+      textDigest: null,
+      artifactId: null,
+      artifactDigest: null,
+      byteSize: 0,
+      heldDigest: null,
+      heldHits: null,
+      confirmedDigest: null,
+      confirmedById: null,
+      outcomeNote: null,
+      errorCode: null,
+      errorMessage: null,
+      createdById: null,
+      processStartedById: null,
+    });
+    expect(JSON.stringify(row)).not.toContain("Private first line");
+  }, 15_000);
+
   it("refuses over the limit, images and a Viewer", async () => {
     const f = await fixture();
     await expect(addNote(f, "x".repeat(200_001))).rejects.toMatchObject({

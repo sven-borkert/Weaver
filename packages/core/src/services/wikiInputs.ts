@@ -5,6 +5,7 @@ import { CoreError } from "../errors";
 import { contentTypeMatches, normalizeMimeType } from "../ingestion/mimeTypes";
 import { readBlob } from "../ingestion/blobStore";
 import type { UserSecurityContext } from "../security/context";
+import { scanForSecrets } from "../security/secretScan";
 import { stripIgnorable } from "../wiki/guideText";
 import {
   WIKI_ACTIVE_RUN_STATUSES,
@@ -37,6 +38,7 @@ export const WIKI_INPUT_MIME_TYPES = new Set([
 const TYPE_REFUSAL =
   "The wiki accepts PDF, Word (docx), Excel (xlsx), CSV, Markdown and text. Keep other files in Files, or bring them in through Imports.";
 const RECENT_WINDOW_MS = 7 * 24 * 60 * 60_000;
+const REMOVED_TITLE = "Removed input";
 
 function badRequest(field: string, message: string): CoreError {
   return new CoreError("BAD_REQUEST", message, { field });
@@ -99,18 +101,37 @@ export function wikiTextDigest(text: string): string {
   return createHash("sha256").update(text).digest("hex");
 }
 
+/** Carries no authored text, so it is safe on a held item and on a source page. */
+export function neutralInputTitle(kind: "text" | "file", at: Date): string {
+  return `${kind === "text" ? "Note" : "File"} ${at.toISOString().slice(0, 10)}`;
+}
+
+/** Scans the whole candidate, so a secret past the cut-off cannot leave its start behind. */
+export function safeInputTitle(
+  kind: "text" | "file",
+  candidate: string,
+  max: number,
+  at: Date,
+): string {
+  if (scanForSecrets(candidate, kind).length > 0)
+    return neutralInputTitle(kind, at);
+  return candidate.slice(0, max);
+}
+
+function cleanTitle(value: string): string {
+  return stripIgnorable(value)
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /** A title that survives stripping, else the first text line, else a fixed fallback. */
-function noteTitle(title: string | undefined, text: string): string {
-  const clean = (value: string) =>
-    stripIgnorable(value)
-      .replace(/\p{Cc}+/gu, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-  const given = clean(title ?? "");
-  if (given) return given.slice(0, 200);
+function noteTitle(title: string | undefined, text: string, now: Date): string {
+  const given = cleanTitle(title ?? "");
+  if (given) return safeInputTitle("text", given, 200, now);
   for (const line of text.split("\n")) {
-    const candidate = clean(line.replace(/^#+\s*/, ""));
-    if (candidate) return candidate.slice(0, 120);
+    const candidate = cleanTitle(line.replace(/^#+\s*/, ""));
+    if (candidate) return safeInputTitle("text", candidate, 120, now);
   }
   return "Untitled note";
 }
@@ -133,7 +154,7 @@ export async function addTextInput(
       "text",
       "Notes cannot contain images. Add the text without them.",
     );
-  const title = noteTitle(input.title, input.text);
+  const title = noteTitle(input.title, input.text, new Date());
   const created = await db.$transaction(async (tx) => {
     await lockEnabledSettings(tx, input.projectId);
     await assertQueueRoom(tx, input.projectId, 1);
@@ -231,8 +252,12 @@ export async function addFileInputs(
             projectId: input.projectId,
             kind: "file",
             title:
-              stripIgnorable(artifact.filename).trim().slice(0, 255) ||
-              "Untitled file",
+              safeInputTitle(
+                "file",
+                cleanTitle(artifact.filename),
+                255,
+                new Date(),
+              ) || "Untitled file",
             artifactId: artifact.id,
             artifactDigest: artifact.contentDigest,
             byteSize: artifact.byteSize,
@@ -612,11 +637,25 @@ export async function removeInput(
         ],
       },
     },
+    // sourceDocumentId and sourceTableId stay: a committed source page keeps its guard.
     data: {
       status: "removed",
+      title: REMOVED_TITLE,
       runId: null,
       text: null,
+      textDigest: null,
+      artifactId: null,
+      artifactDigest: null,
+      byteSize: 0,
       heldHits: Prisma.DbNull,
+      heldDigest: null,
+      confirmedById: null,
+      confirmedDigest: null,
+      createdById: null,
+      processStartedById: null,
+      outcomeNote: null,
+      errorCode: null,
+      errorMessage: null,
       revision: { increment: 1 },
     },
   });

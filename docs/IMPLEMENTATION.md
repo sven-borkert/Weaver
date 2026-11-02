@@ -551,7 +551,10 @@ project; states live in pure [`wiki/states.ts`](../packages/core/src/wiki/states
 [`wikiTick.ts`](../packages/core/src/services/wikiTick.ts) runs every minute on the `wiki` worker role;
 `reapWikiRuns` (no-worker cancel after 10 minutes, 75-minute preparing limit) also runs in `system.reconcile`
 on every worker, because a deployment with no `wiki` worker has no tick either. Until a runner is injected
-`wiki.run` fails the run with `RUNNER_UNAVAILABLE`.
+`wiki.run` fails the run with `RUNNER_UNAVAILABLE`. [`wikiPrepare.ts`](../packages/core/src/services/wikiPrepare.ts) drives
+each item (scan with [`security/secretScan.ts`](../packages/core/src/security/secretScan.ts), then write) and
+[`wikiSourceWriter.ts`](../packages/core/src/services/wikiSourceWriter.ts) commits source pages as the agent under the
+preparing-phase fence; `Document.wikiSourceItemId` is re-derived from `WikiInputItem` wherever a projection row is recreated.
 
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS

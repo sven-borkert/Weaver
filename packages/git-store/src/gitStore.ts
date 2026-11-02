@@ -703,6 +703,8 @@ function makeRepo(dir: string) {
         apiRequestHash?: string;
         apiOperation?: string;
         wikiRequestHash?: string;
+        /** Weaver-Wiki-Input-Id on a source writer commit. */
+        wikiInputId?: string;
         beforeCommit?: () => Promise<void>;
         runId?: string;
         /** Document metadata fields the writer set explicitly instead of defaulting. */
@@ -756,6 +758,12 @@ function makeRepo(dir: string) {
         (!operationId || (bootstrap ? runId !== undefined : !runId))
       )
         throw new Error("incomplete wiki request identity");
+      const wikiInputId = options?.wikiInputId;
+      if (
+        wikiInputId !== undefined &&
+        (!isWikiAgentAuthor(author) || !MACHINE_ID_RE.test(wikiInputId))
+      )
+        throw new Error("invalid wiki input id");
       const overridden = options?.metadataOverride ?? [];
       if (overridden.some((field) => !METADATA_OVERRIDE_FIELDS.has(field))) {
         throw new Error("invalid metadata override field");
@@ -792,6 +800,8 @@ function makeRepo(dir: string) {
         );
       if (wikiRequestHash !== undefined)
         args.push("--trailer", `Weaver-Wiki-Request-Hash: ${wikiRequestHash}`);
+      if (wikiInputId !== undefined)
+        args.push("--trailer", `Weaver-Wiki-Input-Id: ${wikiInputId}`);
       if (overridden.length > 0) {
         args.push(
           "--trailer",
