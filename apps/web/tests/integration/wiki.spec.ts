@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { simpleGit } from "simple-git";
 import { createCredentialUser } from "@weaver/auth";
 import { contentOperationSchema } from "@weaver/core/services/contentOperations";
@@ -41,7 +41,7 @@ import {
 import { createTaskRun } from "./_dashboardFixtures";
 
 const HASH = "a".repeat(64);
-const HEADER_ONLY = { sourceFolderPaths: [] };
+const HEADER_ONLY = { guideDocumentId: null, sourceFolderPaths: [] };
 
 async function fixture(suffix = "w") {
   const db = getPrisma();
@@ -378,7 +378,6 @@ describe("applyWikiOperation", () => {
       operation: unknown,
       options: {
         operationId?: string;
-        requestHash?: string;
         guards?: WikiWriteGuards;
         fence?: WikiWriteFence;
         beforeCommit?: () => Promise<void>;
@@ -386,11 +385,9 @@ describe("applyWikiOperation", () => {
     ) =>
       applyWikiOperation(f.db, {
         run: options.fence ?? fence,
-        guards: options.guards ?? HEADER_ONLY,
+        guards: async () => options.guards ?? HEADER_ONLY,
         operation: operation as WikiOperation,
         operationId: options.operationId ?? nextId(),
-        requestHash:
-          options.requestHash ?? wikiRequestHash(operation as WikiOperation),
         beforeCommit: options.beforeCommit,
       });
     const create = (title = "Page", markdown = "First paragraph.") =>
@@ -540,7 +537,7 @@ describe("applyWikiOperation", () => {
     const allowed = ["document.create", "document.patch", "content.lifecycle"];
     for (const kind of kinds.filter((name) => !allowed.includes(name)))
       await expect(
-        w.apply({ kind, projectId: w.project.id }, { requestHash: HASH }),
+        w.apply({ kind, projectId: w.project.id }),
         kind,
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     const actions = contentOperationSchema.options.flatMap((option) =>
@@ -549,10 +546,7 @@ describe("applyWikiOperation", () => {
     expect(actions).toContain("folder_create");
     for (const action of actions.filter((name) => name !== "folder_create"))
       await expect(
-        w.apply(
-          { kind: "content.lifecycle", action, projectId: w.project.id },
-          { requestHash: HASH },
-        ),
+        w.apply({ kind: "content.lifecycle", action, projectId: w.project.id }),
         action,
       ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await w.head()).toBe(before);
@@ -569,9 +563,9 @@ describe("applyWikiOperation", () => {
       { ...w.create("Other"), metadata: { createdBy: { name: "Someone" } } },
       { ...folder(w), resourceType: "table" },
     ])
-      await expect(
-        w.apply(operation, { requestHash: HASH }),
-      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(w.apply(operation)).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+      });
   });
 
   it("stays inside its project", async () => {
@@ -720,7 +714,10 @@ describe("applyWikiOperation", () => {
 
     await w.apply(folder(w, "Wiki"));
     await w.apply(folder(w, "Sources", ["wiki"]));
-    const guards = { sourceFolderPaths: ["wiki/sources"] };
+    const guards = {
+      guideDocumentId: null,
+      sourceFolderPaths: ["wiki/sources"],
+    };
     await expect(
       w.apply(
         { ...w.create("Inside"), folderPath: ["wiki", "sources"] },
@@ -827,17 +824,11 @@ describe("applyWikiOperation", () => {
       commitSha: patched.commitSha,
       resourceId: created.resourceId,
     });
-    const reread = await w.apply(
-      patch(w, created.resourceId!, patched.commitSha),
-      {
+    await expect(
+      w.apply(patch(w, created.resourceId!, patched.commitSha), {
         operationId: patchId,
-        requestHash: wikiRequestHash(operation),
-      },
-    );
-    expect(reread).toMatchObject({
-      recovered: true,
-      commitSha: patched.commitSha,
-    });
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
 
     const folderId = w.nextId();
     const made = await w.apply(folder(w), { operationId: folderId });
@@ -876,29 +867,22 @@ describe("applyWikiOperation", () => {
     const createId = w.nextId();
     const created = await w.apply(w.create(), { operationId: createId });
     await expect(
-      w.apply(w.create(), {
-        operationId: createId,
-        requestHash: "b".repeat(64),
-      }),
+      w.apply(w.create("Another request"), { operationId: createId }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
 
     const operation = patch(w, created.resourceId!, created.commitSha);
     const patchId = w.nextId();
     await w.apply(operation, { operationId: patchId });
     await expect(
-      w.apply(operation, {
+      w.apply(patch(w, created.resourceId!, "b".repeat(40)), {
         operationId: patchId,
-        requestHash: "b".repeat(64),
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
 
     const folderId = w.nextId();
     await w.apply(folder(w), { operationId: folderId });
     await expect(
-      w.apply(folder(w), {
-        operationId: folderId,
-        requestHash: "b".repeat(64),
-      }),
+      w.apply(folder(w, "Another request"), { operationId: folderId }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
 
     await revokeWikiAgent(w.db, { projectId: w.project.id });
@@ -959,13 +943,30 @@ describe("applyWikiOperation", () => {
     await expect(
       w.apply(patch(w, created.resourceId!, forgedSha), {
         operationId: patchId,
-        requestHash: wikiRequestHash(patchOp),
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await w.head()).toBe(forgedSha);
   });
 
-  it("validates its operation id and request hash", async () => {
+  it("resolves guards under the project lock", async () => {
+    const w = await writer();
+    const page = await w.apply(w.create("Guide later"));
+    const resolvedInsideLock = vi.fn(async () => ({
+      guideDocumentId: page.resourceId,
+      sourceFolderPaths: [],
+    }));
+    await expect(
+      applyWikiOperation(w.db, {
+        run: w.fence,
+        guards: resolvedInsideLock,
+        operation: patch(w, page.resourceId!, page.commitSha),
+        operationId: w.nextId(),
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(resolvedInsideLock).toHaveBeenCalledOnce();
+  });
+
+  it("validates its operation id", async () => {
     const w = await writer();
     for (const operationId of [
       "project-api:1",
@@ -977,8 +978,5 @@ describe("applyWikiOperation", () => {
         w.apply(w.create(), { operationId }),
         operationId,
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
-    await expect(
-      w.apply(w.create(), { requestHash: "short" }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });

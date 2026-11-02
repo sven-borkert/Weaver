@@ -69,7 +69,7 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
 
 ## Direct writes
 
-`services/wikiOperations.ts` `applyWikiOperation(db, { run, guards, operation, operationId, requestHash, summary?, beforeCommit? })`
+`services/wikiOperations.ts` `applyWikiOperation(db, { run, guards, operation, operationId, summary?, beforeCommit? })`
 is the agent's only write path.
 
 - `WikiOperation` is strict: `document.create`, `document.patch` (no title, no metadata) and

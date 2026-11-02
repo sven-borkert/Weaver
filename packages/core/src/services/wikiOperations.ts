@@ -35,7 +35,7 @@ export type WikiWriteFence = {
 
 /** Settings-owned protected locations, supplied by the fence provider. */
 export type WikiWriteGuards = {
-  guideDocumentId?: string | null;
+  guideDocumentId: string | null;
   sourceFolderPaths: string[];
 };
 
@@ -73,7 +73,6 @@ export type WikiWriteResult = {
   recovered: boolean;
 };
 
-const REQUEST_HASH_RE = /^[0-9a-f]{64}$/;
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const OPERATION_ID_RE = new RegExp(
   `^(?:wiki-run:(${UUID}):\\d{4}|wiki-input:${UUID}|wiki-revert:${UUID}:\\d{4})$`,
@@ -171,28 +170,27 @@ async function assertPatchablePage(
   return row.path;
 }
 
-function assertOperationContent(
+function assertOperationImages(operation: WikiOperation): void {
+  if (operation.kind === "document.create")
+    assertNoImageMarkup(operation.markdown);
+  if (operation.kind === "document.patch")
+    for (const action of operation.actions) {
+      if ("text" in action) assertNoImageMarkup(action.text);
+      if ("replace" in action) assertNoImageMarkup(action.replace);
+    }
+}
+
+function assertOperationLocation(
   operation: WikiOperation,
   guards: WikiWriteGuards,
 ): void {
-  switch (operation.kind) {
-    case "document.create":
-      assertOutsideSourceFolders(operation.folderPath, guards);
-      assertNoImageMarkup(operation.markdown);
-      return;
-    case "document.patch":
-      for (const action of operation.actions) {
-        if ("text" in action) assertNoImageMarkup(action.text);
-        if ("replace" in action) assertNoImageMarkup(action.replace);
-      }
-      return;
-    case "content.lifecycle":
-      assertOutsideSourceFolders(
-        [...operation.parentPath, slugify(operation.name)],
-        guards,
-      );
-      return;
-  }
+  if (operation.kind === "document.create")
+    assertOutsideSourceFolders(operation.folderPath, guards);
+  if (operation.kind === "content.lifecycle")
+    assertOutsideSourceFolders(
+      [...operation.parentPath, slugify(operation.name)],
+      guards,
+    );
 }
 
 /** The canonical request identity recorded as Weaver-Wiki-Request-Hash. */
@@ -211,15 +209,15 @@ export async function applyWikiOperation(
   db: PrismaClient,
   input: {
     run: WikiWriteFence;
-    guards: WikiWriteGuards;
+    /** Resolved under the project lock so a settings change cannot go unseen. */
+    guards: () => Promise<WikiWriteGuards>;
     operation: WikiOperation;
     operationId: string;
-    requestHash: string;
     summary?: string;
     beforeCommit?: () => Promise<void>;
   },
 ): Promise<WikiWriteResult> {
-  const { run, guards } = input;
+  const { run } = input;
   assertWikiOperationKind(input.operation);
   const parsed = wikiOperationSchema.safeParse(input.operation);
   if (!parsed.success)
@@ -228,8 +226,7 @@ export async function applyWikiOperation(
   const idMatch = OPERATION_ID_RE.exec(input.operationId);
   if (!idMatch || (idMatch[1] !== undefined && idMatch[1] !== run.runId))
     throw new CoreError("BAD_REQUEST", "Invalid wiki operation id");
-  if (!REQUEST_HASH_RE.test(input.requestHash))
-    throw new CoreError("BAD_REQUEST", "Invalid wiki request hash");
+  const requestHash = wikiRequestHash(operation);
   const summary = (input.summary ?? "Wiki agent update").trim();
   if (
     summary.length === 0 ||
@@ -243,20 +240,20 @@ export async function applyWikiOperation(
     projectId: run.projectId,
   });
   await assertProjectRole(db, operation.projectId, actor, "Editor");
-  assertOperationContent(operation, guards);
+  assertOperationImages(operation);
   await run.assertLive();
 
   const author = wikiAgentContentAuthor(actor);
   const identity: RecoveryIdentity = {
     wikiAgentId: run.agentId,
-    wikiRequestHash: input.requestHash,
+    wikiRequestHash: requestHash,
   };
   const options = {
     table: null,
     summary,
     operationId: input.operationId,
     runId: run.runId,
-    wikiRequestHash: input.requestHash,
+    wikiRequestHash: requestHash,
     message: (path: string) => `wiki: ${path}`,
     assertPatched: assertPatchAddsNoImageMarkup,
     beforeCommit: async () => {
@@ -268,6 +265,8 @@ export async function applyWikiOperation(
 
   const outcome = await withProjectRepo(operation.projectId, async (repo) => {
     await run.assertLive();
+    const guards = await input.guards();
+    assertOperationLocation(operation, guards);
     if (operation.kind === "document.patch") {
       const path = await assertPatchablePage(db, operation, guards);
       if (path === null)
