@@ -6,6 +6,7 @@ import {
 import { z } from "zod";
 import {
   boundItems,
+  defineSharedReadTool,
   defineTool,
   newOutputBudget,
   requireScope,
@@ -13,7 +14,7 @@ import {
   utf8Bytes,
 } from "../contract";
 
-export const searchEntitiesTool = defineTool({
+export const searchEntitiesTool = defineSharedReadTool({
   name: "search_entities",
   kind: "read",
   capability: "content:read",
@@ -100,7 +101,7 @@ export const entityNeighborhoodTool = defineTool({
   },
 });
 
-export const entityDetailTool = defineTool({
+export const entityDetailTool = defineSharedReadTool({
   name: "entity_detail",
   kind: "read",
   capability: "content:read",

@@ -5,7 +5,7 @@ import {
   sourceLocatorSchema,
   validateSourceLocators,
 } from "../assistant/citations";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { requireOwnedConversation } from "./assistantConversations";
 import { resolveProjectAccess } from "./projectAccess";
 
@@ -30,7 +30,7 @@ export type CitationCard = {
 
 export async function listCitations(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { conversationId: string; messageId?: string },
 ): Promise<CitationCard[]> {
   await requireOwnedConversation(db, actor, input.conversationId);

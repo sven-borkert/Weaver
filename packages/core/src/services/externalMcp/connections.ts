@@ -3,7 +3,12 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../../errors";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  isHumanPrincipal,
+  type SecurityContext,
+  type UserSecurityContext,
+} from "../../security/context";
 import {
   connectionCreateSchema,
   connectionUpdateSchema,
@@ -84,6 +89,7 @@ export const revisionInput = z.object({
 });
 export function assertConnectionManager(actor: SecurityContext) {
   if (
+    !isHumanPrincipal(actor) ||
     actor.authenticationMethod === "task" ||
     !hasCapability(actor, "external:manage")
   )
@@ -126,7 +132,7 @@ export async function lockExternalConnection(
   return row;
 }
 export function externalSettingsChanged(
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   id: string,
   action: string,
 ) {
@@ -141,7 +147,7 @@ export function externalSettingsChanged(
 }
 export async function createExternalConnection(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: z.input<typeof connectionCreateSchema>,
 ) {
   assertConnectionManager(actor);
@@ -185,7 +191,7 @@ export async function createExternalConnection(
 }
 export async function getExternalConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   id: string,
 ) {
   assertConnectionManager(actor);
@@ -213,7 +219,7 @@ export async function getExternalConnection(
 }
 export async function listExternalConnections(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   page: { cursor?: string; limit?: number; search?: string } = {},
 ) {
   assertConnectionManager(actor);
@@ -246,7 +252,7 @@ export async function listExternalConnections(
 }
 export async function updateExternalConnection(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     id: string;
     expectedRevision: number;
@@ -328,7 +334,7 @@ export async function updateExternalConnection(
 }
 export async function deleteExternalConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { id: string; expectedRevision: number },
 ) {
   assertConnectionManager(actor);
@@ -461,7 +467,7 @@ async function assertConnectionExists(
 
 export async function listExternalTools(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: z.input<typeof toolFilterSchema> & { cursor?: string; limit?: number },
 ) {
   assertConnectionManager(actor);
@@ -504,7 +510,7 @@ export async function listExternalTools(
 
 export async function listExternalToolKeys(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: z.input<typeof toolFilterSchema>,
 ) {
   assertConnectionManager(actor);
@@ -540,7 +546,7 @@ export async function listExternalToolKeys(
 
 export async function getExternalTool(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   toolId: string,
 ) {
   assertConnectionManager(actor);

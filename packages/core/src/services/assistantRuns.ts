@@ -34,7 +34,10 @@ import {
 import { CoreError } from "../errors";
 import { parseKnowledgeConfig } from "../knowledge/config";
 import { requestKnowledgeJob } from "../jobs/queue";
-import { mayAccessProject, type SecurityContext } from "../security/context";
+import {
+  mayAccessProject,
+  type UserSecurityContext,
+} from "../security/context";
 import {
   ACTIVE_RUN_STATUSES,
   assertAssistantUse,
@@ -117,7 +120,7 @@ export async function dispatchAssistantRun(
 
 export async function submitUserMessage(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     conversationId: string;
     text: string;
@@ -215,7 +218,7 @@ export async function submitUserMessage(
 
 export async function getRun(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   runId: string,
 ): Promise<RunView> {
   assertAssistantUse(actor);
@@ -245,7 +248,7 @@ export type LeasedRun = {
     externalToolSnapshots: ExternalToolSnapshot[];
   };
   attempt: { id: string; number: number };
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   user: { id: string; name: string | null; email: string };
   history: MessageView[];
 };
@@ -918,7 +921,7 @@ export async function cancelRunFromWorker(
 
 export async function listRunEvents(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { runId: string; after: number; limit?: number },
 ): Promise<{
   events: Array<{
@@ -969,7 +972,7 @@ export async function listRunEvents(
  * marked `cancelling` and the worker observes it through `heartbeatAttempt`. */
 export async function requestRunCancel(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   runId: string,
 ): Promise<RunView> {
   await getRun(db, actor, runId);

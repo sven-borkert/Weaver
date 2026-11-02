@@ -22,7 +22,7 @@ import {
   apiKeyPermissionsFromCapabilities,
   createApiKeySecurityContext,
   type Capability,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   invalidateDiagnosticsSettingsCache,
@@ -47,7 +47,7 @@ beforeEach(resetDb);
 type Fixture = Awaited<ReturnType<typeof makeExternalFixture>>;
 const ctx = (
   f: Fixture,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   external = true,
 ): ToolContext => ({
   db: f.db,

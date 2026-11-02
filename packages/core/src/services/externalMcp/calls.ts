@@ -17,7 +17,7 @@ import {
 } from "../../externalMcp/digest";
 import { CoreError } from "../../errors";
 import { requiresApproval } from "../../externalMcp/policy";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { authorizeExternalInvocation } from "./access";
 import { encryptExternalSecret } from "./credentials";
 
@@ -75,7 +75,7 @@ export function callOwner(call: ExternalMcpCall): ExecutionOwner {
 }
 export function assertCallIdentity(
   call: ExternalMcpCall,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: ExternalInvocation,
 ) {
   if (call.userId !== actor.userId) throw new CoreError("NOT_FOUND");
@@ -121,7 +121,7 @@ async function conversationAutoApproves(
 }
 export async function prepareExternalCall(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: ExternalInvocation,
 ): Promise<{
   callId: string;

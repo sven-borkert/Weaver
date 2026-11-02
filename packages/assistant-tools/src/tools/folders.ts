@@ -2,12 +2,12 @@ import { listContentFolders } from "@weaver/core/services/folders";
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newPageBudget,
   requireScope,
 } from "../contract";
 
-export const listContentFoldersTool = defineTool({
+export const listContentFoldersTool = defineSharedReadTool({
   name: "list_content_folders",
   kind: "read",
   capability: "content:read",

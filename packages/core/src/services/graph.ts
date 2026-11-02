@@ -2,6 +2,7 @@ import { CoreError } from "@weaver/core/errors";
 
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { normalizeRelationType } from "@weaver/core/knowledge/extraction";
+import type { SecurityContext } from "../security/context";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import { listProjectsForUser } from "./projects";
 
@@ -100,7 +101,7 @@ type EvidenceCitationRow = {
 export async function searchGraphEntities(
   db: PrismaClient,
   input: SearchGraphEntitiesInput,
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   const query = input.query.trim();
   const limit = input.limit ?? 20;
@@ -394,7 +395,7 @@ export async function getGraphNeighborhood(
 export async function getGraphEntityDetail(
   db: PrismaClient,
   input: { entityId: string },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   const entity = await loadActiveEntity(db, input.entityId, actor);
   const rows = await db.$queryRaw<MentionCitationRow[]>(Prisma.sql`
@@ -487,7 +488,7 @@ export async function getGraphRelationDetail(
 async function loadActiveEntity(
   db: PrismaClient,
   entityId: string,
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<EntityRecord> {
   const projects = await listProjectsForUser(db, actor);
   const projectIds = projects.map((project) => project.id);

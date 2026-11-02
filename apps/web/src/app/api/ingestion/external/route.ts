@@ -10,7 +10,7 @@ import { parseKnowledgeConfig } from "@weaver/core/knowledge/config";
 import { resolveApiKeySecurityContext } from "@weaver/core/security/bearer";
 import {
   hasCapability,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   authorizeIngestionUpload,
@@ -64,7 +64,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
   const requestId = randomUUID();
   const started = Date.now();
-  let actor: SecurityContext;
+  let actor: UserSecurityContext;
   try {
     actor = await resolveApiKeySecurityContext(
       db,

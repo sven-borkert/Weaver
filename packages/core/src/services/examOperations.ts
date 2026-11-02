@@ -1,11 +1,11 @@
 import type { Prisma, PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { IDEMPOTENCY_KEY_RE, requestHash } from "./mcpOperations";
 
 export async function withExamOperation<T extends object>(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { idempotencyKey: string; toolName: string; request: unknown },
   run: (tx: Prisma.TransactionClient) => Promise<T>,
   authorize?: (tx: Prisma.TransactionClient) => Promise<unknown>,

@@ -22,8 +22,10 @@ import type {
 import { CoreError } from "../../errors";
 import {
   hasCapability,
+  isHumanPrincipal,
   mayAccessProject,
   type SecurityContext,
+  type UserSecurityContext,
 } from "../../security/context";
 import { assertProjectRole, notDeleted } from "../projectAccess";
 import {
@@ -39,7 +41,7 @@ export { externalToolSnapshotsSchema } from "../../externalMcp/schema";
 
 async function assertPrincipal(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   mcp = false,
 ) {
   const method = actor.authenticationMethod;
@@ -114,7 +116,7 @@ function assertSameScope(raw: unknown, scope: ScopeSnapshot) {
 }
 async function assertScope(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   scope: ScopeSnapshot,
 ) {
   if (!scope.projectIds.length)
@@ -194,6 +196,7 @@ export async function listAvailableExternalTools(
   connections: Array<{ id: string; name: string }>;
   tools: AvailableExternalTool[];
 }> {
+  if (!isHumanPrincipal(actor)) throw new CoreError("FORBIDDEN");
   await assertPrincipal(deps, actor);
   const scope = parseScope(input.scope);
   await assertScope(deps, actor, scope);
@@ -272,10 +275,10 @@ export function assertActiveAssistantAttempt(
 
 async function bindOwner(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: ExternalInvocation,
   connectionId: string,
-): Promise<{ actor: SecurityContext; outputProjectId?: string }> {
+): Promise<{ actor: UserSecurityContext; outputProjectId?: string }> {
   const { owner } = invocation;
   const now = deps.now();
   if (owner.kind === "mcp") {
@@ -368,7 +371,7 @@ async function bindOwner(
 
 async function authorizeInvocation(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: ExternalInvocation,
   validate = true,
 ): Promise<AuthorizedExternalCall> {
@@ -468,14 +471,14 @@ async function authorizeInvocation(
 
 export async function authorizeExternalInvocation(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: ExternalInvocation,
 ) {
   return authorizeInvocation(deps, actor, invocation);
 }
 export async function authorizeExternalInvocationContext(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   invocation: Omit<ExternalInvocation, "arguments">,
 ) {
   return authorizeInvocation(
@@ -487,7 +490,7 @@ export async function authorizeExternalInvocationContext(
 }
 export async function assertExternalApprovalOwner(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   runId: string,
   scope: ScopeSnapshot,
 ) {

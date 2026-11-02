@@ -14,7 +14,7 @@ import {
 } from "../../remotes/urls";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "../../security/context";
 import type { RemoteInstanceView, RemoteRuntimeDeps } from "./types";
 
@@ -125,7 +125,7 @@ function conflictFromUnique(error: unknown): never {
 
 export async function listRemoteInstances(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<RemoteInstanceView[]> {
   assertSystemAdmin(actor);
   return db.remoteInstance.findMany({
@@ -136,7 +136,7 @@ export async function listRemoteInstances(
 
 export async function createRemoteInstance(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { name: string; baseUrl: string; enabled?: boolean },
 ): Promise<RemoteInstanceView> {
   assertSystemAdmin(actor);
@@ -191,7 +191,7 @@ async function lockRemote(tx: Tx, id: string, expectedRevision?: number) {
 
 export async function updateRemoteInstance(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     id: string;
     expectedRevision: number;
@@ -244,7 +244,7 @@ export async function updateRemoteInstance(
 
 export async function deleteRemoteInstance(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { id: string; expectedRevision: number },
 ): Promise<void> {
   assertSystemAdmin(actor);
@@ -259,7 +259,7 @@ type CheckStatus = "ok" | "unreachable" | "not_weaver" | "oauth_unavailable";
 
 export async function testRemoteInstance(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { id: string },
 ): Promise<{
   status: CheckStatus;

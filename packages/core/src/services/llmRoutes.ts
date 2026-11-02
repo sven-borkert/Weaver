@@ -21,7 +21,7 @@ import {
 } from "../knowledge/dimensions";
 import { knowledgeExtractionFingerprint } from "../knowledge/identity";
 import { emitDiagnostic } from "../diagnostics/writer";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { assertLlmAdmin } from "./llmAdminAccess";
 import { withKnowledgeRoutingChange } from "./knowledgeRoutingChange";
 import { clampLimit, decodePageCursor, encodePageCursor } from "./adminPaging";
@@ -311,7 +311,7 @@ function view(
 
 export async function listLlmRoutes(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<LlmRouteView[]> {
   assertLlmAdmin(actor);
   const rows = await loadRoutes(db);
@@ -320,7 +320,7 @@ export async function listLlmRoutes(
 
 export async function listLlmRoutesPage(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { limit?: number; cursor?: string },
 ): Promise<{
   items: LlmRouteView[];
@@ -409,7 +409,7 @@ async function probeEmbeddingRouteSwitch(
 
 export async function setLlmRoute(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     purpose: ActiveLlmPurpose;
     modelId: string | null;

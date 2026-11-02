@@ -33,7 +33,7 @@ export type VerifiedApiKey = {
 
 export type VerifiedAccessToken = {
   kind: "oauth";
-  /** JWT `jti`; becomes SecurityContext.credentialId. */
+  /** JWT `jti`; becomes UserSecurityContext.credentialId. */
   tokenId: string;
   userId: string;
   clientId: string;

@@ -1,5 +1,10 @@
 import { CoreError } from "@weaver/core/errors";
-import { hasCapability, type Capability } from "@weaver/core/security/context";
+import {
+  hasCapability,
+  isHumanPrincipal,
+  type Capability,
+  type SecurityContext,
+} from "@weaver/core/security/context";
 import type { Prisma, PrismaClient, TrainingRole } from "@weaver/db/client";
 import { emitDiagnostic } from "../diagnostics/writer";
 import {
@@ -50,9 +55,13 @@ export function assertSessionPrincipal(actor: ProjectActor): void {
 export async function assertTrainer(
   db: Db,
   projectId: string,
-  actor: ProjectActor,
+  actor: SecurityContext,
   options?: { capability?: Capability },
 ): Promise<TrainerAccess> {
+  if (!isHumanPrincipal(actor)) {
+    await resolveProjectAccess(db, projectId, actor);
+    throw new CoreError("FORBIDDEN", "Exam access is not permitted");
+  }
   const access = await resolveProjectAccess(db, projectId, actor);
   if (
     actor.authenticationMethod === "task" ||
@@ -79,10 +88,11 @@ export async function assertTrainee(
 }
 export async function trainerProjectIds(
   db: Db,
-  actor: ProjectActor,
+  actor: SecurityContext,
   candidates: readonly string[],
 ): Promise<string[]> {
   if (
+    !isHumanPrincipal(actor) ||
     actor.authenticationMethod === "task" ||
     !hasCapability(actor, "content:read")
   )

@@ -9,7 +9,7 @@ import { getDocumentAtSnapshot } from "@weaver/core/services/documents";
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newPageBudget,
   requireScope,
   type ToolOutcome,
@@ -102,7 +102,7 @@ type NavigateDocumentOutput =
       nextCursor: string | null;
     });
 
-export const navigateDocumentTool = defineTool({
+export const navigateDocumentTool = defineSharedReadTool({
   name: "navigate_document",
   kind: "read",
   capability: "content:read",

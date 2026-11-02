@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@weaver/db/client";
 import { openProjectRepo } from "@weaver/git-store";
 import { z } from "zod";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { resolveProjectAccess } from "../services/projectAccess";
 import { cursorQueryIdentity } from "../services/contentCursors";
 import { parseDocumentFile } from "../documents/frontmatter";
@@ -296,7 +296,7 @@ async function tableSource(
 /** Drops locators the actor may not see or that point at unknown resources/revisions; never throws for one bad locator. */
 export async function validateSourceLocators(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   locators: readonly unknown[],
   cache = createSourceValidationCache(),
 ): Promise<ValidatedCitation[]> {

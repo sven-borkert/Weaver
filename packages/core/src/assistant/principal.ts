@@ -1,10 +1,10 @@
 import type { Prisma, PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 
 export async function assertLiveAssistantPrincipal(
   db: PrismaClient | Prisma.TransactionClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<void> {
   const now = new Date();
   const session =

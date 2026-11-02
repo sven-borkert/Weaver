@@ -6,7 +6,7 @@ import {
 } from "../../externalMcp/errors";
 import type { ExternalCallView } from "../../externalMcp/types";
 import { CoreError } from "../../errors";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { assertExternalApprovalOwner, type ExternalAccessDeps } from "./access";
 
 export function externalCallView(call: ExternalMcpCall): ExternalCallView {
@@ -29,7 +29,7 @@ export function externalCallView(call: ExternalMcpCall): ExternalCallView {
 }
 export async function listRunExternalCalls(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { runId: string; after?: string },
 ): Promise<{ calls: ExternalCallView[]; nextAfter: string | null }> {
   const run = await deps.db.assistantRun.findUnique({

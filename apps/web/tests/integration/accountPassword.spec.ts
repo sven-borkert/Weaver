@@ -18,7 +18,7 @@ import {
 /**
  * account.changePassword calls Better Auth's real /change-password endpoint,
  * which re-resolves the caller's session from a cookie in the request
- * headers (not from the fabricated SecurityContext) — so these tests sign in
+ * headers (not from the fabricated UserSecurityContext) — so these tests sign in
  * for real and forward the resulting session cookie as caller headers.
  */
 async function signInHeaders(email: string): Promise<Headers> {

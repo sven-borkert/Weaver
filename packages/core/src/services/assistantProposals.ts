@@ -12,7 +12,7 @@ import { withoutTitleHeading } from "../documents/importMarkdown";
 import { applyDocumentPatch } from "../documents/patch";
 import { parseDocumentBody, serializeDocumentBody } from "../editor/markdown";
 import { CoreError, isCoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { applyTableChange } from "../tables/change";
 import { diffTables } from "../tables/diff";
 import {
@@ -307,7 +307,7 @@ export function assertProposalFolderListed(
 
 async function listedProposalFolders(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   resourceType: "document" | "table",
 ): Promise<ReadonlySet<string>> {
@@ -321,7 +321,7 @@ async function listedProposalFolders(
 
 async function assertProposalFolderExists(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   operation: { projectId: string; folderPath: string[] },
   resourceType: "document" | "table",
 ): Promise<void> {
@@ -361,7 +361,7 @@ async function metadataPreviewLines(
 /** Checks the references with the proposer's access; the bytes are copied at acceptance. */
 async function imagePreviewLines(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   markdown: string,
 ): Promise<Array<{ type: "add"; text: string }>> {
@@ -377,7 +377,7 @@ async function imagePreviewLines(
  * throws BAD_REQUEST when the model's base is already stale. */
 async function prepare(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   operation: ProposalOperation,
 ): Promise<Prepared> {
   switch (operation.kind) {
@@ -792,7 +792,7 @@ async function prepare(
 
 export async function createProposal(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     conversationId: string;
     runId: string;
@@ -934,7 +934,7 @@ async function requireRunningProposalAttempt(
 
 async function requireOwnedProposal(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   proposalId: string,
 ): Promise<AssistantProposal> {
   assertAssistantUse(actor);
@@ -948,7 +948,7 @@ async function requireOwnedProposal(
 
 export async function listProposals(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { conversationId: string; includePreview?: boolean },
 ): Promise<ProposalView[]> {
   await requireOwnedConversation(db, actor, input.conversationId);
@@ -979,7 +979,7 @@ export async function listProposals(
 
 export async function getProposal(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   proposalId: string,
 ): Promise<ProposalView> {
   return toView(await requireOwnedProposal(db, actor, proposalId));
@@ -1011,7 +1011,7 @@ type AutomaticAcceptance = { attemptCount: number; attemptId: string };
 /** Auto-approve admits only the live attempt, in its pinned or sole project, while the setting is on. */
 async function admitAutomaticAcceptance(
   tx: Prisma.TransactionClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   proposal: Pick<AssistantProposal, "runId" | "conversationId">,
   projectId: string,
   automatic: AutomaticAcceptance,
@@ -1048,7 +1048,7 @@ async function admitAutomaticAcceptance(
 /** Exams are database rows: claim, write and resolve commit together, so no acceptance is left to recover. */
 async function acceptExamProposal(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   row: AssistantProposal,
   automatic?: AutomaticAcceptance,
 ): Promise<ProposalView> {
@@ -1242,7 +1242,7 @@ async function acceptProposalInternal(
 
 export async function rejectProposal(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   proposalId: string,
 ): Promise<ProposalView> {
   const row = await requireOwnedProposal(db, actor, proposalId);

@@ -515,6 +515,12 @@ project owns exactly one Better Auth organization whose `Member` rows are
 written only by core services; non-members — including global Admins —
 receive `NOT_FOUND`.
 
+`SecurityContext` is discriminated on `kind`: `UserSecurityContext` (session, API key, OAuth,
+task) or `WikiAgentSecurityContext` (a project's `WikiAgent` row,
+[`wikiAgents.ts`](../packages/core/src/services/wikiAgents.ts), no `User` or `Member`). Only
+agent-reachable services take the union (access, scope and shared content reads); all
+others take `UserSecurityContext`, so passing an agent context to them is a compile error.
+
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS
 transport in [`oidcProvider.ts`](../packages/auth/src/oidcProvider.ts). The web

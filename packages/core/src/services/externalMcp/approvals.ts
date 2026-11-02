@@ -14,7 +14,7 @@ import type {
   JsonObject,
 } from "../../externalMcp/types";
 import { scopeSnapshotSchema } from "../../assistant/scopeSchema";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { CoreError } from "../../errors";
 import { canonicalDigest } from "../../externalMcp/digest";
 import { decryptExternalSecret } from "./credentials";
@@ -147,7 +147,7 @@ function decryptArguments(
 }
 async function approvalOperation(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   id: string,
   decision?: "approve" | "deny",
 ): Promise<ExternalApprovalView> {
@@ -263,21 +263,21 @@ async function approvalOperation(
 }
 export async function getExternalApproval(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   id: string,
 ): Promise<ExternalApprovalView> {
   return approvalOperation(deps, actor, id);
 }
 export async function decideExternalApproval(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { id: string; decision: "approve" | "deny" },
 ): Promise<ExternalApprovalView> {
   return approvalOperation(deps, actor, input.id, input.decision);
 }
 export async function listRunExternalApprovals(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   runId: string,
 ): Promise<ExternalApprovalView[]> {
   const run = await deps.db.assistantRun.findUnique({

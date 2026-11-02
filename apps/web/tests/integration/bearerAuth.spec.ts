@@ -52,7 +52,7 @@ describe("bearer credentials", () => {
   });
 
   describe("personal API keys", () => {
-    it("resolves a restricted key to an apiKey SecurityContext and records last use", async () => {
+    it("resolves a restricted key to an apiKey UserSecurityContext and records last use", async () => {
       const user = await makeUser("Admin", "ba1");
       const project = await makeProject("Scoped");
       await addMembership(project.id, user.id, "Owner");
@@ -311,7 +311,7 @@ describe("bearer credentials", () => {
       expect(params.get("sig")).toBeTruthy();
     });
 
-    it("issues an audience-bound JWT after consent and resolves it to an oauth SecurityContext", async () => {
+    it("issues an audience-bound JWT after consent and resolves it to an oauth UserSecurityContext", async () => {
       await insertOAuthClient();
       const user = await makeUser("User", "oa1");
       const project = await makeProject("P");

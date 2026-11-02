@@ -7,7 +7,10 @@ import {
 } from "../diagnostics/retentionSettings";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
-import { assertSystemAdmin, type SecurityContext } from "../security/context";
+import {
+  assertSystemAdmin,
+  type UserSecurityContext,
+} from "../security/context";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { getSystemSetting, setSystemSetting } from "./systemSettings";
 
@@ -25,7 +28,7 @@ export type RetentionSettingsPatch = Partial<RetentionSettings>;
 
 export async function setRetentionSettings(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   patch: RetentionSettingsPatch,
 ): Promise<RetentionSettings> {
   assertSystemAdmin(actor);

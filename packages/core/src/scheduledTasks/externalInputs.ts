@@ -15,7 +15,7 @@ import type {
 import { CoreError, isCoreError } from "../errors";
 import {
   createTaskSecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "../security/context";
 import {
   authorizeExternalInvocation,
@@ -201,7 +201,7 @@ function inputFailure(error: unknown, signal: AbortSignal): TaskFailureCode {
 }
 export async function taskExternalInvocation(
   deps: Pick<ExternalRuntimeDeps, "db" | "now">,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     runId: string;
     scope: ScopeSnapshot;
@@ -243,7 +243,7 @@ export async function taskExternalInvocation(
 
 export async function fetchTaskExternalInputs(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     runId: string;
     scope: ScopeSnapshot;

@@ -14,7 +14,7 @@ import {
 } from "@weaver/core/ingestion/mimeTypes";
 import type {
   Capability,
-  SecurityContext,
+  UserSecurityContext,
 } from "@weaver/core/security/context";
 import type {
   IngestionFailureKind,
@@ -413,7 +413,7 @@ function submissionCapability(origin: IngestionOrigin): Capability {
 
 async function assertEditor(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   capability?: Capability,
 ): Promise<string> {
@@ -431,7 +431,7 @@ async function assertEditor(
 /** Authorizes a submission before its request body is allowed to reach disk. */
 export async function authorizeIngestionUpload(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   origin: IngestionOrigin,
 ): Promise<{ projectId: string }> {
@@ -467,7 +467,7 @@ export async function withProjectIngestionLifecycleLock<T>(
   );
 }
 
-async function loadBatch(db: Db, actor: SecurityContext, batchId: string) {
+async function loadBatch(db: Db, actor: UserSecurityContext, batchId: string) {
   if (!UUID_RE.test(batchId)) throw notFound();
   const batch = await db.ingestionBatch.findFirst({
     where: { id: batchId, project: { ...notDeleted } },
@@ -489,7 +489,7 @@ async function loadBatch(db: Db, actor: SecurityContext, batchId: string) {
 /** @internal Test fixture and future external-ingestion registration. */
 export async function createUploadBatch(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; origin: "upload" | "external"; label?: string },
 ): Promise<{ batchId: string }> {
   await assertEditor(db, actor, input.projectId);
@@ -516,7 +516,7 @@ export type RegisterUploadedFileOptions = {
 /** @internal Test fixture; browser uploads use atomic finalizeUploadBatch. */
 export async function registerUploadedFile(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     batchId: string;
     fileName: string;
@@ -578,7 +578,7 @@ export type FinalizeUploadFile = {
 /** Promotes and registers a complete upload batch under one lifecycle lock. */
 export async function finalizeUploadBatch(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     origin: IngestionOrigin;
@@ -789,7 +789,7 @@ function toBatchSummary(batch: BatchWithSummaryRelations): BatchSummary {
 
 export async function listBatches(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     limit?: number;
@@ -842,7 +842,7 @@ export async function listBatches(
 
 export async function getBatch(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { batchId: string },
 ): Promise<BatchDetail> {
   const batch = await loadBatch(db, actor, input.batchId);
@@ -863,7 +863,7 @@ export async function getBatch(
 
 export async function loadIngestionFile(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   fileId: string,
   withDraft = true,
 ) {
@@ -909,7 +909,7 @@ export function toFileDetail(
 
 export async function getFile(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { fileId: string },
 ): Promise<FileDetail> {
   return toFileDetail(await loadIngestionFile(db, actor, input.fileId));
@@ -930,7 +930,7 @@ export function assertDraftRevision(
 
 export async function updateDraft(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     fileId: string;
     proposedTitle: string;
@@ -1016,7 +1016,7 @@ export async function updateDraft(
 
 export async function retryFile(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { fileId: string },
 ): Promise<{
   stage: IngestionStage;
@@ -1059,7 +1059,7 @@ export async function retryFile(
 
 export async function deleteBatch(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { batchId: string },
   options: { dataDir: string },
 ): Promise<{ deletedBlobs: number }> {

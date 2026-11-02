@@ -4,7 +4,10 @@ import {
   projectOverviewInput,
   type ProjectOverview,
 } from "../../dashboard/schema";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 import { visibleProjectsSql } from "../backgroundWork/access";
 import { UTC_NOW } from "../sql";
 import { assertDashboardRead, resolveDashboardAccess } from "./access";
@@ -12,7 +15,7 @@ import { authorizedContentSql, contentCardSql } from "./content";
 import { parseProjectRows } from "./rows";
 export async function getProjectOverview(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string },
 ): Promise<ProjectOverview> {
   assertDashboardRead(actor);

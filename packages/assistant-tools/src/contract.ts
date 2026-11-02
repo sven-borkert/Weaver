@@ -11,6 +11,7 @@ import type { EncryptionKeyRing } from "@weaver/core/security/encryption";
 import type {
   Capability,
   SecurityContext,
+  UserSecurityContext,
 } from "@weaver/core/security/context";
 import type { z } from "zod";
 
@@ -61,7 +62,7 @@ function codePointPrefix(text: string, units: number): string {
 
 export type ToolContext = {
   db: PrismaClient;
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   scope: ScopeSnapshot;
   profile: { name: string | null; email: string };
   run: { conversationId: string; runId: string; attemptId?: string } | null;
@@ -71,6 +72,11 @@ export type ToolContext = {
   llm?: { ring: EncryptionKeyRing | null; fetchImpl: typeof fetch };
   /** Present on the MCP server only; admin external-connection tools need it. */
   external?: ExternalRuntimeDeps;
+};
+
+/** Reads the wiki agent shares with users: only services accepting the union type-check here. */
+export type SharedReadToolContext = Omit<ToolContext, "actor"> & {
+  actor: SecurityContext;
 };
 
 export type ToolOutcome<O> = { output: O; citations?: SourceLocator[] };
@@ -96,6 +102,15 @@ export type AnyToolContract = ToolContract<unknown, unknown>;
 export function defineTool<I, O>(
   contract: ToolContract<I, O>,
 ): ToolContract<I, O> {
+  return contract;
+}
+
+export function defineSharedReadTool<I, O>(
+  contract: Omit<ToolContract<I, O>, "execute" | "kind"> & {
+    kind: "read";
+    execute(input: I, ctx: SharedReadToolContext): Promise<ToolOutcome<O>>;
+  },
+) {
   return contract;
 }
 
@@ -273,13 +288,16 @@ export function boundItems<T>(
   return { items: kept, truncated: false };
 }
 
-export function requireScope(ctx: ToolContext, projectId: string): void {
+export function requireScope(
+  ctx: Pick<ToolContext, "scope" | "signal">,
+  projectId: string,
+): void {
   ctx.signal?.throwIfAborted();
   assertInScope(ctx.scope, projectId);
 }
 
 export function scopedProjectIds(
-  ctx: ToolContext,
+  ctx: Pick<ToolContext, "scope" | "signal">,
   requested: string[] | undefined,
 ): string[] {
   ctx.signal?.throwIfAborted();

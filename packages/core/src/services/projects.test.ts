@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { PrismaClient } from "@weaver/db/client";
-import type { Capability, SecurityContext } from "../security/context";
+import type { Capability, UserSecurityContext } from "../security/context";
 import { createProject, listProjectsForUser } from "./projects";
 
-function restrictedActor(): SecurityContext {
+function restrictedActor(): UserSecurityContext {
   return Object.freeze({
+    kind: "user",
     userId: "11111111-1111-4111-8111-111111111111",
     globalRole: "User",
     authenticationMethod: "apiKey",

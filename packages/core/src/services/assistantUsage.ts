@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@weaver/db/client";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { requireOwnedConversation } from "./assistantConversations";
 import { resolveLlmRoute } from "./llmRoutes";
 
@@ -33,7 +33,7 @@ function providerModel(snapshot: unknown): string | null {
 /** Owner-only: what the conversation's runs used, for the session bar and reply footers. */
 export async function getConversationUsage(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   conversationId: string,
 ): Promise<ConversationUsage> {
   await requireOwnedConversation(db, actor, conversationId);

@@ -21,10 +21,10 @@ import * as runs from "@weaver/core/services/assistantRuns";
 import { getConversationUsage } from "@weaver/core/services/assistantUsage";
 import { listContentFolders } from "@weaver/core/services/folders";
 import { resolveLlmRoute } from "@weaver/core/services/llmRoutes";
-import type { SecurityContext } from "@weaver/core/security/context";
+import type { UserSecurityContext } from "@weaver/core/security/context";
 
 const actorOf = (ctx: {
-  security: SecurityContext;
+  security: UserSecurityContext;
   session: { user: { email?: string | null; name?: string | null } };
 }) => ({
   ...ctx.security,

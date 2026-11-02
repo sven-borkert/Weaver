@@ -3,7 +3,7 @@ import { errorSummary, sanitizeText } from "@weaver/core/diagnostics/sanitize";
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   clampLimit,
@@ -123,7 +123,7 @@ async function pgbossPresent(db: PrismaClient): Promise<boolean> {
 
 export async function listQueueJobs(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: {
     name?: string;
     state?: QueueJobState;
@@ -196,7 +196,7 @@ export async function listQueueJobs(
 
 export async function getQueueJob(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   id: string,
 ): Promise<QueueJobRow | null> {
   assertSystemAdmin(actor);
@@ -218,7 +218,7 @@ export async function getQueueJob(
 
 export async function queueSummary(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<{
   queues: Array<{
     name: string;

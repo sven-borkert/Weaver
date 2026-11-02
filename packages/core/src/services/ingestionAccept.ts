@@ -11,7 +11,7 @@ import {
   withRelatedLinks,
   type ProposedLink,
 } from "../ingestion/links";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import {
   applyOperationInRepo,
   contentOperationSchema,
@@ -311,7 +311,7 @@ export async function acceptDraft(
 
 export async function rejectDraft(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { fileId: string },
 ): Promise<FileDetail> {
   const initial = await loadIngestionFile(db, actor, input.fileId, false);

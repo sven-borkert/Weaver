@@ -38,7 +38,7 @@ import {
 import { toOrganizationRole } from "@weaver/core/roles";
 import {
   createSessionSecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   loadEncryptionKeyRing,
@@ -321,7 +321,7 @@ export type CallerOverrides = {
   headers?: Headers;
 };
 
-/** Build a tRPC caller for the user with an explicit SecurityContext (keys/tokens). */
+/** Build a tRPC caller for the user with an explicit UserSecurityContext (keys/tokens). */
 export function callerWithSecurity(
   user: {
     id: string;
@@ -329,7 +329,7 @@ export function callerWithSecurity(
     email: string;
     mustChangePassword?: boolean;
   },
-  security: SecurityContext,
+  security: UserSecurityContext,
   overrides: CallerOverrides = {},
 ) {
   return createCaller({

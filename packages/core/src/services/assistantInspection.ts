@@ -2,7 +2,7 @@ import type { AssistantRunStatus, PrismaClient } from "@weaver/db/client";
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   clampLimit,
@@ -31,7 +31,7 @@ const RUN_SELECT = {
 
 export async function listAssistantRuns(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: {
     since?: Date;
     status?: AssistantRunStatus;
@@ -90,7 +90,7 @@ function toolNameOf(type: string, payload: unknown): string | null {
 /** Metadata only: event payload text never leaves this function (design §10.2). */
 export async function getAssistantRunDetail(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   runId: string,
 ) {
   assertSystemAdmin(actor);

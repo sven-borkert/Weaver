@@ -9,7 +9,7 @@ import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 
 import { decodeTimestampIdPageCursor, encodePageCursor } from "./adminPaging";
@@ -162,7 +162,7 @@ function fileEventQuery(
 
 export async function listDiagnosticEvents(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: DiagnosticEventFilter,
 ): Promise<{
   items: DiagnosticEventSummary[];
@@ -284,7 +284,7 @@ function bodyRange(
 
 export async function getDiagnosticEvent(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     id?: string;
     reference?: string;
@@ -527,7 +527,7 @@ export async function pruneDiagnosticEvents(
 
 export async function pruneDiagnosticEventsAsAdmin(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<PruneResult> {
   assertSystemAdmin(actor);
   return pruneDiagnosticEvents(db, await getDiagnosticsSettings(db));

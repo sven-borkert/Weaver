@@ -6,7 +6,8 @@ import { changeKindOf, type WikiChangeKind } from "../wiki/changeKinds";
 import { trackedLink } from "../wiki/links";
 import { invalidCursorError } from "./contentCursors";
 import { getBacklinks } from "./documents";
-import { assertProjectRole, type ProjectActor } from "./projectAccess";
+import type { SecurityContext } from "../security/context";
+import { assertProjectRole } from "./projectAccess";
 import { hashNormalizedTitle } from "./searchLexical";
 
 const UUID_RE =
@@ -63,7 +64,7 @@ export async function findPages(
     path?: string;
     includeSources?: boolean;
   },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<{ pages: WikiPageRef[]; truncated: boolean }> {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   if (!input.title && !input.slug && !input.path)
@@ -226,7 +227,7 @@ export async function inspectLinks(
     cursor?: string;
     limit?: number;
   },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<InspectLinksResult> {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   const limit = Math.max(
@@ -301,7 +302,7 @@ function oneLine(text: string, max: number): string {
 export async function listRecentChanges(
   db: PrismaClient,
   input: { projectId: string; since?: Date; cursor?: string; limit?: number },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<{ changes: RecentChange[]; nextCursor: string | null }> {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   const limit = Math.max(

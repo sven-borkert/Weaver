@@ -1,7 +1,7 @@
 import { diagnosticWriterStats } from "@weaver/core/diagnostics/writer";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { getDiagnosticsSettings } from "./diagnosticsSettings";
@@ -167,7 +167,7 @@ function boundedRuntimeConfig(config: AdminRuntimeConfig): {
 
 export async function adminOverview(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { version: string; config: AdminRuntimeConfig },
 ): Promise<AdminOverview> {
   assertSystemAdmin(actor);
@@ -232,7 +232,7 @@ export type AdminHealth = {
 
 export async function adminHealth(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<AdminHealth> {
   assertSystemAdmin(actor);
   const started = performance.now();

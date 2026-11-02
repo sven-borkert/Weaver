@@ -1,7 +1,7 @@
 import { resolveScopeSnapshot } from "@weaver/core/assistant/scope";
 import { createTaskSecurityContext } from "@weaver/core/security/context";
 import { leaseTaskRun } from "@weaver/core/services/scheduledTasks";
-import type { SecurityContext } from "@weaver/core/security/context";
+import type { UserSecurityContext } from "@weaver/core/security/context";
 import type {
   ExecutionOwner,
   ExternalInvocation,
@@ -224,7 +224,7 @@ export async function makeExternalApproval(
 
 export async function makeAssistantInvocation(
   f: Awaited<ReturnType<typeof makeExternalFixture>>,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   toolId: string,
 ) {
   const { createConversation } =
@@ -321,7 +321,7 @@ export async function preloadExternalTools(
 /** Creates, discovers, reviews and enables an "Example" connection owned by `actor`. */
 export async function enableExternalConnection(
   f: Awaited<ReturnType<typeof makeExternalFixture>>,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   readName = "read",
   // "write" makes the assistant ask before the tool behind readId as well.
   readEffect: "read" | "write" = "read",

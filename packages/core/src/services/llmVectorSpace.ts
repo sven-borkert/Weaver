@@ -16,7 +16,7 @@ import {
   effectiveVectorSpaceKey,
   knowledgeIndexFingerprint,
 } from "../knowledge/identity";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { recordAiUsageSafely } from "./aiUsageBestEffort";
 import { withKnowledgeRoutingChange } from "./knowledgeRoutingChange";
 import { assertLlmAdmin } from "./llmAdminAccess";
@@ -255,7 +255,7 @@ async function recordUsage(
 
 export async function verifyEmbeddingCompatibility(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: { modelId: string; referenceModelId: string },
 ): Promise<VectorSpaceVerification> {
@@ -356,7 +356,7 @@ export async function verifyEmbeddingCompatibility(
 
 export async function clearEmbeddingCompatibility(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { modelId: string },
 ): Promise<{ reindexProjects: number }> {
   assertLlmAdmin(actor);
@@ -390,7 +390,7 @@ export async function clearEmbeddingCompatibility(
 
 export async function previewClearEmbeddingCompatibility(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { modelId: string },
 ): Promise<{ effect: ClearCompatibilityEffect; projects: number }> {
   assertLlmAdmin(actor);
@@ -408,7 +408,7 @@ export async function previewClearEmbeddingCompatibility(
 
 export async function previewKnowledgeRouteChange(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     purpose: "knowledge_extraction" | "knowledge_embedding";
     modelId: string;
@@ -436,7 +436,7 @@ export type KnowledgeModelChangeEffect = "none" | "reembed";
 /** An identity edit clears any shared key, so it always changes the routed model's fingerprint. */
 export async function previewKnowledgeModelChange(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     modelId: string;
     providerModelId?: string;

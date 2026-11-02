@@ -13,7 +13,7 @@ import {
 import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { DOCUMENT_KINDS } from "@weaver/core/documents/kinds";
 import { isCoreError } from "@weaver/core/errors";
-import type { SecurityContext } from "@weaver/core/security/context";
+import type { UserSecurityContext } from "@weaver/core/security/context";
 import { getDocumentAtSnapshot } from "@weaver/core/services/documents";
 import { getGraphEntityDetail } from "@weaver/core/services/graph";
 import { getTableAtSnapshot } from "@weaver/core/services/tables";
@@ -158,7 +158,7 @@ export type ResourceAuditEvent = {
 
 export type ResourceDeps = {
   db: PrismaClient;
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   scope: () => Promise<ScopeSnapshot>;
   maxResourceChars: number;
   /** Returns true only for the callback that owns the request's audit slot. */

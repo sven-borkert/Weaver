@@ -10,7 +10,10 @@ import {
   scopeSnapshotSchema,
 } from "../assistant/scopeSchema";
 import { CoreError } from "../errors";
-import { assertSystemAdmin, type SecurityContext } from "../security/context";
+import {
+  assertSystemAdmin,
+  type UserSecurityContext,
+} from "../security/context";
 import {
   clampLimit,
   decodeTimestampIdPageCursor,
@@ -58,7 +61,7 @@ const RUN_SUMMARY_SELECT = {
 
 async function assertInspectionAccess(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ) {
   assertSystemAdmin(actor);
@@ -69,7 +72,7 @@ async function assertInspectionAccess(
 
 async function assertSourceAccess(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectIds: string[],
 ) {
   for (const projectId of projectIds) {
@@ -103,7 +106,7 @@ const contextProjectsSchema = z.object({
 
 export async function listScheduledTasksForInspection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     ownerId?: string;
@@ -155,7 +158,7 @@ export async function listScheduledTasksForInspection(
 
 export async function getScheduledTaskForInspection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; taskId: string },
 ) {
   await assertInspectionAccess(db, actor, input.projectId);
@@ -190,7 +193,7 @@ export async function getScheduledTaskForInspection(
 
 export async function listScheduledTaskRunsForInspection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     taskId: string;
@@ -249,7 +252,7 @@ export async function listScheduledTaskRunsForInspection(
 
 export async function getScheduledTaskRunForInspection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; runId: string },
 ) {
   await assertInspectionAccess(db, actor, input.projectId);

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseEncryptionKeyRing } from "@weaver/config/encryptionKeys";
 import {
   createSessionSecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   assertConnectionSecretsDecryptable,
@@ -1672,7 +1672,7 @@ describe("llm routes", () => {
   });
 });
 
-async function listLlmRoutesDirect(security: SecurityContext) {
+async function listLlmRoutesDirect(security: UserSecurityContext) {
   const { listLlmRoutes } = await import("@weaver/core/services/llmRoutes");
   return listLlmRoutes(getPrisma(), security);
 }

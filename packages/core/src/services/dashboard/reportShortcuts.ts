@@ -1,14 +1,14 @@
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { reportsInput, type ReportShortcuts } from "../../dashboard/schema";
 import { CoreError } from "../../errors";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { visibleProjectsSql } from "../backgroundWork/access";
 import { UTC_NOW } from "../sql";
 import { assertDashboardRead, resolveDashboardAccess } from "./access";
 import { parseReportRows } from "./rows";
 export async function getReportShortcuts(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input?: { projectId?: string },
 ): Promise<ReportShortcuts> {
   assertDashboardRead(actor);

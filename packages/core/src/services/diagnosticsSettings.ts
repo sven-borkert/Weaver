@@ -13,7 +13,7 @@ import { processSingleton } from "@weaver/core/diagnostics/processState";
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { getSystemSetting, setSystemSetting } from "./systemSettings";
@@ -107,7 +107,7 @@ export type DiagnosticsSettingsPatch = Partial<DiagnosticsSettings>;
 
 export async function setDiagnosticsSettings(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   patch: DiagnosticsSettingsPatch,
 ): Promise<DiagnosticsSettings> {
   assertSystemAdmin(actor);
@@ -166,7 +166,7 @@ export type DiagnosticsStats = {
 
 export async function diagnosticsStats(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<DiagnosticsStats> {
   assertSystemAdmin(actor);
   let stats = shared.statsCache;
@@ -229,7 +229,7 @@ export async function diagnosticsStats(
 
 export async function getDiagnosticsSettingsAsAdmin(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<DiagnosticsSettings> {
   assertSystemAdmin(actor);
   return getDiagnosticsSettings(db);

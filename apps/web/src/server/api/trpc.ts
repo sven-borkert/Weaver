@@ -14,7 +14,7 @@ import { captureError, emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { isCoreError } from "@weaver/core/errors";
 import {
   createSessionSecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import { loadEncryptionKeyRing } from "@weaver/core/security/encryption";
 import superjson from "superjson";
@@ -188,7 +188,7 @@ const requireActiveUser = t.middleware(({ ctx, next, path }) => {
     });
   }
   const session: { user: SessionUser } = { user: ctx.session.user };
-  const security: SecurityContext = ctx.security;
+  const security: UserSecurityContext = ctx.security;
   return next({ ctx: { ...ctx, session, security } });
 });
 
@@ -208,7 +208,7 @@ export const authedProcedure = t.procedure
 const enforceRole = (...roles: Array<"Admin" | "User">) =>
   t.middleware(({ ctx, next }) => {
     if (!ctx.security) throw new TRPCError({ code: "UNAUTHORIZED" });
-    const security: SecurityContext = ctx.security;
+    const security: UserSecurityContext = ctx.security;
     if (!roles.includes(security.globalRole)) {
       throw new TRPCError({ code: "FORBIDDEN" });
     }

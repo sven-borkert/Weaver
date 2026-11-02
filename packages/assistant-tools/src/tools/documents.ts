@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newOutputBudget,
   requireScope,
 } from "../contract";
@@ -21,7 +21,7 @@ import {
 
 const MAX_CHUNK = 8_000;
 
-export const listDocumentsTool = defineTool({
+export const listDocumentsTool = defineSharedReadTool({
   name: "list_documents",
   kind: "read",
   capability: "content:read",
@@ -78,7 +78,7 @@ export const listDocumentsTool = defineTool({
   },
 });
 
-export const readDocumentTool = defineTool({
+export const readDocumentTool = defineSharedReadTool({
   name: "read_document",
   kind: "read",
   capability: "content:read",

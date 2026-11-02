@@ -5,7 +5,7 @@ import {
   type RecentContentInput,
   type RecentContentPage,
 } from "../../dashboard/schema";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { visibleProjectsSql } from "../backgroundWork/access";
 import { UTC_NOW } from "../sql";
 import {
@@ -39,7 +39,7 @@ export function recentContentPageSql(
 }
 export async function getRecentContent(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: RecentContentInput,
 ): Promise<RecentContentPage> {
   assertDashboardRead(actor);

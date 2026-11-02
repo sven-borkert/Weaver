@@ -17,17 +17,45 @@ export type Capability = (typeof CAPABILITIES)[number];
 
 import type { GlobalRole } from "@weaver/auth/constants";
 export type { GlobalRole } from "@weaver/auth/constants";
-export type AuthenticationMethod = "session" | "oauth" | "apiKey" | "task";
+export type UserAuthenticationMethod = "session" | "oauth" | "apiKey" | "task";
+export type AuthenticationMethod = UserAuthenticationMethod | "wikiAgent";
 
-/** Immutable per-request credential view (spec §7). */
-export type SecurityContext = {
+/** Immutable per-request credential view of a `User` (spec §7); user-only services take this type. */
+export type UserSecurityContext = {
+  readonly kind: "user";
   readonly userId: string;
   readonly globalRole: GlobalRole;
-  readonly authenticationMethod: AuthenticationMethod;
+  readonly authenticationMethod: UserAuthenticationMethod;
   readonly credentialId: string;
   readonly capabilities: ReadonlySet<Capability>;
   readonly allowedProjectIds: "all-accessible" | ReadonlySet<string>;
 };
+
+/** A project's wiki agent: no `User` row, so no `userId` to read (wiki design §5.2). */
+export type WikiAgentSecurityContext = {
+  readonly kind: "wikiAgent";
+  readonly agentId: string;
+  readonly projectId: string;
+  readonly authenticationMethod: "wikiAgent";
+  readonly credentialId: `wiki-agent:${string}`;
+  readonly capabilities: ReadonlySet<Capability>;
+  readonly allowedProjectIds: ReadonlySet<string>;
+};
+
+/** Only services the wiki agent may reach accept this union. */
+export type SecurityContext = UserSecurityContext | WikiAgentSecurityContext;
+
+export function isHumanPrincipal(
+  context: SecurityContext,
+): context is UserSecurityContext {
+  return context.kind === "user";
+}
+
+/** Reads the user id or refuses a machine principal. */
+export function requireUserId(context: SecurityContext): string {
+  if (!isHumanPrincipal(context)) throw new CoreError("FORBIDDEN");
+  return context.userId;
+}
 
 const SESSION_CAPABILITIES: readonly Capability[] = [
   "assistant:use",
@@ -41,13 +69,14 @@ export function createSessionSecurityContext(input: {
   userId: string;
   globalRole: GlobalRole;
   sessionId: string;
-}): SecurityContext {
+}): UserSecurityContext {
   const capabilities = new Set<Capability>(SESSION_CAPABILITIES);
   if (input.globalRole === "Admin") {
     capabilities.add("llm:admin");
     capabilities.add("system:admin");
   }
   return Object.freeze({
+    kind: "user",
     userId: input.userId,
     globalRole: input.globalRole,
     authenticationMethod: "session",
@@ -67,14 +96,36 @@ export function createTaskSecurityContext(input: {
   userId: string;
   globalRole: GlobalRole;
   runId: string;
-}): SecurityContext {
+}): UserSecurityContext {
   return Object.freeze({
+    kind: "user",
     userId: input.userId,
     globalRole: input.globalRole,
     authenticationMethod: "task",
     credentialId: `task-run:${input.runId}`,
     capabilities: new Set<Capability>(TASK_CAPABILITIES),
     allowedProjectIds: "all-accessible",
+  });
+}
+
+const WIKI_AGENT_CAPABILITIES: readonly Capability[] = [
+  "content:read",
+  "content:write",
+];
+
+/** The one way to build an agent principal; both ids come from the run row, never from a request. */
+export function createWikiAgentSecurityContext(input: {
+  agentId: string;
+  projectId: string;
+}): WikiAgentSecurityContext {
+  return Object.freeze({
+    kind: "wikiAgent",
+    agentId: input.agentId,
+    projectId: input.projectId,
+    authenticationMethod: "wikiAgent",
+    credentialId: `wiki-agent:${input.agentId}`,
+    capabilities: new Set<Capability>(WIKI_AGENT_CAPABILITIES),
+    allowedProjectIds: new Set([input.projectId]),
   });
 }
 
@@ -192,7 +243,7 @@ export function createApiKeySecurityContext(input: {
   keyId: string;
   permissions: ApiKeyPermissions | null | undefined;
   projectIds: readonly string[];
-}): SecurityContext {
+}): UserSecurityContext {
   const capabilities = capabilitiesFromApiKeyPermissions(input.permissions);
   if (capabilities.has("system:admin")) {
     // Fail closed: the grant survives on the key row, the effect does not survive a demotion.
@@ -200,6 +251,7 @@ export function createApiKeySecurityContext(input: {
     else capabilities.delete("system:admin");
   }
   return Object.freeze({
+    kind: "user",
     userId: input.userId,
     globalRole: input.globalRole,
     authenticationMethod: "apiKey",
@@ -223,8 +275,9 @@ export function createOAuthSecurityContext(input: {
   globalRole: GlobalRole;
   tokenId: string;
   scopes: string | readonly string[];
-}): SecurityContext {
+}): UserSecurityContext {
   return Object.freeze({
+    kind: "user",
     userId: input.userId,
     globalRole: input.globalRole,
     authenticationMethod: "oauth",

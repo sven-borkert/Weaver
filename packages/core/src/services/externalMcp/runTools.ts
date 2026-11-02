@@ -5,7 +5,10 @@ import {
   externalToolSnapshotsSchema,
   type ExternalToolSnapshot,
 } from "../../externalMcp/schema";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 import { assertActiveAssistantAttempt, reviewedTool } from "./access";
 
 export type ExternalLoadRefusal = {
@@ -27,7 +30,7 @@ export async function ownsEnabledExternalConnection(
 /** Lock order attempt → run, as everywhere else in external execution. */
 export async function loadExternalToolsForRun(
   deps: { db: PrismaClient; now: () => Date },
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     runId: string;
     attemptId: string;

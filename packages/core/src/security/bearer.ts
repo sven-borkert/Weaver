@@ -15,7 +15,7 @@ import {
   createApiKeySecurityContext,
   createOAuthSecurityContext,
   hasCapability,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 
@@ -33,7 +33,7 @@ function rejected(
 }
 
 /**
- * Turns an `Authorization` header into a constrained SecurityContext (spec §8, §9).
+ * Turns an `Authorization` header into a constrained UserSecurityContext (spec §8, §9).
  * UNAUTHORIZED covers missing/invalid/expired/revoked credentials and banned or
  * deleted users; TOO_MANY_REQUESTS covers a key's own rate limit.
  */
@@ -41,7 +41,7 @@ export async function resolveBearerSecurityContext(
   db: PrismaClient,
   verifiers: BearerVerifiers,
   authorizationHeader: string | null | undefined,
-): Promise<SecurityContext> {
+): Promise<UserSecurityContext> {
   const verification = await resolveBearerCredential(
     verifiers,
     authorizationHeader,
@@ -60,7 +60,7 @@ export async function resolveApiKeySecurityContext(
   db: PrismaClient,
   verifiers: BearerVerifiers,
   authorizationHeader: string | null | undefined,
-): Promise<SecurityContext> {
+): Promise<UserSecurityContext> {
   if (!authorizationHeader) {
     rejected("missing", null);
     throw new CoreError("UNAUTHORIZED", "A personal API key is required");
@@ -85,7 +85,7 @@ export async function resolveApiKeySecurityContext(
 }
 
 export type McpPrincipal = {
-  security: SecurityContext;
+  security: UserSecurityContext;
   profile: { name: string; email: string };
   /** OAuth client id for audit rows; null for API keys. */
   clientId: string | null;
@@ -138,7 +138,7 @@ async function resolveVerifiedCredentialContext(
     );
   }
 
-  let security: SecurityContext;
+  let security: UserSecurityContext;
   let clientId: string | null = null;
   if (credential.kind === "apiKey") {
     // One statement, one snapshot: a key revoked or edited after verification

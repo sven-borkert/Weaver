@@ -5,7 +5,7 @@ import {
 } from "@weaver/db/client";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   clampLimit,
@@ -66,7 +66,7 @@ export type AiUsageRow = Omit<
 
 export async function listAiUsage(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: AiUsageFilter,
 ): Promise<{
   items: AiUsageRow[];
@@ -152,7 +152,7 @@ type RawSummaryGroup = {
 
 export async function aiUsageSummary(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { since?: Date; until?: Date; groupBy: AiUsageGroupBy },
 ): Promise<{ groups: AiUsageSummaryGroup[]; truncated: boolean }> {
   assertSystemAdmin(actor);

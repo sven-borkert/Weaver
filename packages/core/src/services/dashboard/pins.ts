@@ -10,7 +10,10 @@ import {
   type UnpinContentInput,
 } from "../../dashboard/schema";
 import { CoreError } from "../../errors";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 import { assertProjectRole } from "../projectAccess";
 import { assertDashboardRead } from "./access";
 import { visibleProjectsSql } from "../backgroundWork/access";
@@ -18,7 +21,7 @@ import { UTC_NOW } from "../sql";
 import { authorizedContentSql, contentCardSql } from "./content";
 import { parseRecentRows } from "./rows";
 
-function assertPinWrite(actor: SecurityContext) {
+function assertPinWrite(actor: UserSecurityContext) {
   assertDashboardRead(actor);
   if (!hasCapability(actor, "content:write")) {
     throw new CoreError("FORBIDDEN");
@@ -27,7 +30,7 @@ function assertPinWrite(actor: SecurityContext) {
 
 export async function pinProjectContent(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: PinContentInput,
 ): Promise<{ pinId: string }> {
   assertPinWrite(actor);
@@ -75,7 +78,7 @@ export async function pinProjectContent(
 
 export async function unpinProjectContent(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: UnpinContentInput,
 ): Promise<{ removed: boolean }> {
   assertPinWrite(actor);
@@ -96,7 +99,7 @@ export async function unpinProjectContent(
 
 export async function listProjectPinCandidates(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: PinCandidatesInput,
 ): Promise<RecentContentPage> {
   assertPinWrite(actor);

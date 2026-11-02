@@ -33,7 +33,7 @@ import { withProjectRepo } from "@weaver/core/services/projectRepo";
 import { createTable, getTable } from "@weaver/core/services/tables";
 import {
   createApiKeySecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   addMembership,
@@ -95,7 +95,7 @@ async function terminateWorkers(workers: McpOperationWorker[]): Promise<void> {
 }
 
 function writer(user: { id: string; role: "Admin" | "User"; email: string }) {
-  const security: SecurityContext = createApiKeySecurityContext({
+  const security: UserSecurityContext = createApiKeySecurityContext({
     userId: user.id,
     globalRole: user.role,
     keyId: `key-${user.id}`,

@@ -8,7 +8,7 @@ import {
   examStatusSchema,
   type ExamDefinitionInput,
 } from "../exams/schema";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import {
   createExamInTx,
   loadExamDetailInTx,
@@ -116,7 +116,7 @@ async function currentExam(
 /** Runs the checks acceptance would run, so the model can correct itself before the user reviews. */
 export async function prepareExamProposal(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   operation: ExamProposalOperation,
 ): Promise<{ resourceId: string | null; preview: unknown }> {
   await assertTrainer(db, operation.projectId, actor, {
@@ -172,7 +172,7 @@ export type ExamApplyResult =
 /** Applies inside the caller's transaction; a stale or missing exam conflicts instead of writing. */
 export async function applyExamProposalInTx(
   tx: Prisma.TransactionClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   operation: ExamProposalOperation,
 ): Promise<ExamApplyResult> {
   await assertTrainer(tx, operation.projectId, actor);

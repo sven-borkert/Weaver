@@ -1,17 +1,17 @@
 import type { PrismaClient } from "@weaver/db/client";
 import type { WorkAudience } from "../../jobs/backgroundWorkSchema";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { assertBackgroundWorkRead } from "../backgroundWork/access";
 import { assertProjectRole, projectRoleAtLeast } from "../projectAccess";
 export type DashboardAccess = {
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   projectId?: string;
   workAudience: WorkAudience;
 };
 export const assertDashboardRead = assertBackgroundWorkRead;
 export async function resolveDashboardAccess(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId?: string,
 ): Promise<DashboardAccess> {
   assertDashboardRead(actor);

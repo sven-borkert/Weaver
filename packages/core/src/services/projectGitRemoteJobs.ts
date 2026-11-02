@@ -14,7 +14,7 @@ import type { KnowledgeJobPayloads } from "../jobs/types";
 import { toOrganizationRole } from "../roles";
 import {
   createSessionSecurityContext,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "../security/context";
 import {
   loadEncryptionKeyRing,
@@ -379,8 +379,8 @@ export async function pushProjectGitRemote(input: {
 async function resolveRebuildActor(
   db: PrismaClient,
   projectId: string,
-  requester: { id: string; role: SecurityContext["globalRole"] } | null,
-): Promise<SecurityContext | null> {
+  requester: { id: string; role: UserSecurityContext["globalRole"] } | null,
+): Promise<UserSecurityContext | null> {
   const ownerMember = await db.member.findFirst({
     where: {
       role: toOrganizationRole("Owner"),

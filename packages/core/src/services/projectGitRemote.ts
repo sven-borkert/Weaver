@@ -8,7 +8,7 @@ import {
 } from "@weaver/git-store/remote";
 import { CoreError } from "../errors";
 import { requestKnowledgeJob } from "../jobs/queue";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import {
   decryptSecret,
   encryptSecret,
@@ -103,7 +103,7 @@ function pullQueueLive(
 
 async function owner(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   write = true,
 ) {
@@ -116,7 +116,7 @@ async function owner(
 
 async function locked<T>(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   fn: (
     tx: Prisma.TransactionClient,
@@ -167,7 +167,7 @@ function invalid(error: unknown, field: string): never {
 
 export async function getProjectGitRemote(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<ProjectGitRemoteView | null> {
   await owner(db, actor, projectId, false);
@@ -177,7 +177,7 @@ export async function getProjectGitRemote(
 
 export async function saveProjectGitRemote(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     expectedRevision?: number;
@@ -259,7 +259,7 @@ export async function saveProjectGitRemote(
 
 export async function uploadProjectGitRemoteKey(
   deps: Deps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     expectedRevision: number;
@@ -332,7 +332,7 @@ export async function uploadProjectGitRemoteKey(
 
 export async function deleteProjectGitRemoteKey(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; expectedRevision: number },
 ): Promise<ProjectGitRemoteView> {
   return locked(db, actor, input.projectId, async (tx, current) => {
@@ -361,7 +361,7 @@ export async function deleteProjectGitRemoteKey(
 
 export async function removeProjectGitRemote(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; expectedRevision: number },
 ): Promise<void> {
   await locked(db, actor, input.projectId, async (tx, current) => {
@@ -377,7 +377,7 @@ export async function removeProjectGitRemote(
 
 export async function requestProjectGitRemotePush(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<ProjectGitRemoteView> {
   const result = await locked(db, actor, projectId, async (tx, row) => {
@@ -402,7 +402,7 @@ export async function requestProjectGitRemotePush(
 
 export async function requestProjectGitRemotePull(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<ProjectGitRemoteView> {
   let pullToken = "";

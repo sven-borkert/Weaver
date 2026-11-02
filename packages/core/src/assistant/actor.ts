@@ -1,6 +1,7 @@
 import { z } from "zod";
-import { CAPABILITIES, type SecurityContext } from "../security/context";
+import { CAPABILITIES, type UserSecurityContext } from "../security/context";
 
+// Snapshots are for user principals only: a stored `wikiAgent` method fails to parse.
 export const actorSnapshotSchema = z.object({
   userId: z.string(),
   globalRole: z.enum(["Admin", "User"]),
@@ -14,7 +15,9 @@ export const actorSnapshotSchema = z.object({
 });
 export type ActorSnapshot = z.infer<typeof actorSnapshotSchema>;
 
-export function serializeSecurityContext(ctx: SecurityContext): ActorSnapshot {
+export function serializeSecurityContext(
+  ctx: UserSecurityContext,
+): ActorSnapshot {
   return {
     userId: ctx.userId,
     globalRole: ctx.globalRole,
@@ -28,9 +31,10 @@ export function serializeSecurityContext(ctx: SecurityContext): ActorSnapshot {
   };
 }
 
-export function deserializeSecurityContext(raw: unknown): SecurityContext {
+export function deserializeSecurityContext(raw: unknown): UserSecurityContext {
   const snapshot = actorSnapshotSchema.parse(raw);
   return Object.freeze({
+    kind: "user",
     userId: snapshot.userId,
     globalRole: snapshot.globalRole,
     authenticationMethod: snapshot.authenticationMethod,

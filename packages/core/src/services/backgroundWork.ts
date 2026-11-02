@@ -10,7 +10,7 @@ import {
   type BackgroundWorkSummary,
   type WorkReference,
 } from "../jobs/backgroundWorkSchema";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { assertProjectRole } from "./projectAccess";
 import { UTC_NOW } from "./sql";
 import {
@@ -63,7 +63,7 @@ function publicItem(row: WorkRow): BackgroundWorkItem {
 }
 export async function listBackgroundWork(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: BackgroundWorkListInput,
 ): Promise<BackgroundWorkPage> {
   assertBackgroundWorkRead(actor);
@@ -137,7 +137,7 @@ export async function listBackgroundWork(
 }
 export async function getBackgroundWorkSummary(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<BackgroundWorkSummary> {
   assertBackgroundWorkRead(actor);
   const [result] = parseSummaryRows(
@@ -162,7 +162,7 @@ export async function getBackgroundWorkSummary(
 }
 export async function markBackgroundWorkSeen(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { items: WorkReference[] },
 ): Promise<{ acknowledged: number }> {
   assertBackgroundWorkRead(actor);

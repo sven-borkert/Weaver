@@ -17,7 +17,7 @@ import { AiProviderError, type AiProvider } from "../ai/types";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { embeddingVectorType } from "../knowledge/vectorSql";
 import { loadEncryptionKeyRing } from "../security/encryption";
-import type { ProjectActor } from "./projectAccess";
+import type { SecurityContext } from "../security/context";
 import { embedQuery } from "./knowledgeEmbeddings";
 import { cachedKnowledgeRouting, type KnowledgeRouting } from "./llmRoutes";
 import { listProjectsForUser } from "./projects";
@@ -130,7 +130,7 @@ type SemanticSearchContext = {
 export async function searchKnowledge(
   db: PrismaClient,
   input: SearchKnowledgeInput,
-  actor: ProjectActor,
+  actor: SecurityContext,
   override?: {
     routing: KnowledgeRouting;
     provider: AiProvider;

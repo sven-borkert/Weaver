@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@weaver/db/client";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { describe, expect, it, vi } from "vitest";
 import { CoreError } from "../errors";
 import {
@@ -75,7 +75,10 @@ it("bounds MCP membership reads at the database with a stable order", async () =
   const findMany = vi.fn().mockResolvedValue([]);
   await resolveMcpScopeSnapshot(
     { project: { findMany } } as unknown as PrismaClient,
-    { userId: "user", allowedProjectIds: "all-accessible" } as SecurityContext,
+    {
+      userId: "user",
+      allowedProjectIds: "all-accessible",
+    } as UserSecurityContext,
   );
   expect(findMany).toHaveBeenCalledWith(
     expect.objectContaining({

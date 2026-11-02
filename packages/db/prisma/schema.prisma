@@ -416,6 +416,7 @@ model Project {
   projectApiKeys               ProjectApiKey[]
   projectApiOperations         ProjectApiOperation[]
   projectApiAuditEvents        ProjectApiAuditEvent[]
+  wikiAgents                   WikiAgent[]
   assistantConversationPins    AssistantConversation[]       @relation("AssistantConversationPin")
   assistantProposals           AssistantProposal[]           @relation("AssistantProposalProject")
   scheduledTasks               ScheduledTask[]               @relation("ScheduledTaskOutputProject")
@@ -555,6 +556,21 @@ model Document {
   @@index([projectId, lastReviewedAt, id])
   @@index([reviewedById])
   @@index([projectId, wikiType])
+}
+
+/// A project's machine identity for wiki runs: no User or Member row, no bearer
+/// credential. Revoked rows stay so old commits resolve; the migration adds a
+/// partial unique index allowing one live (revokedAt IS NULL) agent per project.
+model WikiAgent {
+  id        String    @id @db.Uuid
+  projectId String    @db.Uuid
+  name      String    @default("Wiki agent")
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
 }
 
 /// Derived projection of schema.json/data.jsonl under tables/**; the

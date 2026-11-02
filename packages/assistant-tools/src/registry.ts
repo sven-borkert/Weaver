@@ -23,7 +23,7 @@ import {
 } from "./tools/artifactsWord";
 import {
   hasCapability,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import type { AnyToolContract } from "./contract";
 import { DIAGNOSTICS_ADMIN_TOOLS } from "./tools/admin/diagnostics";
@@ -129,7 +129,7 @@ export const ASSISTANT_TOOLS: readonly AnyToolContract[] = [
   proposeContentLifecycleTool,
 ];
 
-export function toolsForActor(actor: SecurityContext): AnyToolContract[] {
+export function toolsForActor(actor: UserSecurityContext): AnyToolContract[] {
   return ASSISTANT_TOOLS.filter((tool) =>
     hasCapability(actor, tool.capability),
   );
@@ -181,7 +181,9 @@ export const ASSISTANT_EXAM_TOOLS: readonly AnyToolContract[] = [
   ...EXAM_PROPOSE_TOOLS,
   gradeExamAttemptTool,
 ];
-export function examToolsForActor(actor: SecurityContext): AnyToolContract[] {
+export function examToolsForActor(
+  actor: UserSecurityContext,
+): AnyToolContract[] {
   return ASSISTANT_EXAM_TOOLS.filter((tool) =>
     hasCapability(actor, tool.capability),
   );
@@ -199,7 +201,9 @@ export const MCP_TOOLS: readonly AnyToolContract[] = [
   ...EXAM_TOOLS,
 ];
 
-export function mcpToolsForActor(actor: SecurityContext): AnyToolContract[] {
+export function mcpToolsForActor(
+  actor: UserSecurityContext,
+): AnyToolContract[] {
   return MCP_TOOLS.filter((tool) => hasCapability(actor, tool.capability));
 }
 

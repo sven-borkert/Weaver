@@ -14,7 +14,7 @@ import {
 } from "@weaver/core/ingestion/settings";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { getSystemSetting, setSystemSetting } from "./systemSettings";
@@ -48,7 +48,7 @@ export async function getIngestionSettings(
 
 export async function setIngestionSettings(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   patch: IngestionSettingsPatch,
 ): Promise<IngestionSettings> {
   assertSystemAdmin(actor);
@@ -98,7 +98,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /** GET <baseUrl>/health; docling-serve answers 200 `{ "status": "ok" }`. */
 export async function probeDocling(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { baseUrl: string },
   fetchImpl: typeof fetch = createPinnedFetch(),
 ): Promise<DoclingProbe> {
@@ -146,7 +146,7 @@ export async function probeDocling(
 
 export async function getIngestionSettingsAsAdmin(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<IngestionSettings> {
   assertSystemAdmin(actor);
   return getIngestionSettings(db);

@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@weaver/db/client";
 
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { enqueueReconcileForLiveProjects } from "./knowledgeReconciliation";
 
 export const LAST_ROUTING_CHANGE_SETTING = "knowledge.lastRoutingChange";
@@ -18,7 +18,7 @@ type RoutingResolver = (
 /** Runs an admin LLM change and queues reconciliation when the knowledge index identity changed. */
 export async function withKnowledgeRoutingChange<T>(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   resolve: RoutingResolver,
   change: () => Promise<T>,
 ): Promise<{ result: T; reindexProjects: number }> {

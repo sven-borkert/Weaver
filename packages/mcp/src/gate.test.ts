@@ -11,6 +11,7 @@ import {
 
 const principal: McpPrincipal = {
   security: {
+    kind: "user",
     userId: "u1",
     globalRole: "User",
     authenticationMethod: "apiKey",

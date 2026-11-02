@@ -37,6 +37,7 @@ import {
   assertOutsideTablesRoot,
   isTableDirName,
 } from "@weaver/core/tables/paths";
+import type { SecurityContext } from "../security/context";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import {
   openProjectRepo,
@@ -845,7 +846,7 @@ export function scopeForResourceType(
 export async function listContentFolders(
   db: PrismaClient,
   input: { projectId: string; resourceType?: "document" | "table" },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<ContentFolderListing> {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   const wanted: Array<"document" | "table"> = input.resourceType

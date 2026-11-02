@@ -120,7 +120,8 @@ history holds every past report.
   capabilities `content:read`/`content:write` only, `allowedProjectIds:
 "all-accessible"`) — never assistant, propose, or admin capabilities, even
   for an Admin owner; core-service membership checks apply exactly as for a
-  session actor.
+  session actor. The services that refuse tasks also refuse every non-human
+  principal (`isHumanPrincipal`), so the wiki agent cannot pass them.
 - The owner's `banned` (active ban) and `mustChangePassword` flags are read
   **live**, at lease time, inside `leaseTaskRun`/the runner — never cached on
   the task and never checked on the bearer/API path. A live flag skips the

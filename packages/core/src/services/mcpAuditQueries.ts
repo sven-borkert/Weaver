@@ -1,7 +1,7 @@
 import type { McpOutcome, PrismaClient } from "@weaver/db/client";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   clampLimit,
@@ -28,7 +28,7 @@ const MCP_AUDIT_SELECT = {
 
 export async function listMcpAuditEvents(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: {
     since?: Date;
     userId?: string;

@@ -9,7 +9,7 @@ import type {
   PrismaClient,
 } from "@weaver/db/client";
 import { CoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import { assertLlmAdmin } from "./llmAdminAccess";
 import {
   decryptSecret,
@@ -201,7 +201,7 @@ export type ImportLlmModelsResult = {
 export { assertLlmAdmin } from "./llmAdminAccess";
 
 function settingsChanged(
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   setting: "llm.connection" | "llm.model",
   action: "created" | "updated" | "deleted" | "imported",
   details: Record<string, unknown>,
@@ -307,7 +307,7 @@ const PAGED_CONNECTION_SUMMARY_SELECT = {
 
 export async function listLlmConnections(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<LlmConnectionSummary[]> {
   assertLlmAdmin(actor);
   return db.llmConnection.findMany({
@@ -318,7 +318,7 @@ export async function listLlmConnections(
 
 export async function listLlmConnectionsPage(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: LlmListInput,
 ): Promise<LlmPage<PagedLlmConnectionSummary>> {
   assertLlmAdmin(actor);
@@ -347,7 +347,7 @@ export async function listLlmConnectionsPage(
 
 export async function listLlmModelsPage(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: LlmListInput & { connectionId?: string },
 ): Promise<LlmPage<PagedLlmModelSummary>> {
   assertLlmAdmin(actor);
@@ -535,7 +535,7 @@ function isRelationViolation(error: unknown): boolean {
 
 export async function createLlmConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: CreateLlmConnectionInput,
 ): Promise<LlmConnectionSummary> {
@@ -586,7 +586,7 @@ export async function createLlmConnection(
 
 export async function updateLlmConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: UpdateLlmConnectionInput,
 ): Promise<LlmConnectionSummary & { reindexProjects: number }> {
@@ -602,7 +602,7 @@ export async function updateLlmConnection(
 
 async function updateLlmConnectionChange(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: UpdateLlmConnectionInput,
 ): Promise<LlmConnectionSummary> {
@@ -678,7 +678,7 @@ async function updateLlmConnectionChange(
 
 export async function deleteLlmConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   connectionId: string,
 ): Promise<void> {
   assertLlmAdmin(actor);
@@ -861,7 +861,7 @@ export function adapterForConnection(
 
 export async function listOpenRouterUpstreamProviders(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: { connectionId: string; providerModelId: string },
 ): Promise<{ label: string; slug: string }[]> {
@@ -935,7 +935,7 @@ async function recordTest(
 
 export async function testLlmConnection(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   connectionId: string,
 ): Promise<LlmTestResult> {
@@ -1107,7 +1107,7 @@ function normalizeModel(input: Omit<CreateLlmModelInput, "connectionId">) {
 
 export async function createLlmModel(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: CreateLlmModelInput,
 ): Promise<LlmModelSummary> {
   assertLlmAdmin(actor);
@@ -1182,7 +1182,7 @@ type ProbedEmbeddingIdentity = {
 
 export async function updateLlmModel(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: UpdateLlmModelInput,
   deps?: LlmAdminDeps,
 ): Promise<LlmModelSummary & { reindexProjects: number }> {
@@ -1267,7 +1267,7 @@ async function probeRoutedEmbeddingEdit(
 
 async function updateLlmModelChange(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: UpdateLlmModelInput,
   probed: ProbedEmbeddingIdentity | null,
 ): Promise<LlmModelSummary> {
@@ -1400,7 +1400,7 @@ function isLimit(value: number | null | undefined): value is number {
 /** Bulk-declare discovered models; every per-row problem becomes a skipped entry. */
 export async function importLlmModels(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: ImportLlmModelsInput,
 ): Promise<ImportLlmModelsResult> {
@@ -1661,7 +1661,7 @@ export async function importLlmModels(
 
 export async function deleteLlmModel(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   modelId: string,
 ): Promise<void> {
   assertLlmAdmin(actor);
@@ -1691,7 +1691,7 @@ export async function deleteLlmModel(
 
 export async function testLlmModel(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   modelId: string,
 ): Promise<LlmTestResult> {
@@ -1821,7 +1821,7 @@ const EMBEDDING_PROBE_TEXT = "Weaver embedding size check";
 /** Embeds one input without requesting a size, so the vector length is the model's native size. */
 export async function detectEmbeddingDimensions(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: LlmAdminDeps,
   input: {
     connectionId: string;

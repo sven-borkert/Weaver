@@ -6,7 +6,7 @@ import {
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newPageBudget,
   requireScope,
   type ToolOutcome,
@@ -14,7 +14,7 @@ import {
 
 const cursor = z.string().max(200).optional();
 
-export const findPageTool = defineTool({
+export const findPageTool = defineSharedReadTool({
   name: "find_page",
   kind: "read",
   capability: "content:read",
@@ -37,7 +37,7 @@ export const findPageTool = defineTool({
   },
 });
 
-export const inspectLinksTool = defineTool({
+export const inspectLinksTool = defineSharedReadTool({
   name: "inspect_links",
   kind: "read",
   capability: "content:read",
@@ -81,7 +81,7 @@ export const inspectLinksTool = defineTool({
   },
 });
 
-export const listRecentChangesTool = defineTool({
+export const listRecentChangesTool = defineSharedReadTool({
   name: "list_recent_changes",
   kind: "read",
   capability: "content:read",

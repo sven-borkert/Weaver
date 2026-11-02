@@ -8,7 +8,10 @@ import {
   OidcDiscoveryError,
 } from "@weaver/config/oidcDiscovery";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
-import { assertSystemAdmin, type SecurityContext } from "../security/context";
+import {
+  assertSystemAdmin,
+  type UserSecurityContext,
+} from "../security/context";
 import type { EncryptionKeyRing } from "../security/encryption";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
@@ -76,14 +79,14 @@ function view(
 }
 export async function getOidcSettingsAsAdmin(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   deps: OidcSettingsDeps,
 ): Promise<OidcSettingsView> {
   assertSystemAdmin(actor);
   return view(await readStoredOidc(db), deps);
 }
 export async function testOidcConnectionAsAdmin(
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   discoveryUrl: string,
   deps: OidcSettingsDeps,
 ): Promise<OidcDiscoveryResult> {
@@ -104,7 +107,7 @@ export async function testOidcConnectionAsAdmin(
 }
 export async function updateOidcSettings(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   raw: OidcSettingsInput,
   deps: OidcSettingsDeps,
 ): Promise<OidcSettingsView> {

@@ -75,6 +75,7 @@ import {
   type ProjectRepoReader,
   type ProjectRepoWriter,
 } from "@weaver/git-store";
+import type { SecurityContext } from "../security/context";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import {
   gitAuthorForContent,
@@ -1564,7 +1565,7 @@ export async function getDocument(
 export async function getDocumentAtSnapshot(
   db: PrismaClient,
   input: { projectId: string; documentId: string; atCommitSha?: string },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<{
   id: string;
   path: string;
@@ -2483,7 +2484,7 @@ export async function getBacklinks(
     cursor?: string;
     limit?: number;
   },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   await requireDocument(db, input.projectId, input.documentId);
@@ -2548,7 +2549,7 @@ export async function listDocuments(
     sort: "title" | "lastEditedAt" | "createdAt" | "updatedAt";
     dir: "asc" | "desc";
   },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   const folderPrefix = input.folderPath?.length

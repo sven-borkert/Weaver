@@ -6,7 +6,7 @@ import {
   type ActivityInput,
   type ActivityPage,
 } from "../../dashboard/schema";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { authorizedWorkSql, terminalWorkSql } from "../backgroundWork/queries";
 import { UTC_NOW } from "../sql";
 import { assertDashboardRead, type DashboardAccess } from "./access";
@@ -20,7 +20,7 @@ import {
 import { parseActivityRows } from "./rows";
 export async function listDashboardActivity(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: ActivityInput,
 ): Promise<ActivityPage> {
   assertDashboardRead(actor);

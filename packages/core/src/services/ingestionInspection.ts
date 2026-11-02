@@ -1,7 +1,7 @@
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import type {
   IngestionFileStatus,
@@ -47,7 +47,7 @@ export type IngestionFileDetailRow = Awaited<
 
 async function assertInspectionAccess(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<void> {
   assertSystemAdmin(actor);
@@ -58,7 +58,7 @@ async function assertInspectionAccess(
 
 export async function listIngestionBatches(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; limit?: number; cursor?: string },
 ) {
   await assertInspectionAccess(db, actor, input.projectId);
@@ -116,7 +116,7 @@ export async function listIngestionBatches(
 
 export async function listIngestionFiles(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     batchId?: string;
@@ -173,7 +173,7 @@ export async function listIngestionFiles(
 
 export async function getIngestionFileDetail(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; fileId: string },
 ) {
   await assertInspectionAccess(db, actor, input.projectId);

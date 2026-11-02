@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { SecurityContext, UserSecurityContext } from "../security/context";
 import { notDeleted, resolveProjectAccess } from "../services/projectAccess";
 import { listContentFolders } from "../services/folders";
 import { listProjectsForUser } from "../services/projects";
@@ -130,7 +130,7 @@ export async function resolveScopeSnapshot(
 // MCP scope is capability-neutral; each operation enforces its own capability.
 export async function resolveMcpScopeSnapshot(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<ScopeSnapshot> {
   const projects = await db.project.findMany({
     where: {

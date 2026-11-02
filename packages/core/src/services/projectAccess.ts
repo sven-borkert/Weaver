@@ -11,6 +11,7 @@ import {
   requiredCapabilityForRole,
   type Capability,
   type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import type { Member, Prisma, PrismaClient, Project } from "@weaver/db/client";
 
@@ -22,7 +23,8 @@ export const notDeleted = {
 
 export { PROJECT_ROLE_RANK, projectRoleAtLeast };
 
-export type ProjectActor = SecurityContext;
+/** User-only service parameter: a wiki agent context does not type-check here. */
+export type ProjectActor = UserSecurityContext;
 
 export type ProjectMembership = Member & { projectRole: ProjectRoleName };
 
@@ -33,6 +35,30 @@ export type ProjectAccess = {
   effectiveRole: ProjectRoleName;
 };
 
+/** A wiki agent has no `Member` row; its role is synthetic and fixed. */
+export type WikiAgentProjectAccess = {
+  project: Project;
+  membership: null;
+  effectiveRole: "Editor";
+};
+
+async function resolveWikiAgentAccess(
+  tx: Db,
+  projectId: string,
+  agentId: string,
+): Promise<WikiAgentProjectAccess> {
+  // TODO(wiki slice 3): also require ProjectWikiSettings.enabled.
+  const project = await tx.project.findFirst({
+    where: {
+      id: projectId,
+      ...notDeleted,
+      wikiAgents: { some: { id: agentId, revokedAt: null } },
+    },
+  });
+  if (!project) throw new CoreError("NOT_FOUND");
+  return { project, membership: null, effectiveRole: "Editor" };
+}
+
 /**
  * Resolve a non-deleted project and the actor's organization membership.
  * Throws NOT_FOUND for missing/soft-deleted projects, for projects outside the
@@ -42,9 +68,21 @@ export type ProjectAccess = {
 export async function resolveProjectAccess(
   tx: Db,
   projectId: string,
-  actor: ProjectActor,
-): Promise<ProjectAccess> {
+  actor: UserSecurityContext,
+): Promise<ProjectAccess>;
+export async function resolveProjectAccess(
+  tx: Db,
+  projectId: string,
+  actor: SecurityContext,
+): Promise<ProjectAccess | WikiAgentProjectAccess>;
+export async function resolveProjectAccess(
+  tx: Db,
+  projectId: string,
+  actor: SecurityContext,
+): Promise<ProjectAccess | WikiAgentProjectAccess> {
   if (!mayAccessProject(actor, projectId)) throw new CoreError("NOT_FOUND");
+  if (actor.kind === "wikiAgent")
+    return resolveWikiAgentAccess(tx, projectId, actor.agentId);
   const project = await tx.project.findFirst({
     where: { id: projectId, ...notDeleted },
     include: {
@@ -72,10 +110,24 @@ export async function resolveProjectAccess(
 export async function assertProjectRole(
   tx: Db,
   projectId: string,
-  actor: ProjectActor,
+  actor: UserSecurityContext,
   min: ProjectRoleName,
   options?: { capability?: Capability },
-): Promise<ProjectAccess> {
+): Promise<ProjectAccess>;
+export async function assertProjectRole(
+  tx: Db,
+  projectId: string,
+  actor: SecurityContext,
+  min: ProjectRoleName,
+  options?: { capability?: Capability },
+): Promise<ProjectAccess | WikiAgentProjectAccess>;
+export async function assertProjectRole(
+  tx: Db,
+  projectId: string,
+  actor: SecurityContext,
+  min: ProjectRoleName,
+  options?: { capability?: Capability },
+): Promise<ProjectAccess | WikiAgentProjectAccess> {
   const access = await resolveProjectAccess(tx, projectId, actor);
   const capability = options?.capability ?? requiredCapabilityForRole(min);
   if (!hasCapability(actor, capability)) {

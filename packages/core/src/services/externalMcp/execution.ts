@@ -11,7 +11,7 @@ import type {
   ExternalInvocation,
   ExternalResult,
 } from "../../externalMcp/types";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { canonicalDigest } from "../../externalMcp/digest";
 import { CoreError } from "../../errors";
 import {
@@ -30,7 +30,7 @@ import type { ExternalMcpSession } from "@weaver/external-mcp";
 
 export async function executeExternalCall(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     callId: string;
     invocation: ExternalInvocation;

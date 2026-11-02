@@ -1,7 +1,7 @@
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import type {
   KnowledgeDocumentStatus,
@@ -26,7 +26,7 @@ export type KnowledgeGenerationDocumentRow = Awaited<
 
 export async function listKnowledgeGenerations(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     status?: KnowledgeGenerationStatus;
@@ -92,7 +92,7 @@ export async function listKnowledgeGenerations(
 
 export async function listGenerationDocuments(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     projectId: string;
     generationId: string;

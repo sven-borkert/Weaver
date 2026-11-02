@@ -2,16 +2,19 @@ import { Prisma } from "@weaver/db/client";
 import { CoreError } from "../../errors";
 import type { WorkAudience } from "../../jobs/backgroundWorkSchema";
 import { toOrganizationRole } from "../../roles";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 
 export type WorkQueryAccess = {
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   audience: WorkAudience;
   projectId?: string;
   windowStart?: Prisma.Sql;
 };
 
-export function assertBackgroundWorkRead(actor: SecurityContext): void {
+export function assertBackgroundWorkRead(actor: UserSecurityContext): void {
   if (
     actor.authenticationMethod !== "session" ||
     !hasCapability(actor, "content:read")

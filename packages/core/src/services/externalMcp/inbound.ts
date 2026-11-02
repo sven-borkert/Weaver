@@ -7,14 +7,17 @@ import type {
   InboundExternalTool,
   JsonObject,
 } from "../../externalMcp/types";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 import { reviewedTool, type ExternalAccessDeps } from "./access";
 import { prepareExternalCall } from "./calls";
 import { executeExternalCall } from "./execution";
 
 export async function listInboundExternalTools(
   deps: ExternalAccessDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<InboundExternalTool[]> {
   if (
     (actor.authenticationMethod !== "apiKey" &&
@@ -59,7 +62,7 @@ export async function listInboundExternalTools(
 
 export async function callInboundExternalTool(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     tool: InboundExternalTool;
     arguments: JsonObject;

@@ -15,7 +15,7 @@ import {
   secretAad,
   type EncryptionKeyRing,
 } from "../../security/encryption";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { fetchForRemote, REMOTE_INSTANCE_SELECT } from "./registry";
 import type { RemoteRuntimeDeps } from "./types";
 
@@ -97,7 +97,7 @@ async function requireEnabledRemote(db: PrismaClient, id: string) {
 
 export async function beginRemoteConnection(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { remoteInstanceId: string },
 ): Promise<{ authorizeUrl: string }> {
   const remote = await requireEnabledRemote(deps.db, input.remoteInstanceId);
@@ -388,7 +388,7 @@ export async function withRemoteToken<T>(
 
 export async function listRemoteInstancesForUser(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ) {
   const remotes = await db.remoteInstance.findMany({
     where: { enabled: true },
@@ -417,7 +417,7 @@ export async function listRemoteInstancesForUser(
 
 export async function disconnectRemoteInstance(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { remoteInstanceId: string },
 ): Promise<void> {
   await db.remoteInstanceConnection.deleteMany({

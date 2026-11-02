@@ -39,6 +39,20 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
 - Links: `wiki/links.ts` `trackedLink` builds the paste-ready `[Title](weaver://document/<id>)`;
   prompts, MCP instructions and document write descriptions teach only that form.
 
+## Principal (no runner yet)
+
+- `WikiAgent` (`services/wikiAgents.ts`): one live row per project (partial unique index),
+  no `User`, `Member` or bearer credential; revoked rows stay so old commits resolve.
+- `createWikiAgentSecurityContext({ agentId, projectId })` builds the principal; ids come
+  from the run row. It carries `content:read` and `content:write` for one project.
+- `resolveProjectAccess` gives it a synthetic `Editor` while the agent row is live and the
+  project is not deleted, `NOT_FOUND` otherwise; the enabled check arrives with
+  `ProjectWikiSettings`. See `weaver-auth` for which services accept the union.
+- Reused read tools are declared with `defineSharedReadTool`, whose `ctx.actor` is the union,
+  so a user-only service does not compile inside them. The seven reads of spec §8.2, `find_page`,
+  `inspect_links` and `list_recent_changes` use it; the loadable table and graph reads
+  do not yet.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

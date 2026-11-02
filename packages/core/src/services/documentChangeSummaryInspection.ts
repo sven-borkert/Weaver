@@ -6,7 +6,7 @@ import type {
 import { CoreError } from "@weaver/core/errors";
 import {
   assertSystemAdmin,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import {
   clampLimit,
@@ -80,7 +80,7 @@ function decodeCursor(cursor: string): [Date, string, string] {
 
 export async function listDocumentChangeSummaries(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   filter: ChangeSummaryInspectionFilter,
 ): Promise<{
   items: ChangeSummaryInspectionRow[];

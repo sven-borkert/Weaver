@@ -9,12 +9,19 @@ import {
   createOAuthSecurityContext,
   createSessionSecurityContext,
   createTaskSecurityContext,
+  createWikiAgentSecurityContext,
   DEFAULT_API_KEY_CAPABILITIES,
   hasCapability,
+  isHumanPrincipal,
   mayAccessProject,
   OAUTH_SCOPES,
   requiredCapabilityForRole,
+  requireUserId,
 } from "./context";
+import {
+  deserializeSecurityContext,
+  serializeSecurityContext,
+} from "../assistant/actor";
 
 describe("system:admin", () => {
   it("grants Admin sessions system:admin and llm:admin", () => {
@@ -354,5 +361,60 @@ describe("external:manage", () => {
         "external:manage",
       ),
     ).toBe(false);
+  });
+});
+
+describe("wiki agent principal", () => {
+  const agent = createWikiAgentSecurityContext({
+    agentId: "a1",
+    projectId: "p1",
+  });
+
+  it("carries only content read and write for its one project", () => {
+    expect(agent).toMatchObject({
+      kind: "wikiAgent",
+      agentId: "a1",
+      projectId: "p1",
+      authenticationMethod: "wikiAgent",
+      credentialId: "wiki-agent:a1",
+    });
+    expect([...agent.capabilities].sort()).toEqual([
+      "content:read",
+      "content:write",
+    ]);
+    expect([...agent.allowedProjectIds]).toEqual(["p1"]);
+    expect(mayAccessProject(agent, "p1")).toBe(true);
+    expect(mayAccessProject(agent, "p2")).toBe(false);
+    expect(Object.isFrozen(agent)).toBe(true);
+    expect("userId" in agent).toBe(false);
+  });
+
+  it("isHumanPrincipal and requireUserId fail closed for it", () => {
+    const user = createSessionSecurityContext({
+      userId: "u1",
+      globalRole: "User",
+      sessionId: "s1",
+    });
+    expect(isHumanPrincipal(user)).toBe(true);
+    expect(requireUserId(user)).toBe("u1");
+    expect(isHumanPrincipal(agent)).toBe(false);
+    expect(() => requireUserId(agent)).toThrowError(
+      expect.objectContaining({ code: "FORBIDDEN" }),
+    );
+  });
+
+  it("cannot be snapshotted or restored as an assistant actor", () => {
+    expect(() =>
+      deserializeSecurityContext({
+        userId: "u1",
+        globalRole: "User",
+        authenticationMethod: "wikiAgent",
+        credentialId: "wiki-agent:a1",
+        capabilities: ["content:read"],
+        allowedProjectIds: ["p1"],
+      }),
+    ).toThrow();
+    // @ts-expect-error snapshots are for user principals only.
+    expect(() => serializeSecurityContext(agent)).toBeDefined();
   });
 });

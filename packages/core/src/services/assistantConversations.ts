@@ -13,7 +13,7 @@ import type {
 } from "@weaver/db/client";
 import { scopeSnapshotSchema, type ScopeSnapshot } from "../assistant/scope";
 import { CoreError } from "../errors";
-import { hasCapability, type SecurityContext } from "../security/context";
+import { hasCapability, type UserSecurityContext } from "../security/context";
 import { resolveProjectAccess } from "./projectAccess";
 
 import { parseContextProjectIds } from "../externalMcp/historyScope";
@@ -27,7 +27,7 @@ type ActiveRunStatus = (typeof ACTIVE_RUN_STATUSES)[number];
 export type RunStatus =
   "queued" | "running" | "cancelling" | "completed" | "failed" | "cancelled";
 
-export function assertAssistantUse(actor: SecurityContext): void {
+export function assertAssistantUse(actor: UserSecurityContext): void {
   if (!hasCapability(actor, "assistant:use")) throw new CoreError("FORBIDDEN");
 }
 
@@ -182,7 +182,7 @@ function toSummary(
 
 export async function requireOwnedConversation(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   conversationId: string,
 ) {
   assertAssistantUse(actor);
@@ -204,7 +204,7 @@ function normalizeTitle(title: string | undefined): string {
 
 export async function createConversation(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { title?: string; pinnedProjectId?: string | null },
 ): Promise<ConversationSummary> {
   assertAssistantUse(actor);
@@ -223,7 +223,7 @@ export async function createConversation(
 
 export async function listConversations(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { cursor?: string; limit?: number },
 ): Promise<{ items: ConversationSummary[]; nextCursor: string | null }> {
   assertAssistantUse(actor);
@@ -241,7 +241,7 @@ export async function listConversations(
 
 export async function getConversationStatus(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   conversationId: string,
 ): Promise<ConversationSummary> {
   return toSummary(await requireOwnedConversation(db, actor, conversationId));
@@ -249,7 +249,7 @@ export async function getConversationStatus(
 
 export async function getConversation(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   conversationId: string,
   beforePosition?: number,
 ): Promise<ConversationDetail> {
@@ -279,7 +279,7 @@ export async function getConversation(
 
 export async function renameConversation(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { conversationId: string; title: string },
 ): Promise<ConversationSummary> {
   await requireOwnedConversation(db, actor, input.conversationId);
@@ -293,7 +293,7 @@ export async function renameConversation(
 
 export async function pinConversation(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { conversationId: string; projectId: string | null },
 ): Promise<ConversationSummary> {
   await requireOwnedConversation(db, actor, input.conversationId);
@@ -308,7 +308,7 @@ export async function pinConversation(
 
 export async function setAutoApproveChanges(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { conversationId: string; enabled: boolean },
 ): Promise<ConversationSummary> {
   await requireOwnedConversation(db, actor, input.conversationId);
@@ -324,7 +324,7 @@ export async function setAutoApproveChanges(
 
 export async function deleteConversation(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   conversationId: string,
 ): Promise<void> {
   const row = await requireOwnedConversation(db, actor, conversationId);

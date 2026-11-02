@@ -12,7 +12,10 @@ import { MAX_MARKDOWN_CHARS } from "../../documents/limits";
 import { CoreError } from "../../errors";
 import { baseUrlFromClientId } from "../../remotes/urls";
 import { projectRoleAtLeast, type ProjectRoleName } from "../../roles";
-import { hasCapability, type SecurityContext } from "../../security/context";
+import {
+  hasCapability,
+  type UserSecurityContext,
+} from "../../security/context";
 import type { TableColumn, TableRow } from "../../tables/types";
 import {
   createDocument,
@@ -39,7 +42,7 @@ export type TransferredImage = {
 
 export async function listTransferTargets(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ): Promise<Array<{ id: string; name: string; myRole: ProjectRoleName }>> {
   if (!hasCapability(actor, "content:write")) return [];
   const projects = await listProjectsForUser(db, actor);
@@ -91,7 +94,7 @@ function received(
     id: string;
     fromClientId: string | null;
   },
-  actor: SecurityContext,
+  actor: UserSecurityContext,
 ) {
   emitDiagnostic({
     severity: "info",

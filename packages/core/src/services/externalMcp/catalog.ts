@@ -11,7 +11,7 @@ import {
   type ExternalMcpSession,
 } from "@weaver/external-mcp";
 import { CoreError } from "../../errors";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import { canonicalDigest } from "../../externalMcp/digest";
 import { MAX_CATALOG_BYTES } from "../../externalMcp/limits";
 import {
@@ -34,7 +34,7 @@ import { invalidateExternalApprovals } from "./approvals";
 
 export async function discoverExternalConnection(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { id: string; expectedRevision: number },
 ) {
   assertConnectionManager(actor);
@@ -243,7 +243,7 @@ export async function discoverExternalConnection(
 }
 export async function reviewExternalTools(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: z.input<typeof toolBulkReviewSchema>,
 ) {
   assertConnectionManager(actor);

@@ -10,14 +10,21 @@ import {
   toOrganizationRole,
   type ProjectRoleName,
 } from "@weaver/core/roles";
-import { hasCapability } from "@weaver/core/security/context";
+import {
+  hasCapability,
+  type SecurityContext,
+} from "@weaver/core/security/context";
 import type {
   Prisma,
   PrismaClient,
   Project,
   TrainingRole,
 } from "@weaver/db/client";
-import { assertProjectRole, notDeleted } from "./projectAccess";
+import {
+  assertProjectRole,
+  notDeleted,
+  resolveProjectAccess,
+} from "./projectAccess";
 import type { ProjectActor } from "./projectAccess";
 import {
   syncProjectMetadata,
@@ -32,7 +39,7 @@ export function organizationSlugForProject(projectId: string): string {
 
 export async function listProjectsForUser(
   db: Db,
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<Array<Project & { myRole: ProjectRoleName }>> {
   if (!hasCapability(actor, "content:read")) {
     throw new CoreError("FORBIDDEN");
@@ -43,8 +50,17 @@ export async function listProjectsForUser(
 // Enumerate membership/restrictions without imposing an operation capability.
 export async function listProjectMembershipsForActor(
   db: Db,
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<Array<Project & { myRole: ProjectRoleName }>> {
+  if (actor.kind === "wikiAgent") {
+    try {
+      const access = await resolveProjectAccess(db, actor.projectId, actor);
+      return [{ ...access.project, myRole: access.effectiveRole }];
+    } catch (error) {
+      if (error instanceof CoreError && error.code === "NOT_FOUND") return [];
+      throw error;
+    }
+  }
   const projects = await db.project.findMany({
     where: {
       ...notDeleted,

@@ -1,6 +1,6 @@
 import {
   hasCapability,
-  type SecurityContext,
+  type UserSecurityContext,
 } from "@weaver/core/security/context";
 import type { AnyToolContract } from "./contract";
 import {
@@ -90,7 +90,7 @@ export type McpToolSelection = {
 };
 
 export function selectMcpTools(
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   active: readonly McpToolsetName[],
 ): McpToolSelection {
   const names = new Set<string>();

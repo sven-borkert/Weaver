@@ -5,7 +5,7 @@ import { validateArguments } from "@weaver/external-mcp";
 import { CoreError } from "@weaver/core/errors";
 import type { ScopeSnapshot } from "@weaver/core/assistant/scope";
 import type { AssistantEvent } from "@weaver/core/assistant/events";
-import type { SecurityContext } from "@weaver/core/security/context";
+import type { UserSecurityContext } from "@weaver/core/security/context";
 import type {
   ExternalInvocation,
   ExternalResult,
@@ -37,7 +37,7 @@ export function externalToolName(id: string): string {
 
 export async function waitForExternalApproval(
   deps: ExternalRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   approvalId: string,
   signal: AbortSignal,
   deadline: Date,
@@ -104,7 +104,7 @@ export type ExternalToolkit = {
 
 export function createExternalToolkit(input: {
   deps: ExternalRuntimeDeps;
-  actor: SecurityContext;
+  actor: UserSecurityContext;
   run: { id: string; attemptId: string };
   scope: ScopeSnapshot;
   available: {

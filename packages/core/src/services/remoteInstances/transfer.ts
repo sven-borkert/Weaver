@@ -20,7 +20,7 @@ import {
 import { CoreError, isCoreError } from "../../errors";
 import { remoteJson, RemoteHttpError } from "../../remotes/http";
 import { remoteEndpoints } from "../../remotes/urls";
-import type { SecurityContext } from "../../security/context";
+import type { UserSecurityContext } from "../../security/context";
 import type { TableColumn, TableRow } from "../../tables/types";
 import { readProjectImage } from "../documentImages";
 import { getDocumentAtSnapshot, resolveRefs } from "../documents";
@@ -222,7 +222,7 @@ type RemoteErrorContext = {
 
 function mapRemoteError(
   error: unknown,
-  context: RemoteErrorContext & { actor: SecurityContext; remote: Remote },
+  context: RemoteErrorContext & { actor: UserSecurityContext; remote: Remote },
 ): never {
   const { remote } = context;
   emitDiagnostic({
@@ -304,7 +304,7 @@ function mapRemoteError(
 /** Calls B with the user's token; refresh and request failures both become user-facing errors. */
 function withRemote<T>(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   remoteInstanceId: string,
   context: RemoteErrorContext,
   request: (
@@ -344,7 +344,7 @@ function readFolderTree(value: unknown): FolderTree {
 
 export async function fetchTransferTargets(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { remoteInstanceId: string },
 ): Promise<{ projects: Array<{ id: string; name: string; myRole: string }> }> {
   return withRemote(
@@ -383,7 +383,7 @@ export async function fetchTransferTargets(
 
 export async function fetchTransferTargetFolders(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { remoteInstanceId: string; projectId: string },
 ): Promise<{ documents: FolderTree; tables: FolderTree }> {
   return withRemote(
@@ -421,7 +421,7 @@ export function transferRequestBody(payload: unknown): string {
 
 async function post(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     remoteInstanceId: string;
     projectId: string;
@@ -490,7 +490,7 @@ async function post(
 
 export async function sendDocumentToRemote(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     remoteInstanceId: string;
     projectId: string;
@@ -509,7 +509,7 @@ export async function sendDocumentToRemote(
 
 export async function sendTableToRemote(
   deps: RemoteRuntimeDeps,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: {
     remoteInstanceId: string;
     projectId: string;

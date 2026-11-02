@@ -9,12 +9,12 @@ import type { AvailableExternalTool } from "@weaver/core/externalMcp/types";
 import type { ExternalToolSnapshot } from "@weaver/core/externalMcp/schema";
 import { getExternalApproval } from "@weaver/core/services/externalMcp";
 import type { ExternalRuntimeDeps } from "@weaver/core/externalMcp/types";
-import type { SecurityContext } from "@weaver/core/security/context";
+import type { UserSecurityContext } from "@weaver/core/security/context";
 vi.mock("@weaver/core/services/externalMcp", () => ({
   getExternalApproval: vi.fn(),
 }));
 const deps = { now: () => new Date() } as ExternalRuntimeDeps;
-const actor = {} as SecurityContext;
+const actor = {} as UserSecurityContext;
 afterEach(() => {
   vi.useRealTimers();
   vi.resetAllMocks();

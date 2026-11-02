@@ -2,7 +2,7 @@ import { searchKnowledge } from "@weaver/core/services/search";
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newOutputBudget,
   scopedProjectIds,
   type ToolOutcome,
@@ -39,7 +39,7 @@ type SearchKnowledgeOutput = {
   }>;
 };
 
-export const searchKnowledgeTool = defineTool({
+export const searchKnowledgeTool = defineSharedReadTool({
   name: "search_knowledge",
   kind: "read",
   capability: "content:read",

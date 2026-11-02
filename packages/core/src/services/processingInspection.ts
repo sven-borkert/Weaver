@@ -1,5 +1,8 @@
 import { Prisma, type PrismaClient } from "@weaver/db/client";
-import { assertSystemAdmin, type SecurityContext } from "../security/context";
+import {
+  assertSystemAdmin,
+  type UserSecurityContext,
+} from "../security/context";
 import { CoreError, CORE_ERROR_CODES } from "../errors";
 import {
   TASK_FAILURE_CODES,
@@ -160,7 +163,7 @@ function projection(source: Source): Prisma.Sql {
 
 export async function listProcessing(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   rawInput: ListProcessingInput,
 ) {
   assertSystemAdmin(actor);
@@ -225,7 +228,7 @@ export async function listProcessing(
 
 export async function listProcessingQueue(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { state?: QueueJobState; cursor?: string; limit?: number },
 ) {
   assertSystemAdmin(actor);

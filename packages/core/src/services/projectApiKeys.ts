@@ -8,7 +8,7 @@ import type {
 } from "@weaver/db/client";
 import type { ProjectRepoReader, ProjectRepoWriter } from "@weaver/git-store";
 import { CoreError } from "../errors";
-import type { SecurityContext } from "../security/context";
+import type { UserSecurityContext } from "../security/context";
 import type { TableColumn } from "../tables/types";
 import { assertProjectRole } from "./projectAccess";
 import { lockProjectMembershipWrites } from "./projectMembers";
@@ -122,7 +122,7 @@ function storedGrant(row: ProjectApiKeyGrant): StoredGrant {
 
 async function assertKeyManager(
   db: Db,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ) {
   if (actor.authenticationMethod !== "session")
@@ -232,7 +232,7 @@ async function summarize(
 async function normalizeGrants(
   tx: Prisma.TransactionClient,
   repo: ProjectRepoWriter,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   input: GrantInput[],
   prior: ProjectApiKeyGrant[] = [],
@@ -312,7 +312,7 @@ const expiryFrom = (now: Date, days: number | null) =>
 /** Runs a policy change under the project lock, then membership-write serialization. */
 function withKeyPolicyLock<T>(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   fn: (tx: Prisma.TransactionClient, repo: ProjectRepoWriter) => Promise<T>,
 ): Promise<T> {
@@ -327,7 +327,7 @@ function withKeyPolicyLock<T>(
 
 export async function listProjectApiKeys(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<ProjectApiKeySummary[]> {
   await assertKeyManager(db, actor, projectId);
@@ -351,7 +351,7 @@ export async function listProjectApiKeys(
 
 export async function createProjectApiKey(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   raw: CreateProjectApiKeyInput,
 ): Promise<{ key: ProjectApiKeySummary; secret: string }> {
   const input = parseInput(createProjectApiKeyInput, raw);
@@ -401,7 +401,7 @@ export async function createProjectApiKey(
 
 export async function updateProjectApiKey(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   raw: UpdateProjectApiKeyInput,
 ): Promise<ProjectApiKeySummary> {
   const input = parseInput(updateProjectApiKeyInput, raw);
@@ -442,7 +442,7 @@ export async function updateProjectApiKey(
 
 export async function revokeProjectApiKey(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   input: { projectId: string; keyId: string },
 ): Promise<void> {
   await assertKeyManager(db, actor, input.projectId);
@@ -463,7 +463,7 @@ export async function revokeProjectApiKey(
 /** Read-only, paginated grant picker; legacy folders are offered by path and receive an identity only when granted. */
 export async function listProjectApiGrantTargets(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   raw: ProjectApiTargetInput,
 ): Promise<ProjectApiGrantTargetPage> {
   const input = projectApiTargetInput.parse(raw);
@@ -588,7 +588,7 @@ export async function listProjectApiGrantTargets(
 
 export async function projectApiConfiguration(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
   env: PublicUrlEnv,
 ): Promise<{ baseUrl: string }> {
@@ -599,7 +599,7 @@ export async function projectApiConfiguration(
 /** Oldest reservations without a settled receipt, for manual investigation only. */
 export async function listUnresolvedProjectApiOperations(
   db: PrismaClient,
-  actor: SecurityContext,
+  actor: UserSecurityContext,
   projectId: string,
 ): Promise<ProjectApiUnresolvedOperation[]> {
   await assertKeyManager(db, actor, projectId);
