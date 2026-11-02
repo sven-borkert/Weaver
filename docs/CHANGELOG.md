@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.232] - 2026-11-02
+
 ### Added
 
 - Documents can now be given a type, summary and tags (and sources through the API and importers). Editors set them in the document menu's Properties dialog; the assistant and MCP `create_document`/`patch_document` tools and their `propose_` counterparts accept `properties` (type, summary, tags). An omitted field stays, `null` clears it, and the type `source` and the `reviewExempt` flag stay reserved for Weaver itself. A human who sets review settings on a page that Weaver exempted from review clears the exemption.
