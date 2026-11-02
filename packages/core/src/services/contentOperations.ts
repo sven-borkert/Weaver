@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import type { JSONContent } from "@tiptap/core";
 import { z } from "zod";
 import type { PrismaClient } from "@weaver/db/client";
-import type { ProjectRepoReader, ProjectRepoWriter } from "@weaver/git-store";
+import type {
+  GitLogEntry,
+  ProjectRepoReader,
+  ProjectRepoWriter,
+} from "@weaver/git-store";
 import {
   assertAuthorName,
   authorForUser,
@@ -21,6 +25,7 @@ import { assetsDirForDocPath, hasAssetsSegment } from "../documents/images";
 import { withoutTitleHeading } from "../documents/importMarkdown";
 import { MAX_MARKDOWN_CHARS } from "../documents/limits";
 import { assertSafeSegments } from "../documents/paths";
+import { collectImageReferences } from "../documents/imageReferences";
 import { applyDocumentPatch } from "../documents/patch";
 import { classifyDeletedPath } from "../documents/recovery";
 import { slugify } from "../documents/slug";
@@ -58,6 +63,7 @@ import {
   type DocumentMetadataOverride,
   type EnrichedActor,
 } from "./documents";
+import { hasNoUser, type ContentWriteActor } from "./contentAuthor";
 import { MAX_SERVED_BLOB_BYTES } from "./documentImages";
 import { defaultReviewForFolderInRepo } from "./folderReview";
 import { resolveImageReferences } from "./documentImageImports";
@@ -67,6 +73,7 @@ import {
   moveFolderToInRepo,
   renameFolderInRepo,
   scopeForResourceType,
+  type FolderAudit,
   type FolderScope,
 } from "./folders";
 import {
@@ -632,12 +639,29 @@ export function applyTableRowChanges(
 
 export type TableAtHead = Awaited<ReturnType<typeof getTableInRepo>>;
 
+/** Who a recovered commit must belong to; a wiki identity also needs the ledger's trust. */
+export type RecoveryIdentity =
+  | { requestHash: string; toolName: string }
+  | { wikiAgentId: string; wikiRequestHash: string };
+
+function matchesRecoveryIdentity(
+  entry: GitLogEntry,
+  identity: RecoveryIdentity,
+): boolean {
+  return "wikiAgentId" in identity
+    ? entry.trustedAuthor === true &&
+        entry.wikiAgentId === identity.wikiAgentId &&
+        entry.wikiRequestHash === identity.wikiRequestHash
+    : entry.mcpRequestHash === identity.requestHash &&
+        entry.mcpToolName === identity.toolName;
+}
+
 // Verified trailers identify writes whose database acknowledgement was lost.
 export async function findCommitByOperationId(
   repo: ProjectRepoWriter,
   path: string,
   operationId: string,
-  mcpIdentity?: { requestHash: string; toolName: string },
+  identity?: RecoveryIdentity,
 ): Promise<string | null> {
   const entries = await repo.logForPath(path, {
     skip: 0,
@@ -647,9 +671,7 @@ export async function findCommitByOperationId(
     entries.find(
       (entry) =>
         entry.operationId === operationId &&
-        (!mcpIdentity ||
-          (entry.mcpRequestHash === mcpIdentity.requestHash &&
-            entry.mcpToolName === mcpIdentity.toolName)),
+        (!identity || matchesRecoveryIdentity(entry, identity)),
     )?.sha ?? null
   );
 }
@@ -737,7 +759,7 @@ async function recoverLifecycleOperation(
   repo: ProjectRepoWriter,
   operation: ContentLifecycleOperation,
   operationId: string,
-  mcpIdentity?: { requestHash: string; toolName: string },
+  identity?: RecoveryIdentity,
 ): Promise<AppliedOperation | null> {
   const entries = await repo.logForPath(".", {
     skip: 0,
@@ -749,11 +771,7 @@ async function recoverLifecycleOperation(
     throw new CoreError("CONFLICT", "prior lifecycle history is ambiguous");
   const entry = matching[0];
   if (!entry) return null;
-  if (
-    mcpIdentity &&
-    (entry.mcpRequestHash !== mcpIdentity.requestHash ||
-      entry.mcpToolName !== mcpIdentity.toolName)
-  )
+  if (identity && !matchesRecoveryIdentity(entry, identity))
     throw new CoreError(
       "CONFLICT",
       "idempotency key was already used for a different request, or its prior commit cannot be verified",
@@ -777,15 +795,15 @@ export async function recoverPriorOperation(
   repo: ProjectRepoWriter,
   operation: ContentOperation,
   operationId: string,
-  mcpIdentity?: { requestHash: string; toolName: string },
+  identity?: RecoveryIdentity,
 ): Promise<AppliedOperation | null> {
   if (operation.kind === "content.lifecycle") {
     assertLifecycleShape(operation);
-    return recoverLifecycleOperation(repo, operation, operationId, mcpIdentity);
+    return recoverLifecycleOperation(repo, operation, operationId, identity);
   }
   if (operation.kind === "content.restore")
     return operation.mode === "deleted"
-      ? recoverDeletedRestore(db, repo, operation, operationId, mcpIdentity)
+      ? recoverDeletedRestore(db, repo, operation, operationId, identity)
       : null;
   if (operation.kind !== "document.create" && operation.kind !== "table.create")
     return null;
@@ -822,11 +840,7 @@ export async function recoverPriorOperation(
       throw new CoreError("CONFLICT", "prior create commit cannot be verified");
     return null;
   }
-  if (
-    mcpIdentity &&
-    (entry.mcpRequestHash !== mcpIdentity.requestHash ||
-      entry.mcpToolName !== mcpIdentity.toolName)
-  )
+  if (identity && !matchesRecoveryIdentity(entry, identity))
     throw new CoreError(
       "CONFLICT",
       "idempotency key was already used for a different request, or its prior commit cannot be verified",
@@ -923,7 +937,7 @@ async function recoverDeletedRestore(
   repo: ProjectRepoWriter,
   operation: ContentRestoreOperation,
   operationId: string,
-  mcpIdentity?: { requestHash: string; toolName: string },
+  identity?: RecoveryIdentity,
 ): Promise<AppliedOperation | null> {
   const entries = await repo.logForPath(".", {
     skip: 0,
@@ -935,11 +949,7 @@ async function recoverDeletedRestore(
     throw new CoreError("CONFLICT", "prior restore history is ambiguous");
   const entry = matching[0];
   if (!entry) return null;
-  if (
-    mcpIdentity &&
-    (entry.mcpRequestHash !== mcpIdentity.requestHash ||
-      entry.mcpToolName !== mcpIdentity.toolName)
-  )
+  if (identity && !matchesRecoveryIdentity(entry, identity))
     throw new CoreError(
       "CONFLICT",
       "idempotency key was already used for a different request, or its prior commit cannot be verified",
@@ -1086,6 +1096,94 @@ export async function checkOperationBase(
   return { ok: true, path: null, table: null };
 }
 
+function existingResourceId(operation: ContentOperation): string | null {
+  switch (operation.kind) {
+    case "document.edit":
+    case "document.patch":
+      return operation.documentId;
+    case "table.schema":
+    case "table.rows":
+    case "table.change":
+      return operation.tableId;
+    case "content.restore":
+      return operation.resourceId;
+    case "content.lifecycle":
+      // A folder action commits no resource, so this is null for one; an
+      // item action always carries an id.
+      return operation.resourceId ?? null;
+    default:
+      return null;
+  }
+}
+
+/** The shared write sequence under the project lock: recover a lost
+ * acknowledgement, check the base revision, then apply. A prior commit under
+ * this operation id that fails the identity check is a CONFLICT, never a
+ * recovery and never a fresh write. */
+export async function recoverCheckApply(input: {
+  db: PrismaClient;
+  repo: ProjectRepoWriter;
+  operation: ContentOperation;
+  operationId: string;
+  identity: RecoveryIdentity;
+  checkpoint?: () => void;
+  apply: (
+    base: Extract<OperationBase, { ok: true }>,
+  ) => Promise<AppliedOperation>;
+}): Promise<{ applied: AppliedOperation; committed: boolean }> {
+  const { db, repo, operation, operationId, identity } = input;
+  const recoveredCreate = await recoverPriorOperation(
+    db,
+    repo,
+    operation,
+    operationId,
+    identity,
+  );
+  const base = await checkOperationBase(db, repo, operation);
+  input.checkpoint?.();
+  if (recoveredCreate) return { applied: recoveredCreate, committed: false };
+  if (base.ok) {
+    input.checkpoint?.();
+    return { applied: await input.apply(base), committed: true };
+  }
+  if (base.reason === "gone")
+    throw new CoreError("NOT_FOUND", "target no longer exists");
+  // Our own commit from a crash between commit and row insert wins;
+  // anything else is a real conflict the client must re-read for.
+  const recovered = await findCommitByOperationId(
+    repo,
+    base.path,
+    operationId,
+    identity,
+  );
+  if (!recovered) {
+    const unverified = await findCommitByOperationId(
+      repo,
+      base.path,
+      operationId,
+    );
+    if (unverified)
+      throw new CoreError(
+        "CONFLICT",
+        "idempotency key was already used for a different request, or its prior commit cannot be verified",
+        { reason: "IDEMPOTENCY_KEY_REUSED" },
+      );
+    throw new CoreError(
+      "CONFLICT",
+      "base revision changed; re-read and retry with the current commitSha",
+      { reason: "STALE_BASE" },
+    );
+  }
+  return {
+    applied: {
+      commitSha: recovered,
+      resourceId: existingResourceId(operation),
+      path: base.path,
+    },
+    committed: false,
+  };
+}
+
 export type AppliedOperation = {
   commitSha: string;
   /** null for a folder action, which commits no resource (design §7.6). */
@@ -1105,8 +1203,14 @@ export type ApplyOperationOptions = {
   mcpToolName?: string;
   /** Recorded as the Weaver-Run-Id trailer for proposal accepts. */
   runId?: string;
+  /** Weaver-Wiki-Request-Hash, required on every wiki agent commit. */
+  wikiRequestHash?: string;
+  /** Runs under the project lock immediately before the commit. */
+  beforeCommit?: () => Promise<void>;
   /** Overrides the default document commit message (direct writes). */
   message?: (path: string, oldPath: string | null) => string;
+  /** Sees the canonical body before and after a patch; a throw refuses it. */
+  assertPatched?: (before: string, after: string) => void;
 };
 
 /** Paths of the given type that this commit deleted, from its own D records. */
@@ -1440,18 +1544,33 @@ export async function resolveDocumentMetadata(
   };
 }
 
+/** A machine author never copies from Files: references are read with a user's access. */
+function machineImageContent(contentJson: JSONContent) {
+  if (collectImageReferences(contentJson).length > 0)
+    throw new CoreError(
+      "FORBIDDEN",
+      "weaver-image references are not available to this author",
+    );
+  return {
+    content: { kind: "markdown" as const, contentJson },
+    assets: [],
+  };
+}
+
 /** Assets go under the title's slug; the writer moves them if it allocates another. */
 async function createImages(
   db: PrismaClient,
-  author: EnrichedActor,
+  author: ContentWriteActor,
   operation: { projectId: string; title: string; markdown: string },
 ) {
   const assetsFromSlug = slugify(operation.title);
+  const contentJson = parseDocumentBody(
+    withoutTitleHeading(operation.markdown, operation.title),
+  );
+  if (hasNoUser(author)) return machineImageContent(contentJson);
   const images = await resolveImageReferences(db, author, {
     projectId: operation.projectId,
-    contentJson: parseDocumentBody(
-      withoutTitleHeading(operation.markdown, operation.title),
-    ),
+    contentJson,
     assetsSlug: assetsFromSlug,
     takenNames: new Set(),
   });
@@ -1466,10 +1585,11 @@ async function createImages(
 async function updateImages(
   db: PrismaClient,
   repo: ProjectRepoWriter,
-  author: EnrichedActor,
+  author: ContentWriteActor,
   operation: { projectId: string; documentId: string },
   contentJson: JSONContent,
 ) {
+  if (hasNoUser(author)) return machineImageContent(contentJson);
   const row = await db.document.findFirst({
     where: { id: operation.documentId, projectId: operation.projectId },
     select: { path: true, slug: true },
@@ -1528,6 +1648,143 @@ async function editedBody(
     : withoutTitleHeading(operation.markdown, title);
 }
 
+function operationAudit(options: ApplyOperationOptions) {
+  return {
+    operationId: options.operationId,
+    mcpRequestHash: options.mcpRequestHash,
+    mcpToolName: options.mcpToolName,
+    runId: options.runId,
+    wikiRequestHash: options.wikiRequestHash,
+    beforeCommit: options.beforeCommit,
+  };
+}
+
+/** The branches a machine author may reach; `applyOperationInRepo` itself stays user-only. */
+export async function applyDocumentCreate(
+  db: PrismaClient,
+  repo: ProjectRepoWriter,
+  operation: Extract<ContentOperation, { kind: "document.create" }>,
+  author: ContentWriteActor,
+  options: ApplyOperationOptions,
+): Promise<AppliedOperation> {
+  const result = await writeDocumentInRepo(
+    db,
+    repo,
+    operation.projectId,
+    {
+      kind: "create",
+      id: createdResourceId(options.operationId),
+      folderPath: operation.folderPath,
+      title: operation.title,
+      ...(await createImages(db, author, operation)),
+      createdAt: new Date().toISOString(),
+      metadata: await resolveDocumentMetadata(
+        db,
+        operation.projectId,
+        operation.metadata,
+      ),
+    },
+    author,
+    {
+      operation: "create",
+      message: options.message,
+      ...operationAudit(options),
+    },
+  );
+  return {
+    commitSha: result.headCommitSha,
+    resourceId: result.id,
+    path: result.path,
+  };
+}
+
+export async function applyDocumentPatchOperation(
+  db: PrismaClient,
+  repo: ProjectRepoWriter,
+  operation: Extract<ContentOperation, { kind: "document.patch" }>,
+  author: ContentWriteActor,
+  options: ApplyOperationOptions,
+): Promise<AppliedOperation> {
+  assertPatchHasWork(operation);
+  const row = await db.document.findFirst({
+    where: { id: operation.documentId, projectId: operation.projectId },
+    select: { path: true },
+  });
+  if (!row) throw new CoreError("NOT_FOUND");
+  const kind = documentKindOfPath(row.path);
+  const file = parseDocumentFile(
+    await repo.readFileFromWorktree(row.path),
+    kind,
+  );
+  // Selectors were resolved against getDocumentAtSnapshot's canonical
+  // text, so patch the canonical form, not the raw stored body.
+  const canonical =
+    kind === "python"
+      ? file.body
+      : serializeDocumentBody(parseDocumentBody(file.body));
+  const patched = applyDocumentPatch(canonical, operation.actions, kind);
+  assertPatchedMarkdownFits(patched);
+  options.assertPatched?.(canonical, patched);
+  const result = await writeDocumentInRepo(
+    db,
+    repo,
+    operation.projectId,
+    {
+      kind: "update",
+      documentId: operation.documentId,
+      baseCommitSha: operation.baseCommitSha,
+      title: operation.title,
+      ...(kind === "python"
+        ? { content: { kind: "python" as const, text: patched } }
+        : await updateImages(
+            db,
+            repo,
+            author,
+            operation,
+            parseDocumentBody(patched),
+          )),
+      changeSummary: options.summary.slice(0, 200),
+      metadata: await resolveDocumentMetadata(
+        db,
+        operation.projectId,
+        operation.metadata,
+      ),
+    },
+    author,
+    {
+      operation: "update",
+      message: options.message,
+      ...operationAudit(options),
+    },
+  );
+  return {
+    commitSha: result.headCommitSha,
+    resourceId: result.id,
+    path: result.path,
+  };
+}
+
+export async function applyFolderCreate(
+  repo: ProjectRepoWriter,
+  operation: ContentLifecycleOperation,
+  author: Parameters<typeof createFolderInRepo>[2],
+  audit: FolderAudit,
+): Promise<AppliedOperation> {
+  assertLifecycleShape(operation);
+  const result = await createFolderInRepo(
+    repo,
+    { parentPath: operation.parentPath!, name: operation.name! },
+    author,
+    scopeForResourceType(operation.resourceType),
+    audit,
+  );
+  return {
+    commitSha: result.headCommitSha,
+    resourceId: null,
+    path: result.path,
+  };
+}
+
 /** The one place a document or table operation becomes a commit; shared by
  * proposal acceptance and MCP direct writes so both produce identical history. */
 export async function applyOperationInRepo(
@@ -1537,40 +1794,10 @@ export async function applyOperationInRepo(
   author: EnrichedActor,
   options: ApplyOperationOptions,
 ): Promise<AppliedOperation> {
-  const audit = {
-    operationId: options.operationId,
-    mcpRequestHash: options.mcpRequestHash,
-    mcpToolName: options.mcpToolName,
-    runId: options.runId,
-  };
+  const audit = operationAudit(options);
   switch (operation.kind) {
-    case "document.create": {
-      const result = await writeDocumentInRepo(
-        db,
-        repo,
-        operation.projectId,
-        {
-          kind: "create",
-          id: createdResourceId(options.operationId),
-          folderPath: operation.folderPath,
-          title: operation.title,
-          ...(await createImages(db, author, operation)),
-          createdAt: new Date().toISOString(),
-          metadata: await resolveDocumentMetadata(
-            db,
-            operation.projectId,
-            operation.metadata,
-          ),
-        },
-        author,
-        { operation: "create", message: options.message, ...audit },
-      );
-      return {
-        commitSha: result.headCommitSha,
-        resourceId: result.id,
-        path: result.path,
-      };
-    }
+    case "document.create":
+      return applyDocumentCreate(db, repo, operation, author, options);
     case "document.edit": {
       const kind = await documentKindOf(
         db,
@@ -1611,60 +1838,8 @@ export async function applyOperationInRepo(
         path: result.path,
       };
     }
-    case "document.patch": {
-      assertPatchHasWork(operation);
-      const row = await db.document.findFirst({
-        where: { id: operation.documentId, projectId: operation.projectId },
-        select: { path: true },
-      });
-      if (!row) throw new CoreError("NOT_FOUND");
-      const kind = documentKindOfPath(row.path);
-      const file = parseDocumentFile(
-        await repo.readFileFromWorktree(row.path),
-        kind,
-      );
-      // Selectors were resolved against getDocumentAtSnapshot's canonical
-      // text, so patch the canonical form, not the raw stored body.
-      const canonical =
-        kind === "python"
-          ? file.body
-          : serializeDocumentBody(parseDocumentBody(file.body));
-      const patched = applyDocumentPatch(canonical, operation.actions, kind);
-      assertPatchedMarkdownFits(patched);
-      const result = await writeDocumentInRepo(
-        db,
-        repo,
-        operation.projectId,
-        {
-          kind: "update",
-          documentId: operation.documentId,
-          baseCommitSha: operation.baseCommitSha,
-          title: operation.title,
-          ...(kind === "python"
-            ? { content: { kind: "python" as const, text: patched } }
-            : await updateImages(
-                db,
-                repo,
-                author,
-                operation,
-                parseDocumentBody(patched),
-              )),
-          changeSummary: options.summary.slice(0, 200),
-          metadata: await resolveDocumentMetadata(
-            db,
-            operation.projectId,
-            operation.metadata,
-          ),
-        },
-        author,
-        { operation: "update", message: options.message, ...audit },
-      );
-      return {
-        commitSha: result.headCommitSha,
-        resourceId: result.id,
-        path: result.path,
-      };
-    }
+    case "document.patch":
+      return applyDocumentPatchOperation(db, repo, operation, author, options);
     case "table.create": {
       const result = await writeTableInRepo(
         db,
@@ -1804,20 +1979,8 @@ export async function applyOperationInRepo(
       assertLifecycleShape(operation);
       const scope = scopeForResourceType(operation.resourceType);
       switch (operation.action) {
-        case "folder_create": {
-          const result = await createFolderInRepo(
-            repo,
-            { parentPath: operation.parentPath!, name: operation.name! },
-            author,
-            scope,
-            audit,
-          );
-          return {
-            commitSha: result.headCommitSha,
-            resourceId: null,
-            path: result.path,
-          };
-        }
+        case "folder_create":
+          return applyFolderCreate(repo, operation, author, audit);
         case "folder_rename": {
           const result = await renameFolderInRepo(
             db,

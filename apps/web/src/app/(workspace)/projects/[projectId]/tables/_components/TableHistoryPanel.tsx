@@ -157,9 +157,15 @@ export function TableHistoryPanel({
                     ) : null}
                   </span>
                   <span className="text-text-3 mt-1 block text-[11px]">
-                    {entry.machineEditor?.name ??
+                    {entry.machineEditor?.kind === "wikiAgent" ? (
+                      <span className="border-line-faint bg-surface text-text-3 rounded-full border px-1.5 py-0.5 text-[10px] font-medium">
+                        Wiki agent
+                      </span>
+                    ) : (
+                      (entry.machineEditor?.name ??
                       entry.userName ??
-                      entry.authorName}
+                      entry.authorName)
+                    )}
                   </span>
                   {mounted ? (
                     <time

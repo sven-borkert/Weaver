@@ -13,10 +13,8 @@ import { CoreError } from "../errors";
 import { hasCapability } from "../security/context";
 import {
   applyOperationInRepo,
-  checkOperationBase,
   contentOperationSchema,
-  findCommitByOperationId,
-  recoverPriorOperation,
+  recoverCheckApply,
   type ContentOperation,
 } from "./contentOperations";
 import type { EnrichedActor } from "./documents";
@@ -173,26 +171,6 @@ async function awaitWhileWriteIsCancellable<T>(
   }
 }
 
-function existingResourceId(operation: ContentOperation): string | null {
-  switch (operation.kind) {
-    case "document.edit":
-    case "document.patch":
-      return operation.documentId;
-    case "table.schema":
-    case "table.rows":
-    case "table.change":
-      return operation.tableId;
-    case "content.restore":
-      return operation.resourceId;
-    case "content.lifecycle":
-      // A folder action commits no resource, so this is null for one; an
-      // item action always carries an id.
-      return operation.resourceId ?? null;
-    default:
-      return null;
-  }
-}
-
 /**
  * Spec §16/§26.2 item 11: one commit per (user, idempotency key). Inside the
  * user/key lock: replay a stored result, refuse a reused key, then take the
@@ -256,69 +234,26 @@ export async function applyMcpOperation(
         };
       }
 
-      const recoveredCreate = await recoverPriorOperation(
+      const { applied, committed: wrote } = await recoverCheckApply({
         db,
         repo,
         operation,
         operationId,
-        { requestHash: hash, toolName: input.toolName },
-      );
-      const base = await checkOperationBase(db, repo, operation);
-      input.signal?.throwIfAborted();
-      let applied: {
-        commitSha: string;
-        resourceId: string | null;
-        path: string;
-      };
-      if (recoveredCreate) {
-        applied = recoveredCreate;
-      } else if (!base.ok) {
-        if (base.reason === "gone")
-          throw new CoreError("NOT_FOUND", "target no longer exists");
-        // Our own commit from a crash between commit and row insert wins;
-        // anything else is a real conflict the client must re-read for.
-        const recovered = await findCommitByOperationId(
-          repo,
-          base.path,
-          operationId,
-          { requestHash: hash, toolName: input.toolName },
-        );
-        if (!recovered) {
-          const unverified = await findCommitByOperationId(
-            repo,
-            base.path,
+        identity: { requestHash: hash, toolName: input.toolName },
+        checkpoint: () => input.signal?.throwIfAborted(),
+        apply: (base) => {
+          irreversibleStarted = true;
+          return applyOperationInRepo(db, repo, operation, actor, {
+            table: base.table,
+            summary,
             operationId,
-          );
-          if (unverified)
-            throw new CoreError(
-              "CONFLICT",
-              "idempotency key was already used for a different request, or its prior commit cannot be verified",
-              { reason: "IDEMPOTENCY_KEY_REUSED" },
-            );
-          throw new CoreError(
-            "CONFLICT",
-            "base revision changed; re-read and retry with the current commitSha",
-            { reason: "STALE_BASE" },
-          );
-        }
-        applied = {
-          commitSha: recovered,
-          resourceId: existingResourceId(operation),
-          path: base.path,
-        };
-      } else {
-        input.signal?.throwIfAborted();
-        irreversibleStarted = true;
-        applied = await applyOperationInRepo(db, repo, operation, actor, {
-          table: base.table,
-          summary,
-          operationId,
-          mcpRequestHash: hash,
-          mcpToolName: input.toolName,
-          message: (path) => `mcp: ${path} — ${summary}`,
-        });
-        committed = true;
-      }
+            mcpRequestHash: hash,
+            mcpToolName: input.toolName,
+            message: (path) => `mcp: ${path} — ${summary}`,
+          });
+        },
+      });
+      committed = wrote;
 
       const result = {
         projectId: operation.projectId,

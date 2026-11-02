@@ -67,6 +67,27 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
 - `@weaver.invalid` (and subdomains) is reserved: `isReservedEmail` in `@weaver/auth/constants`,
   enforced by the Better Auth `user.create.before` hook, `createUser` and the OIDC profile gate.
 
+## Direct writes
+
+`services/wikiOperations.ts` `applyWikiOperation(db, { run, guards, operation, operationId, requestHash, summary?, beforeCommit? })`
+is the agent's only write path.
+
+- `WikiOperation` is strict: `document.create`, `document.patch` (no title, no metadata) and
+  `content.lifecycle` `folder_create`, with `properties` arriving in the writer slice. Other
+  kinds and actions are `FORBIDDEN` before parsing. It calls the branch functions
+  (`applyDocumentCreate`, `applyDocumentPatchOperation`, `applyFolderCreate`);
+  `applyOperationInRepo` stays `EnrichedActor`, so its full switch does not compile for a machine.
+- `run` is a `WikiWriteFence { agentId, projectId, runId, assertLive }`; it is checked before the
+  lock, on entry, and with the agent's liveness immediately before the commit. `guards` supply the
+  guide and source folders, which live in settings.
+- Refused: Python, task output (task and run), the guide, `wikiSourceItemId` pages, source folders,
+  `weaver-image:`, `<img>`. A patch may not raise either count in the canonical body, so
+  markup cannot be assembled from existing text. Existing images stay. Budgets belong to the runner.
+- Operation ids: `wiki-run:<fence runId>:<nnnn>`, `wiki-input:<id>`, `wiki-revert:<id>:<nnnn>`.
+- Recovery goes through `recoverCheckApply` with identity `{ wikiAgentId, wikiRequestHash }`: a
+  match needs `trustedAuthor === true`, the agent trailer and the hash, else `CONFLICT`. A patch
+  retried with a newer base still finds its own commit first, so it cannot apply twice.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

@@ -520,6 +520,10 @@ task) or `WikiAgentSecurityContext` (a project's `WikiAgent` row,
 [`wikiAgents.ts`](../packages/core/src/services/wikiAgents.ts), no `User` or `Member`). Only
 agent-reachable services take the union (access, scope and shared content reads); all
 others take `UserSecurityContext`, so passing an agent context to them is a compile error.
+Its only write path is [`wikiOperations.ts`](../packages/core/src/services/wikiOperations.ts)
+`applyWikiOperation`: a strict create, patch and folder-create union fenced by the run, which
+calls the branch functions of `applyOperationInRepo` and recovers through `recoverCheckApply`,
+trusting only ledger-trusted commits with the agent trailer and request hash.
 
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS

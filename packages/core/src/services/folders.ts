@@ -38,12 +38,19 @@ import {
   isTableDirName,
 } from "@weaver/core/tables/paths";
 import type { SecurityContext } from "../security/context";
-import { machineEditorColumns, machineEditorFromRow } from "./contentAuthor";
+import {
+  documentAuthorForContent,
+  gitAuthorForContent,
+  machineEditorColumns,
+  machineEditorFromRow,
+  type MachineContentAuthor,
+} from "./contentAuthor";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import {
   openProjectRepo,
   type ProjectRepoReader,
   type ProjectRepoWriter,
+  type CommitAuthor,
 } from "@weaver/git-store";
 import { presentAuthor } from "./documents";
 import { withProjectRepo } from "./projectRepo";
@@ -56,6 +63,21 @@ import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { captureError } from "../diagnostics/writer";
 
 type Actor = ProjectActor & { name?: string | null; email?: string };
+
+/** Only folder creation can have a machine author; rename, move and delete stay user-only. */
+type FolderCreateActor = Actor | MachineContentAuthor;
+
+function folderCreateGitAuthor(actor: FolderCreateActor): CommitAuthor {
+  return actor.kind === "user"
+    ? actorAuthor(actor)
+    : gitAuthorForContent(actor);
+}
+
+function folderCreateStamp(actor: FolderCreateActor): DocumentAuthor {
+  return actor.kind === "user"
+    ? folderAuthor(actor)
+    : documentAuthorForContent(actor);
+}
 
 function actorAuthor(actor: Actor) {
   return {
@@ -90,6 +112,8 @@ export type FolderAudit = {
   mcpRequestHash?: string;
   mcpToolName?: string;
   runId?: string;
+  wikiRequestHash?: string;
+  beforeCommit?: () => Promise<void>;
 };
 
 const scopeRoot = (scope: FolderScope): string[] =>
@@ -484,7 +508,7 @@ export async function getTree(
 export async function stageFolderInRepo(
   repo: ProjectRepoWriter,
   input: { segments: string[]; name: string; appearance?: Appearance },
-  actor: Actor,
+  actor: FolderCreateActor,
   scope: FolderScope,
 ): Promise<{ segments: string[]; path: string }> {
   const full = input.segments;
@@ -501,7 +525,7 @@ export async function stageFolderInRepo(
   await repo.writeFileAtomic(
     folderMetadataPath(rel),
     composeFolderMetadata({
-      ...newFolderMetadata(name, folderAuthor(actor), new Date()),
+      ...newFolderMetadata(name, folderCreateStamp(actor), new Date()),
       ...(input.appearance ? { appearance: input.appearance } : {}),
     }),
   );
@@ -511,7 +535,7 @@ export async function stageFolderInRepo(
 export async function createFolderInRepo(
   repo: ProjectRepoWriter,
   input: { parentPath: string[]; name: string },
-  actor: Actor,
+  actor: FolderCreateActor,
   scope: FolderScope,
   audit: FolderAudit = {},
 ): Promise<FolderWriteResult> {
@@ -525,7 +549,7 @@ export async function createFolderInRepo(
   );
   const headCommitSha = await repo.commitAll(
     `create: ${staged.path}/`,
-    actorAuthor(actor),
+    folderCreateGitAuthor(actor),
     audit,
   );
   return { ...staged, headCommitSha };

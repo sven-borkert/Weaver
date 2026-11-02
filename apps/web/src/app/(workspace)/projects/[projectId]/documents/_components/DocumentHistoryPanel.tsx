@@ -172,7 +172,11 @@ export function DocumentHistoryPanel({
             const isCurrent = entry.sha === currentSha;
             const isSelected = entry.sha === selectedSha;
             const author =
-              entry.machineEditor?.name ?? entry.userName ?? entry.authorName;
+              entry.machineEditor?.kind === "wikiAgent"
+                ? null
+                : (entry.machineEditor?.name ??
+                  entry.userName ??
+                  entry.authorName);
 
             return (
               <li key={entry.sha}>
@@ -216,6 +220,11 @@ export function DocumentHistoryPanel({
                   ) : null}
                   <span className="text-text-3 mt-1 block text-[11px]">
                     {author}
+                    {entry.machineEditor?.kind === "wikiAgent" ? (
+                      <span className="border-line-faint bg-surface text-text-3 rounded-full border px-1.5 py-0.5 text-[10px] font-medium">
+                        Wiki agent
+                      </span>
+                    ) : null}
                   </span>
                   {mounted ? (
                     <time

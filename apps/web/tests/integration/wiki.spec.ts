@@ -2,6 +2,14 @@ import { randomUUID } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
 import { simpleGit } from "simple-git";
 import { createCredentialUser } from "@weaver/auth";
+import { contentOperationSchema } from "@weaver/core/services/contentOperations";
+import {
+  applyWikiOperation,
+  wikiRequestHash,
+  type WikiOperation,
+  type WikiWriteFence,
+  type WikiWriteGuards,
+} from "@weaver/core/services/wikiOperations";
 import { createWikiAgentSecurityContext } from "@weaver/core/security/context";
 import { wikiAgentContentAuthor } from "@weaver/core/services/contentAuthor";
 import { listDashboardActivity } from "@weaver/core/services/dashboard/activity";
@@ -13,7 +21,10 @@ import {
   writeDocumentInRepo,
 } from "@weaver/core/services/documents";
 import { getTree } from "@weaver/core/services/folders";
-import { createWikiAgent } from "@weaver/core/services/wikiAgents";
+import {
+  createWikiAgent,
+  revokeWikiAgent,
+} from "@weaver/core/services/wikiAgents";
 import { listRecentChanges } from "@weaver/core/services/wikiReads";
 import { parseDocumentBody } from "@weaver/core/editor/markdown";
 import { withProjectRepo } from "@weaver/git-store";
@@ -27,8 +38,10 @@ import {
   securityContextFor,
   testAuth,
 } from "./_harness";
+import { createTaskRun } from "./_dashboardFixtures";
 
 const HASH = "a".repeat(64);
+const HEADER_ONLY = { sourceFolderPaths: [] };
 
 async function fixture(suffix = "w") {
   const db = getPrisma();
@@ -340,5 +353,632 @@ describe("reserved weaver.invalid email domain", () => {
       }),
     ).rejects.toThrow(/reserved/i);
     expect(await getPrisma().user.count()).toBe(0);
+  });
+});
+
+describe("applyWikiOperation", () => {
+  beforeEach(resetDb);
+
+  async function writer(suffix = "op") {
+    const f = await fixture(suffix);
+    const runId = randomUUID();
+    let live = true;
+    const fence: WikiWriteFence = {
+      agentId: f.agent.id,
+      projectId: f.project.id,
+      runId,
+      assertLive: async () => {
+        if (!live) throw new Error("run is no longer live");
+      },
+    };
+    let counter = 0;
+    const nextId = () =>
+      `wiki-run:${runId}:${String(++counter).padStart(4, "0")}`;
+    const apply = (
+      operation: unknown,
+      options: {
+        operationId?: string;
+        requestHash?: string;
+        guards?: WikiWriteGuards;
+        fence?: WikiWriteFence;
+        beforeCommit?: () => Promise<void>;
+      } = {},
+    ) =>
+      applyWikiOperation(f.db, {
+        run: options.fence ?? fence,
+        guards: options.guards ?? HEADER_ONLY,
+        operation: operation as WikiOperation,
+        operationId: options.operationId ?? nextId(),
+        requestHash:
+          options.requestHash ?? wikiRequestHash(operation as WikiOperation),
+        beforeCommit: options.beforeCommit,
+      });
+    const create = (title = "Page", markdown = "First paragraph.") =>
+      ({
+        kind: "document.create",
+        projectId: f.project.id,
+        folderPath: [],
+        title,
+        markdown,
+      }) satisfies WikiOperation;
+    const head = () =>
+      withProjectRepo(f.project.id, (repo) => repo.resolveHead());
+    return {
+      ...f,
+      fence,
+      runId,
+      apply,
+      create,
+      head,
+      nextId,
+      close: () => {
+        live = false;
+      },
+    };
+  }
+  type Writer = Awaited<ReturnType<typeof writer>>;
+
+  const patch = (
+    w: Writer,
+    documentId: string,
+    baseCommitSha: string,
+    text = "Added.",
+  ) =>
+    ({
+      kind: "document.patch",
+      projectId: w.project.id,
+      documentId,
+      baseCommitSha,
+      actions: [{ action: "append", text }],
+    }) satisfies WikiOperation;
+  const folder = (w: Writer, name = "Topics", parentPath: string[] = []) =>
+    ({
+      kind: "content.lifecycle",
+      action: "folder_create",
+      projectId: w.project.id,
+      parentPath,
+      name,
+    }) satisfies WikiOperation;
+
+  async function forgeCommit(
+    w: Writer,
+    file: string,
+    content: string,
+    trailers: Record<string, string>,
+  ) {
+    return withProjectRepo(w.project.id, async (repo) => {
+      await repo.writeFileAtomic(file, content);
+      const git = simpleGit(repo.dir);
+      await git.raw(["add", "-f", file]);
+      const lines = Object.entries(trailers).map(([k, v]) => `${k}: ${v}`);
+      await git.raw([
+        "-c",
+        "user.name=Wiki agent",
+        "-c",
+        `user.email=wiki-agent+${w.agent.id}@weaver.invalid`,
+        "commit",
+        "-m",
+        `forged\n\n${lines.join("\n")}`,
+      ]);
+      return (await git.revparse(["HEAD"])).trim();
+    });
+  }
+
+  it("creates, patches and creates folders as the agent with the run's trailers", async () => {
+    const w = await writer();
+    const created = await w.apply(w.create());
+    expect(created).toMatchObject({
+      projectId: w.project.id,
+      recovered: false,
+      path: "page.md",
+    });
+    const patched = await w.apply(
+      patch(w, created.resourceId!, created.commitSha),
+    );
+    expect(patched.resourceId).toBe(created.resourceId);
+    const made = await w.apply(folder(w));
+    expect(made).toMatchObject({ resourceId: null, path: "topics" });
+    const inside = await w.apply({
+      ...w.create("Nested"),
+      folderPath: ["topics"],
+    });
+    expect(inside.path).toBe("topics/nested.md");
+
+    const log = await withProjectRepo(w.project.id, (repo) =>
+      simpleGit(repo.dir).raw(["log", "-4", "--format=%an|%ae|%B%x00"]),
+    );
+    const commits = log.split("\0").filter((c) => c.trim());
+    expect(commits).toHaveLength(4);
+    for (const commit of commits) {
+      expect(commit).toContain(`Weaver-Wiki-Agent-Id: ${w.agent.id}`);
+      expect(commit).toContain(`Weaver-Run-Id: ${w.runId}`);
+      expect(commit).toMatch(/Weaver-Wiki-Request-Hash: [0-9a-f]{64}/);
+      expect(commit).toMatch(/Weaver-Operation-Id: wiki-run:/);
+      expect(commit).not.toContain("Weaver-User-Id");
+      expect(commit).toContain("Wiki agent|");
+    }
+    expect(
+      await w.db.document.findUniqueOrThrow({
+        where: { id: created.resourceId! },
+      }),
+    ).toMatchObject({
+      lastEditedById: null,
+      lastEditedByMachineKind: "wikiAgent",
+      lastEditedByMachineId: w.agent.id,
+      createdById: null,
+      updatedByName: "Wiki agent",
+    });
+  });
+
+  it("rewrites link labels on create and on patch", async () => {
+    const w = await writer();
+    const target = await w.caller.document.create({
+      projectId: w.project.id,
+      folderPath: [],
+      title: "Current title",
+      contentJson: parseDocumentBody("Target"),
+    });
+    const stale = `[Stale](weaver://document/${target.id})`;
+    const created = await w.apply(w.create("Linker", `See ${stale}.`));
+    const patched = await w.apply(
+      patch(w, created.resourceId!, created.commitSha, `Also ${stale}.`),
+    );
+    const body = await withProjectRepo(w.project.id, (repo) =>
+      repo.showFileAt(patched.commitSha, patched.path),
+    );
+    expect(body).not.toContain("Stale");
+    expect(body.match(/\[Current title\]\(weaver:/g)).toHaveLength(2);
+  });
+
+  it("refuses every other ContentOperation kind and lifecycle action by name", async () => {
+    const w = await writer();
+    const before = await w.head();
+    const kinds = contentOperationSchema.options.map(
+      (option) => option.shape.kind.value,
+    );
+    expect(kinds).toContain("document.edit");
+    const allowed = ["document.create", "document.patch", "content.lifecycle"];
+    for (const kind of kinds.filter((name) => !allowed.includes(name)))
+      await expect(
+        w.apply({ kind, projectId: w.project.id }, { requestHash: HASH }),
+        kind,
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const actions = contentOperationSchema.options.flatMap((option) =>
+      "action" in option.shape ? option.shape.action.options : [],
+    );
+    expect(actions).toContain("folder_create");
+    for (const action of actions.filter((name) => name !== "folder_create"))
+      await expect(
+        w.apply(
+          { kind: "content.lifecycle", action, projectId: w.project.id },
+          { requestHash: HASH },
+        ),
+        action,
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await w.head()).toBe(before);
+  });
+
+  it("has no title, author metadata or table folder input", async () => {
+    const w = await writer();
+    const created = await w.apply(w.create());
+    const base = patch(w, created.resourceId!, created.commitSha);
+    for (const operation of [
+      { ...base, title: "Renamed" },
+      { ...base, actions: [] },
+      { ...base, metadata: { updatedBy: { name: "Someone" } } },
+      { ...w.create("Other"), metadata: { createdBy: { name: "Someone" } } },
+      { ...folder(w), resourceType: "table" },
+    ])
+      await expect(
+        w.apply(operation, { requestHash: HASH }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("stays inside its project", async () => {
+    const w = await writer();
+    const other = await makeProject("Elsewhere");
+    await addMembership(other.id, w.owner.id, "Owner");
+    const foreign = await w.caller.document.create({
+      projectId: other.id,
+      folderPath: [],
+      title: "Foreign",
+      contentJson: parseDocumentBody("Foreign"),
+    });
+    await expect(
+      w.apply({ ...w.create(), projectId: other.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      w.apply({ ...folder(w), projectId: other.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      w.apply({
+        ...patch(w, foreign.id, foreign.headCommitSha),
+        projectId: other.id,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      w.apply(patch(w, foreign.id, foreign.headCommitSha)),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("refuses a revoked agent and a closed fence without committing", async () => {
+    const w = await writer();
+    const before = await w.head();
+    w.close();
+    await expect(w.apply(w.create())).rejects.toThrow(/no longer live/);
+    expect(await w.head()).toBe(before);
+
+    const open = await writer("op2");
+    const start = await open.head();
+    await revokeWikiAgent(open.db, { projectId: open.project.id });
+    await expect(open.apply(open.create())).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(await open.head()).toBe(start);
+  });
+
+  it("re-checks the fence and the agent immediately before the commit", async () => {
+    const w = await writer();
+    const before = await w.head();
+    let calls = 0;
+    const closing = {
+      ...w.fence,
+      assertLive: async () => {
+        // Open for the checks before the lock and on entry, closed at the commit.
+        if (++calls >= 3) throw new Error("fence closed at commit");
+      },
+    };
+    await expect(w.apply(w.create(), { fence: closing })).rejects.toThrow(
+      /fence closed/,
+    );
+    expect(await w.head()).toBe(before);
+
+    await expect(
+      w.apply(w.create("Revoked"), {
+        beforeCommit: () => {
+          throw new Error("never reached");
+        },
+        fence: {
+          ...w.fence,
+          assertLive: async () => {
+            if (calls++ === 5)
+              await revokeWikiAgent(w.db, { projectId: w.project.id });
+          },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await w.head()).toBe(before);
+
+    const stillWorks = await writer("op3");
+    await expect(stillWorks.apply(stillWorks.create())).resolves.toMatchObject({
+      recovered: false,
+    });
+  });
+
+  it("refuses protected pages: Python, task output, guide, source pages and source folders", async () => {
+    const w = await writer();
+    const python = await withProjectRepo(w.project.id, (repo) =>
+      writeDocumentInRepo(
+        w.db,
+        repo,
+        w.project.id,
+        {
+          kind: "create",
+          id: randomUUID(),
+          folderPath: [],
+          title: "Script",
+          content: { kind: "python", text: "print(1)\n" },
+          createdAt: new Date().toISOString(),
+        },
+        w.user,
+        { operation: "create" },
+      ),
+    );
+    await expect(
+      w.apply(patch(w, python.id, python.headCommitSha)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const page = async (title: string) => w.apply(w.create(title));
+    const report = await page("Report");
+    const run = await createTaskRun({
+      owner: w.owner,
+      projectId: w.project.id,
+      name: "Nightly",
+    });
+    await w.db.scheduledTaskRun.update({
+      where: { id: run.id },
+      data: { outputDocumentId: report.resourceId },
+    });
+    await expect(
+      w.apply(patch(w, report.resourceId!, report.commitSha)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const pinned = await page("Pinned report");
+    await w.db.scheduledTask.update({
+      where: { id: run.taskId },
+      data: { outputDocumentId: pinned.resourceId },
+    });
+    await expect(
+      w.apply(patch(w, pinned.resourceId!, pinned.commitSha)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const guide = await page("Guide");
+    await expect(
+      w.apply(patch(w, guide.resourceId!, guide.commitSha), {
+        guards: { guideDocumentId: guide.resourceId, sourceFolderPaths: [] },
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    const source = await page("Source");
+    await w.db.document.update({
+      where: { id: source.resourceId! },
+      data: { wikiSourceItemId: randomUUID() },
+    });
+    await expect(
+      w.apply(patch(w, source.resourceId!, source.commitSha)),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+    await w.apply(folder(w, "Wiki"));
+    await w.apply(folder(w, "Sources", ["wiki"]));
+    const guards = { sourceFolderPaths: ["wiki/sources"] };
+    await expect(
+      w.apply(
+        { ...w.create("Inside"), folderPath: ["wiki", "sources"] },
+        { guards },
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      w.apply(folder(w, "Sub", ["wiki", "sources"]), { guards }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      w.apply(folder(w, "Sources", ["wiki"]), { guards }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const inside = await w.apply({
+      ...w.create("In sources"),
+      folderPath: ["wiki", "sources"],
+    });
+    await expect(
+      w.apply(patch(w, inside.resourceId!, inside.commitSha), { guards }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      w.apply({ ...w.create("Beside"), folderPath: ["wiki"] }, { guards }),
+    ).resolves.toMatchObject({ path: "wiki/beside.md" });
+  });
+
+  it("refuses weaver-image references and img tags, also split across actions", async () => {
+    const w = await writer();
+    const id = randomUUID();
+    const before = await w.head();
+    for (const markdown of [
+      `![x](weaver-image:${id})`,
+      `![x](WEAVER-IMAGE:${id})`,
+      '<img src="x.png" alt="x" width="10">',
+      '<IMG src="x.png">',
+      '< img src="x.png">',
+    ])
+      await expect(
+        w.apply(w.create("Image", markdown)),
+        markdown,
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await w.head()).toBe(before);
+
+    const created = await w.apply(w.create());
+    const base = patch(w, created.resourceId!, created.commitSha);
+    for (const actions of [
+      [{ action: "append", text: `![x](weaver-image:${id})` }],
+      [{ action: "prepend", text: '<img src="x.png">' }],
+      [
+        {
+          action: "replace_text",
+          find: "First",
+          replace: '<img src="x.png">',
+        },
+      ],
+    ])
+      await expect(
+        w.apply({ ...base, actions }),
+        JSON.stringify(actions),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await w.head()).toBe(created.commitSha);
+
+    const joined = await w.apply(w.create("Joined", 'ZZg src="x.png"> tail'));
+    await expect(
+      w.apply({
+        ...patch(w, joined.resourceId!, joined.commitSha),
+        actions: [{ action: "replace_text", find: "ZZ", replace: "<im" }],
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await w.head()).toBe(joined.commitSha);
+  });
+
+  it("returns STALE_BASE for an old base and never writes a Python file by title", async () => {
+    const w = await writer();
+    const created = await w.apply(w.create());
+    await w.apply(patch(w, created.resourceId!, created.commitSha));
+    await expect(
+      w.apply(patch(w, created.resourceId!, created.commitSha)),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: { reason: "STALE_BASE" },
+    });
+    const named = await w.apply(w.create("script.py"));
+    expect(named.path.endsWith(".md")).toBe(true);
+  });
+
+  it("recovers its own commit after a lost acknowledgement, for all three operations", async () => {
+    const w = await writer();
+    const createId = w.nextId();
+    const created = await w.apply(w.create(), { operationId: createId });
+    await expect(
+      w.apply(w.create(), { operationId: createId }),
+    ).resolves.toMatchObject({
+      recovered: true,
+      commitSha: created.commitSha,
+      resourceId: created.resourceId,
+      path: created.path,
+    });
+
+    const operation = patch(w, created.resourceId!, created.commitSha);
+    const patchId = w.nextId();
+    const patched = await w.apply(operation, { operationId: patchId });
+    const again = await w.apply(operation, { operationId: patchId });
+    expect(again).toMatchObject({
+      recovered: true,
+      commitSha: patched.commitSha,
+      resourceId: created.resourceId,
+    });
+    const reread = await w.apply(
+      patch(w, created.resourceId!, patched.commitSha),
+      {
+        operationId: patchId,
+        requestHash: wikiRequestHash(operation),
+      },
+    );
+    expect(reread).toMatchObject({
+      recovered: true,
+      commitSha: patched.commitSha,
+    });
+
+    const folderId = w.nextId();
+    const made = await w.apply(folder(w), { operationId: folderId });
+    await expect(
+      w.apply(folder(w), { operationId: folderId }),
+    ).resolves.toMatchObject({
+      recovered: true,
+      commitSha: made.commitSha,
+      path: "topics",
+    });
+    expect(await w.head()).toBe(made.commitSha);
+  });
+
+  it("repairs the projection with the machine editor when recovery finds no row", async () => {
+    const w = await writer();
+    const operationId = w.nextId();
+    const created = await w.apply(w.create(), { operationId });
+    await w.db.document.delete({ where: { id: created.resourceId! } });
+    await expect(w.apply(w.create(), { operationId })).resolves.toMatchObject({
+      recovered: true,
+      commitSha: created.commitSha,
+    });
+    expect(
+      await w.db.document.findUniqueOrThrow({
+        where: { id: created.resourceId! },
+      }),
+    ).toMatchObject({
+      lastEditedById: null,
+      lastEditedByMachineKind: "wikiAgent",
+      lastEditedByMachineId: w.agent.id,
+    });
+  });
+
+  it("maps a commit under its id with another hash or agent to CONFLICT", async () => {
+    const w = await writer();
+    const createId = w.nextId();
+    const created = await w.apply(w.create(), { operationId: createId });
+    await expect(
+      w.apply(w.create(), {
+        operationId: createId,
+        requestHash: "b".repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const operation = patch(w, created.resourceId!, created.commitSha);
+    const patchId = w.nextId();
+    await w.apply(operation, { operationId: patchId });
+    await expect(
+      w.apply(operation, {
+        operationId: patchId,
+        requestHash: "b".repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const folderId = w.nextId();
+    await w.apply(folder(w), { operationId: folderId });
+    await expect(
+      w.apply(folder(w), {
+        operationId: folderId,
+        requestHash: "b".repeat(64),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    await revokeWikiAgent(w.db, { projectId: w.project.id });
+    const successor = await createWikiAgent(w.db, w.project.id);
+    const fence = { ...w.fence, agentId: successor.id };
+    await expect(
+      w.apply(folder(w), { operationId: folderId, fence }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("does not accept forged trailers in history as recovery", async () => {
+    const w = await writer();
+    const trailers = (operationId: string, hash: string) => ({
+      "Weaver-Operation-Id": operationId,
+      "Weaver-Wiki-Agent-Id": w.agent.id,
+      "Weaver-Wiki-Request-Hash": hash,
+      "Weaver-Run-Id": w.runId,
+    });
+
+    const createOp = w.create("Forged page");
+    const createId = w.nextId();
+    await forgeCommit(
+      w,
+      "forged-page.md",
+      "forged\n",
+      trailers(createId, wikiRequestHash(createOp)),
+    );
+    await expect(
+      w.apply(createOp, { operationId: createId }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const folderOp = folder(w, "Forged folder");
+    const folderId = w.nextId();
+    await forgeCommit(
+      w,
+      "forged-folder/.gitkeep",
+      "",
+      trailers(folderId, wikiRequestHash(folderOp)),
+    );
+    await expect(
+      w.apply(folderOp, { operationId: folderId }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const created = await w.apply(w.create("Real page"));
+    const patchOp = patch(w, created.resourceId!, created.commitSha);
+    const patchId = w.nextId();
+    const forgedSha = await forgeCommit(
+      w,
+      created.path,
+      await withProjectRepo(w.project.id, (repo) =>
+        repo.readFileFromWorktree(created.path),
+      ).then((text) => `${text}\nforged\n`),
+      trailers(patchId, wikiRequestHash(patchOp)),
+    );
+    await expect(
+      w.apply(patchOp, { operationId: patchId }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(
+      w.apply(patch(w, created.resourceId!, forgedSha), {
+        operationId: patchId,
+        requestHash: wikiRequestHash(patchOp),
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await w.head()).toBe(forgedSha);
+  });
+
+  it("validates its operation id and request hash", async () => {
+    const w = await writer();
+    for (const operationId of [
+      "project-api:1",
+      `wiki-run:${randomUUID()}:0001`,
+      `wiki-run:${w.runId}:1`,
+      "ingestion:abc",
+    ])
+      await expect(
+        w.apply(w.create(), { operationId }),
+        operationId,
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(
+      w.apply(w.create(), { requestHash: "short" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 });
