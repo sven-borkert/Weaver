@@ -26,6 +26,11 @@ import {
   type SourceRun,
 } from "./wikiSourceWriter";
 
+function failureCode(error: CoreError): string {
+  const reason = error.details?.reason;
+  return typeof reason === "string" ? reason : error.code;
+}
+
 export function contentDigest(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
@@ -382,16 +387,14 @@ async function prepareFile(
       data: { status: "ready" },
     });
     if (isClosedFence(error) || !(error instanceof CoreError)) throw error;
-    await failFileItem(
-      db,
-      run,
-      item,
-      String(error.details?.reason ?? error.code),
-      error.message,
-    );
+    await failFileItem(db, run, item, failureCode(error), error.message);
     return;
   }
-  const warnings = draft.warnings.join(" ").slice(0, 2_000);
+  // A warning can quote a worksheet name; a flagged one stays out of the note.
+  const warnings = draft.warnings
+    .filter((warning) => scanForSecrets(warning, "warning").length === 0)
+    .join(" ")
+    .slice(0, 2_000);
   await db.$transaction(async (tx) => {
     const finalized = await tx.ingestionFile.updateMany({
       where: { id: file.id, status: "accepting" },
@@ -466,13 +469,7 @@ export async function prepareRunItems(
     } catch (error) {
       if (isClosedFence(error)) continue;
       if (error instanceof CoreError) {
-        await failItem(
-          db,
-          run,
-          item.id,
-          String(error.details?.reason ?? error.code),
-          error.message,
-        );
+        await failItem(db, run, item.id, failureCode(error), error.message);
         continue;
       }
       // Infrastructure errors retry on the next tick, bounded by the 75-minute limit.

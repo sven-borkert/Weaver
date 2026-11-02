@@ -43,6 +43,7 @@ const destination = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("exam"), projectId: uuid, attemptId: uuid })
     .strict(),
+  z.object({ kind: z.literal("wiki"), projectId: uuid }).strict(),
 ]);
 const contentCard = z
   .object({
@@ -93,6 +94,7 @@ const sourceStatus = z.enum([
   "building",
   "active",
   "superseded",
+  "stopped",
 ]);
 const activity = z
   .object({

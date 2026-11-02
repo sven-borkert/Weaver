@@ -598,6 +598,19 @@ export function WorkspaceBreadcrumbs() {
     );
   }
 
+  if (pathname === `/projects/${projectId}/wiki`) {
+    return (
+      <Breadcrumb>
+        <BreadcrumbList>
+          <ProjectCrumb />
+          <BreadcrumbItem>
+            <BreadcrumbPage>Wiki</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+    );
+  }
+
   if (pathname === importsHref) {
     return (
       <Breadcrumb>

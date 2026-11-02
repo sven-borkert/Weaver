@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
+import { registerKnowledgeJobHandlers } from "@weaver/core/jobs/runtime";
+import { knowledgeSystemContextForTests } from "@weaver/core/jobs/systemContext";
+import type { WikiRunner } from "@weaver/core/jobs/types";
+import { parseKnowledgeConfig } from "@weaver/core/knowledge/config";
 import {
   addTextInput,
   confirmInput,
@@ -27,9 +31,11 @@ import {
 } from "@weaver/core/services/wikiTick";
 import {
   addMembership,
+  callerFor,
   getPrisma,
   makeProject,
   makeUser,
+  noKnowledgeRouting,
   resetDb,
   securityContextFor,
 } from "./_harness";
@@ -285,7 +291,7 @@ describe("processInputs", () => {
     ]);
     const rejected = results.filter((r) => r.status === "rejected");
     expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+    expect(rejected[0]!.reason).toMatchObject({
       code: "CONFLICT",
       details: { reason: "RUN_ACTIVE" },
     });
@@ -618,5 +624,115 @@ describe("remove, retry, confirm", () => {
         itemId: item.id,
       }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  }, 15_000);
+});
+
+describe("wiki router", () => {
+  beforeEach(resetDb);
+
+  it("Viewers read, Editors act, and non-members get NOT_FOUND", async () => {
+    const f = await fixture();
+    const viewer = await makeUser("User", "router-viewer");
+    const editor = await makeUser("User", "router-editor");
+    const outsider = await makeUser("User", "router-outsider");
+    await addMembership(f.projectId, viewer.id, "Viewer");
+    await addMembership(f.projectId, editor.id, "Editor");
+    const input = { projectId: f.projectId };
+
+    const added = await callerFor(editor).wiki.input.addText({
+      ...input,
+      text: "From the router",
+    });
+    await expect(
+      callerFor(viewer).wiki.input.addText({ ...input, text: "No" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(viewer).wiki.input.process({ ...input, itemIds: "all" }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(viewer).wiki.input.remove({ ...input, itemId: added.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(viewer).wiki.input.retry({ ...input, itemId: added.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(outsider).wiki.input.list(input),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const seen = await callerFor(viewer).wiki.input.list(input);
+    expect(seen.queue.map((item) => item.id)).toEqual([added.id]);
+
+    const { runId } = await callerFor(editor).wiki.input.process({
+      ...input,
+      itemIds: "all",
+    });
+    await expect(
+      callerFor(viewer).wiki.cancelRun({ ...input, runId }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await callerFor(editor).wiki.cancelRun({ ...input, runId });
+
+    await expect(
+      callerFor(editor).wiki.input.unlinkArtifact({
+        ...input,
+        itemId: added.id,
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect((await callerFor(viewer).project.get(input)).wikiEnabled).toBe(true);
+  }, 20_000);
+
+  it("refuses a non-session credential", async () => {
+    const f = await fixture();
+    await expect(
+      listInputs(
+        f.db,
+        { ...f.editorContext, authenticationMethod: "apiKey" } as never,
+        { projectId: f.projectId },
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  }, 15_000);
+});
+
+describe("wiki.run delivery", () => {
+  beforeEach(resetDb);
+  afterEach(() => setJobQueueForTests(null));
+
+  async function registered(wikiRunner?: WikiRunner) {
+    const queue = new FakeJobQueue();
+    await registerKnowledgeJobHandlers({
+      queue,
+      context: knowledgeSystemContextForTests(),
+      db: getPrisma(),
+      config: parseKnowledgeConfig({ WEAVER_JOBS_ENABLED: "true" }),
+      routing: noKnowledgeRouting,
+      roles: new Set(["wiki"]),
+      ...(wikiRunner ? { wikiRunner } : {}),
+    });
+    return queue;
+  }
+
+  it("without a runner a delivery ends the run RUNNER_UNAVAILABLE", async () => {
+    const f = await fixture();
+    const { runId } = await startRun(f);
+    await setRun(f, runId, { status: "queued", queuedAt: new Date() });
+    const queue = await registered();
+    await queue.run("wiki.run", { runId });
+    expect(
+      await f.db.wikiRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).toMatchObject({ status: "failed", errorCode: "RUNNER_UNAVAILABLE" });
+  }, 15_000);
+
+  it("an injected runner receives the delivery instead", async () => {
+    const f = await fixture();
+    const { runId } = await startRun(f);
+    await setRun(f, runId, { status: "queued", queuedAt: new Date() });
+    const calls: string[] = [];
+    const queue = await registered(async (payload) => {
+      calls.push(payload.runId);
+    });
+    await queue.run("wiki.run", { runId });
+    expect(calls).toEqual([runId]);
+    expect(
+      (await f.db.wikiRun.findUniqueOrThrow({ where: { id: runId } })).status,
+    ).toBe("queued");
   }, 15_000);
 });

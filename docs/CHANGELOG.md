@@ -6,6 +6,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Added
 
+- A Wiki section appears in the sidebar, between Imports and Tasks, once the wiki is enabled for a project. Its Input page takes notes and files, shows the queue and what needs attention, and offers Process, Retry, Confirm and Remove to Editors; Viewers can read. Runs appear in the bell for whoever started them and in Project Activity.
+- **The agent itself is not in this release.** Enabling the wiki and pressing Process prepares sources durably, then the run ends with a plain message that this version cannot run the wiki agent yet. Inputs return to the queue and reuse their sources once the agent ships.
 - Wiki inputs become durable source pages and source tables. Notes are written directly; PDF, Word (docx), Excel (xlsx), CSV, Markdown and text files parse through the Imports pipeline without appearing in Imports. Spreadsheets become source tables under `tables/wiki-sources/`. Source pages enter keyword search and skip AI indexing; their index lights say "AI indexing skipped (source page)".
 - A new scanner checks notes, file names, parsed drafts and every table cell for secrets. A hit holds the input under Needs attention until an Editor confirms that exact content, and reports only what it found and where.
 - A file referenced by a live wiki input cannot be replaced or deleted (`SOURCE_PROTECTED`); it can still be renamed. Removing the input, or an Owner unlinking it, lifts the protection.

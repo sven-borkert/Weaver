@@ -11,6 +11,8 @@ export function dashboardDestinationHref(
   destination: DashboardDestination,
 ): string {
   switch (destination.kind) {
+    case "wiki":
+      return `/projects/${part(destination.projectId)}/wiki`;
     case "exam":
       return `/projects/${part(destination.projectId)}/exams/attempts/${part(destination.attemptId)}`;
     case "document":

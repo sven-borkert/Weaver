@@ -194,6 +194,7 @@ export function BackgroundWorkScreen({
               >
                 <option value="">All kinds</option>
                 <option value="exam">Exam</option>
+                <option value="wiki">Wiki</option>
                 <option value="task">Tasks</option>
                 <option value="import">Imports</option>
                 <option value="assistant">Assistant</option>

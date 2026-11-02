@@ -177,6 +177,13 @@ are explicitly removed; cascading the final grant would widen a key.
 `LlmModel.contextWindow` and `maxOutputTokens` are positive or null by CHECK;
 20260922220200 normalizes legacy zero values to null before adding those guards.
 
+## Wiki queue
+
+`WikiInputItem` and `WikiRun` (`20261103110000_wiki_input_and_run`; `PersonalWorkKind.wiki` and `IngestionOrigin.wiki` are separate `ALTER TYPE` migrations).
+`WikiRun_active_project_key` is a partial unique index on `projectId` for `preparing`, `queued`, `running`. `Document` and `DataTable.wikiSourceItemId`
+have an `ON DELETE RESTRICT` FK, so a linked item cannot be deleted directly. A hard project delete still works because those two cascades predate the
+item's, and `wikiSources.spec.ts` pins it. User references on the item and run are `SET NULL`. `sourceDocumentId` and `sourceTableId` are plain uuids.
+
 ## Project machine credentials
 
 ProjectApiKey and ProjectApiKeyGrant are project-owned authority state, separate

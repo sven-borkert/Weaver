@@ -27,6 +27,7 @@ const destination = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("exam"), projectId: uuid, attemptId: uuid })
     .strict(),
+  z.object({ kind: z.literal("wiki"), projectId: uuid }).strict(),
 ]);
 const workRowSchema = z
   .object({
@@ -65,6 +66,8 @@ const workRowSchema = z
       "submitted",
       "in_review",
       "released",
+      "preparing",
+      "stopped",
     ]),
     createdAt: timestamp,
     startedAt: timestamp.nullable(),
@@ -87,6 +90,7 @@ const workRowSchema = z
         "NOTEBOOK_FAILED",
         "GIT_SYNC_FAILED",
         "CONFIGURATION_REQUIRED",
+        "WIKI_FAILED",
       ])
       .nullable(),
     errorMessage: z

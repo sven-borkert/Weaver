@@ -7,6 +7,7 @@ import {
   FileText,
   FileUp,
   Files,
+  Library,
   Settings,
   Table2,
   Waypoints,
@@ -30,6 +31,7 @@ const SECTION_ICONS = {
   Files: Files,
   Graph: Waypoints,
   Imports: FileUp,
+  Wiki: Library,
   Tasks: CalendarClock,
   Exams: GraduationCap,
   Activity: Activity,
@@ -40,6 +42,7 @@ export function projectSections(
   projectId: string,
   role: ProjectRoleName,
   trainingRole: "trainer" | "trainee" | null = null,
+  wikiEnabled = false,
 ) {
   const base = `/projects/${projectId}`;
   const sections: Array<{ label: keyof typeof SECTION_ICONS; href: string }> = [
@@ -50,6 +53,7 @@ export function projectSections(
     ...(projectRoleAtLeast(role, "Editor")
       ? [{ label: "Imports" as const, href: `${base}/imports` }]
       : []),
+    ...(wikiEnabled ? [{ label: "Wiki" as const, href: `${base}/wiki` }] : []),
     { label: "Tasks", href: `${base}/tasks` },
     ...(trainingRole
       ? [{ label: "Exams" as const, href: `${base}/exams` }]
@@ -81,6 +85,7 @@ export function ProjectSections({
     projectId,
     role,
     project?.myTrainingRole ?? null,
+    project?.wikiEnabled === true,
   );
 
   if (collapsed) {

@@ -1,5 +1,9 @@
 import { z } from "zod";
 import {
+  WIKI_NOTE_MAX_CHARS,
+  WIKI_QUEUE_MAX_ITEMS,
+} from "@weaver/core/wiki/states";
+import {
   WIKI_BUDGET_MAX,
   WIKI_BUDGET_MIN,
   WIKI_SPEND_ALERT_MAX_CENTS,
@@ -29,6 +33,28 @@ export const setWikiGuideDocumentInput = wikiRevisionInput.extend({
 });
 export const approveWikiGuideInput = wikiRevisionInput.extend({
   expectedDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+const inputItem = wikiProjectInput.extend({ itemId: z.uuid() });
+export const addWikiTextInput = wikiProjectInput.extend({
+  title: z.string().max(500).optional(),
+  // The service counts characters and answers with its own field error.
+  text: z.string().max(WIKI_NOTE_MAX_CHARS + 1),
+});
+export const addWikiFilesInput = wikiProjectInput.extend({
+  artifactIds: z.array(z.uuid()).min(1).max(WIKI_QUEUE_MAX_ITEMS),
+});
+export const processWikiInputs = wikiProjectInput.extend({
+  itemIds: z.union([
+    z.literal("all"),
+    z.array(z.uuid()).min(1).max(WIKI_QUEUE_MAX_ITEMS),
+  ]),
+});
+export const wikiInputItemInput = inputItem;
+export const confirmWikiInput = inputItem.extend({
+  expectedDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export const cancelWikiRunInput = wikiProjectInput.extend({
+  runId: z.uuid(),
 });
 export const resolveWikiSuggestionInput = wikiProjectInput.extend({
   suggestionId: z.uuid(),

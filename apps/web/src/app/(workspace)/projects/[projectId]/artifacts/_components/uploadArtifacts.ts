@@ -3,9 +3,16 @@ import { withBasePath } from "~/lib/basePath";
 import { uploadWithProgress } from "../../imports/_components/upload";
 
 export type ArtifactUploadResult =
-  | { kind: "uploaded"; count: number }
+  | { kind: "uploaded"; count: number; ids: string[] }
   | { kind: "conflict"; conflicts: string[] }
   | { kind: "error"; message: string; accessDenied: boolean };
+
+function createdIds(artifacts: unknown[] | undefined): string[] {
+  return (artifacts ?? []).flatMap((artifact) => {
+    const id = (artifact as { id?: unknown } | null)?.id;
+    return typeof id === "string" ? [id] : [];
+  });
+}
 
 export async function uploadArtifacts(
   projectId: string,
@@ -43,6 +50,7 @@ export async function uploadArtifacts(
       return {
         kind: "uploaded",
         count: body?.artifacts?.length ?? files.length,
+        ids: createdIds(body?.artifacts),
       };
     const conflicts = Array.isArray(body?.conflicts)
       ? body.conflicts.filter(

@@ -11,6 +11,7 @@ type GetQuery = {
         name: string;
         myRole: "Owner" | "Maintainer" | "Editor" | "Viewer";
         myTrainingRole?: "trainer" | "trainee" | null;
+        wikiEnabled?: boolean;
       }
     | undefined;
   error: unknown;
@@ -208,6 +209,32 @@ describe("ProjectSections", () => {
     ]);
     expect(html).not.toContain("Overview");
     expect(html).not.toContain(`href="/projects/${P1}"`);
+  });
+
+  it("shows Wiki between Imports and Tasks when the wiki is enabled", () => {
+    mocked.navigation = {
+      projectId: P1,
+      pathname: `/projects/${P1}/documents`,
+    };
+    mocked.query.data = {
+      id: P1,
+      name: "Demo",
+      myRole: "Editor",
+      wikiEnabled: true,
+    };
+    expect(
+      sectionLabelOrder(renderToStaticMarkup(<ProjectSections />)),
+    ).toEqual([
+      "Documents",
+      "Tables",
+      "Files",
+      "Graph",
+      "Imports",
+      "Wiki",
+      "Tasks",
+      "Activity",
+      "Settings",
+    ]);
   });
 
   it("marks a nested document route active by prefix", () => {

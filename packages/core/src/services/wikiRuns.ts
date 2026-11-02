@@ -150,6 +150,8 @@ export async function cancelRun(
   actor: UserSecurityContext,
   input: { projectId: string; runId: string },
 ): Promise<void> {
+  if (actor.authenticationMethod !== "session")
+    throw new CoreError("FORBIDDEN");
   await assertProjectRole(db, input.projectId, actor, "Editor", {
     capability: "content:write",
   });

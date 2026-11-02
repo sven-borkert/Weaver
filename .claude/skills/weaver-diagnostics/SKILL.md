@@ -3,6 +3,8 @@ name: weaver-diagnostics
 description: Use when working on Weaver diagnostic events, diagnostic settings or retention, correlation and provider capture, diagnostics lifecycle hooks, the Administration Diagnostics page, or diagnostic admin MCP tools.
 ---
 
+Wiki events (`wiki.input.*`, `wiki.run.*`) carry ids, counts, codes and scanner kinds only, never titles, note text or hit values.
+
 # Weaver Diagnostics
 
 ## Quick reference

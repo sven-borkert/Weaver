@@ -1,4 +1,5 @@
 import { examSourceSql } from "./examSource";
+import { wikiSourceSql } from "./wikiSource";
 import { Prisma } from "@weaver/db/client";
 import { type WorkQueryAccess, visibleProjectsSql } from "./access";
 import { taskSourceSql } from "./taskSource";
@@ -19,6 +20,7 @@ export function authorizedWorkSql(access: WorkQueryAccess): Prisma.Sql {
       ${taskSourceSql(access)} UNION ALL ${importSourceSql(access)}
       UNION ALL ${assistantSourceSql(access)} UNION ALL ${knowledgeSourceSql(access)}
       UNION ALL ${notebookSourceSql(access)} UNION ALL ${gitSyncSourceSql(access)} UNION ALL ${examSourceSql(access)}
+      UNION ALL ${wikiSourceSql(access)}
     )`;
 }
 export const activeWorkSql = Prisma.sql`w.state IN ('queued', 'running')`;

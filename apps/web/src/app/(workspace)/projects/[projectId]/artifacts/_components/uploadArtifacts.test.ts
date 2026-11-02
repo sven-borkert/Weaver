@@ -15,7 +15,7 @@ describe("uploadArtifacts", () => {
       fetchImpl,
       basePath: "/weaver",
     });
-    expect(result).toEqual({ kind: "uploaded", count: 1 });
+    expect(result).toEqual({ kind: "uploaded", count: 1, ids: [] });
     const [url, init] = fetchImpl.mock.calls[0]!;
     expect(url).toBe("/weaver/api/projects/p1/artifacts");
     const form = init!.body as FormData;
@@ -50,6 +50,7 @@ describe("uploadArtifacts", () => {
     expect(await uploadArtifacts("p1", files, [], { fetchImpl })).toEqual({
       kind: "uploaded",
       count: 1,
+      ids: [],
     });
     const form = fetchImpl.mock.calls[0]![1]!.body as FormData;
     expect([...form.keys()]).toEqual(["projectId", "file"]);

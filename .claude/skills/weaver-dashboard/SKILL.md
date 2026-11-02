@@ -3,6 +3,8 @@ name: weaver-dashboard
 description: Use when changing Weaver dashboard read models, recent content, project overview/activity, shared pins, report shortcuts, audience selection, counts or activity pagination. Background-job execution is covered by weaver-jobs.
 ---
 
+Wiki runs are activity source `wiki` (`ACTIVITY_SOURCES`) through the shared work relation; the destination is `/projects/<id>/wiki`.
+
 # Weaver dashboard and project activity
 
 Dashboard responses combine authorized content and work into bounded read models.

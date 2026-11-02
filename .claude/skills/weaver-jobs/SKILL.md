@@ -115,7 +115,7 @@ names live in `SCHEDULED_JOB_NAMES` (`packages/core/src/jobs/types.ts`).
 the ingestion stage runners from `@weaver/ingestion` as those options; there is
 no second worker entry point for these jobs. The compose
 deployment runs two containers from the same worker image:
-`agent-worker` (`WEAVER_WORKER_ROLES=knowledge,assistant,tasks,git`) and
+`agent-worker` (`WEAVER_WORKER_ROLES=knowledge,assistant,tasks,git,wiki`) and
 `ingestion-worker` (`WEAVER_WORKER_ROLES=ingestion`, its own health port
 3102), so a slow OCR call cannot starve assistant runs. See `weaver-assistant`
 for the run/attempt/event model, `@weaver/ai`'s runner, and `weaver-ingestion`
@@ -134,6 +134,9 @@ Dashboard composition, report shortcuts and pin admission use `weaver-dashboard`
 
 The `wiki` role gates `wiki.tick` (minute) and `wiki.run` (concurrency 1, 125-minute expiry, `retryLimit: 0`, short policy keyed by run);
 without an injected `wikiRunner` a delivery ends the run `RUNNER_UNAVAILABLE`. See `weaver-wiki`.
+
+A wiki row (`wikiSource.ts`, kind `wiki`) is personal for the run's starter and shared with Maintainers; a scheduled run has no starter, so it
+appears only under Project work. `preparing` and `queued` read as queued, `stopped` as needs attention; the revision hashes status and end time.
 
 ## Job inventory
 

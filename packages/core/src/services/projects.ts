@@ -93,13 +93,24 @@ export async function getProjectForActor(
   projectId: string,
   actor: ProjectActor,
 ): Promise<
-  Project & { myRole: ProjectRoleName; myTrainingRole: TrainingRole | null }
+  Project & {
+    myRole: ProjectRoleName;
+    myTrainingRole: TrainingRole | null;
+    wikiEnabled: boolean;
+  }
 > {
   const access = await assertProjectRole(db, projectId, actor, "Viewer");
   return {
     ...access.project,
     myRole: access.effectiveRole,
     myTrainingRole: await trainingRoleFor(db, projectId, actor.userId),
+    wikiEnabled:
+      (
+        await db.projectWikiSettings.findUnique({
+          where: { projectId },
+          select: { enabled: true },
+        })
+      )?.enabled === true,
   };
 }
 

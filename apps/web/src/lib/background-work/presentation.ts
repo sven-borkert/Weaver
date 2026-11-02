@@ -12,6 +12,7 @@ export const WORK_KIND_LABELS = {
   notebook: "OneNote",
   git_sync: "Git sync",
   exam: "Exam",
+  wiki: "Wiki",
 } as const;
 
 export const WORK_STATE_LABELS = {
@@ -43,6 +44,12 @@ const SOURCE_STATUS_LABELS: Partial<
     submitted: "Waiting for grading",
     in_review: "Waiting for grading",
     released: "Graded",
+  },
+  wiki: {
+    preparing: "Preparing sources",
+    queued: "Waiting for a worker",
+    running: "Running",
+    stopped: "Stopped",
   },
   knowledge: {
     building: "Building knowledge index",

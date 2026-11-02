@@ -8,6 +8,7 @@ export const BACKGROUND_WORK_KINDS = [
   "notebook",
   "git_sync",
   "exam",
+  "wiki",
 ] as const;
 export const BACKGROUND_WORK_STATES = [
   "queued",
@@ -26,6 +27,7 @@ export const PERSONAL_WORK_KINDS = [
   "notebook",
   "git_sync",
   "exam",
+  "wiki",
 ] as const;
 export const BACKGROUND_WORK_LIMITS = {
   recentDays: 7,
@@ -52,7 +54,8 @@ export type WorkDestination =
   | { kind: "knowledge"; projectId: string }
   | { kind: "notebook"; projectId: string; filename: string }
   | { kind: "git_sync"; projectId: string }
-  | { kind: "exam"; projectId: string; attemptId: string };
+  | { kind: "exam"; projectId: string; attemptId: string }
+  | { kind: "wiki"; projectId: string };
 export const workReferenceSchema = z
   .object({
     kind: z.enum(PERSONAL_WORK_KINDS),

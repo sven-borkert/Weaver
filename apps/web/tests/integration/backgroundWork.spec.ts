@@ -6,6 +6,7 @@ import {
   createApiKeySecurityContext,
   createOAuthSecurityContext,
 } from "@weaver/core/security/context";
+import { listDashboardActivity } from "@weaver/core/services/dashboard/activity";
 import { NOTEBOOK_PARSER_VERSION } from "@weaver/core/artifacts/notebookSchema";
 import {
   getBackgroundWorkSummary,
@@ -1497,4 +1498,155 @@ describe("exam work", () => {
       ),
     ).toBe(false);
   });
+});
+
+describe("wiki work", () => {
+  beforeEach(resetDb);
+
+  async function wikiFixture() {
+    const db = getPrisma();
+    const starter = await makeUser("User", "wiki-starter");
+    const maintainer = await makeUser("User", "wiki-maintainer");
+    const editor = await makeUser("User", "wiki-other-editor");
+    const project = await makeProject("Wiki work");
+    await addMembership(project.id, starter.id, "Editor");
+    await addMembership(project.id, maintainer.id, "Maintainer");
+    await addMembership(project.id, editor.id, "Editor");
+    const agent = await db.wikiAgent.create({
+      data: { id: randomUUID(), projectId: project.id },
+    });
+    const run = (data: {
+      status: "preparing" | "queued" | "failed" | "stopped" | "succeeded";
+      startedById: string | null;
+      errorMessage?: string;
+      endedAt?: Date;
+    }) =>
+      db.wikiRun.create({
+        data: {
+          projectId: project.id,
+          agentId: agent.id,
+          kind: "ingest",
+          trigger: data.startedById ? "manual" : "schedule",
+          ...data,
+        },
+      });
+    return { project, starter, maintainer, editor, run };
+  }
+
+  const list = (user: UserFixture, audience: "mine" | "projects") =>
+    listBackgroundWork(getPrisma(), securityContextFor(user), {
+      audience,
+      kind: "wiki",
+    });
+
+  it("shows a run to its starter and Maintainers, not to other Editors", async () => {
+    const f = await wikiFixture();
+    const run = await f.run({ status: "preparing", startedById: f.starter.id });
+    const mine = await list(f.starter, "mine");
+    expect(mine.items).toEqual([
+      expect.objectContaining({
+        id: run.id,
+        kind: "wiki",
+        title: "Wiki ingest",
+        state: "queued",
+        sourceStatus: "preparing",
+        destination: { kind: "wiki", projectId: f.project.id },
+      }),
+    ]);
+    expect((await list(f.editor, "mine")).items).toEqual([]);
+    expect((await list(f.maintainer, "mine")).items).toEqual([]);
+    expect((await list(f.editor, "projects")).items).toEqual([]);
+    expect((await list(f.maintainer, "projects")).items).toHaveLength(1);
+  }, 15_000);
+
+  it("a scheduled run has no starter: only Project work sees it", async () => {
+    const f = await wikiFixture();
+    await f.run({ status: "queued", startedById: null });
+    expect((await list(f.starter, "mine")).items).toEqual([]);
+    expect((await list(f.maintainer, "projects")).items).toHaveLength(1);
+  }, 15_000);
+
+  it("a failed run reaches the bell with its message and a receipt clears it", async () => {
+    const f = await wikiFixture();
+    const message = "This version of Weaver prepares sources";
+    await f.run({
+      status: "failed",
+      startedById: f.starter.id,
+      errorMessage: message,
+      endedAt: new Date(),
+    });
+    const context = securityContextFor(f.starter);
+    const db = getPrisma();
+    const summary = await getBackgroundWorkSummary(db, context);
+    expect(summary.unseen.value).toBe(1);
+    const page = await list(f.starter, "mine");
+    expect(page.items[0]).toMatchObject({
+      state: "failed",
+      errorCode: "WIKI_FAILED",
+      errorMessage: message,
+      unseen: true,
+    });
+    await markBackgroundWorkSeen(db, context, {
+      items: [page.items[0]!.acknowledgement!],
+    });
+    expect((await getBackgroundWorkSummary(db, context)).unseen.value).toBe(0);
+  }, 15_000);
+
+  it("a stopped run needs attention and old runs age out", async () => {
+    const f = await wikiFixture();
+    await f.run({
+      status: "stopped",
+      startedById: f.starter.id,
+      endedAt: new Date(),
+    });
+    await f.run({
+      status: "succeeded",
+      startedById: f.starter.id,
+      endedAt: new Date(Date.now() - 8 * DAY),
+    });
+    const page = await list(f.starter, "mine");
+    expect(page.items.map((item) => item.state)).toEqual(["blocked"]);
+  }, 15_000);
+
+  it("a wiki-origin import file stays out of the import feed", async () => {
+    const f = await wikiFixture();
+    const db = getPrisma();
+    const batch = await db.ingestionBatch.create({
+      data: {
+        projectId: f.project.id,
+        createdById: f.starter.id,
+        origin: "wiki",
+      },
+    });
+    await db.ingestionFile.create({
+      data: {
+        batchId: batch.id,
+        projectId: f.project.id,
+        fileName: "hidden.md",
+        mimeType: "text/markdown",
+        byteSize: 1,
+        contentDigest: "a".repeat(64),
+      },
+    });
+    const page = await listBackgroundWork(db, securityContextFor(f.starter), {
+      audience: "mine",
+      kind: "import",
+    });
+    expect(page.items).toEqual([]);
+  }, 15_000);
+
+  it("Project activity lists a finished run", async () => {
+    const f = await wikiFixture();
+    const run = await f.run({
+      status: "failed",
+      startedById: f.starter.id,
+      endedAt: new Date(),
+    });
+    const activity = await listDashboardActivity(
+      getPrisma(),
+      securityContextFor(f.maintainer),
+      { projectId: f.project.id, audience: "projects", limit: 10 },
+    );
+    expect(activity.items.map((item) => item.id)).toContain(run.id);
+  }, 15_000);
 });

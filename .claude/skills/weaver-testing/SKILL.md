@@ -3,6 +3,9 @@ name: weaver-testing
 description: Use when writing or running tests in the Weaver workspace — app/package Vitest tests, apps/web integration or browser specs, worker/package boundaries, cross-process Git locking, or the RUN_FULL_TESTS consent gate.
 ---
 
+Wiki queue specs: `wikiInputs.spec.ts`, `wikiSources.spec.ts`, `wikiBridge.spec.ts` (in `test:integration:ingestion`) and `wikiAiExempt.spec.ts`
+(in `test:integration:knowledge`). `makeWikiInputItem` gives a real target for the `wikiSourceItemId` FK.
+
 # Weaver Testing: Harness and Suite Conventions
 
 Tests split into colocated app/package Vitest unit tests, sequential DB-backed

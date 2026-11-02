@@ -34,6 +34,7 @@ export const ACTIVITY_SOURCES = [
   "import",
   "assistant",
   "knowledge",
+  "wiki",
 ] as const;
 
 const contentKind = z.enum(["document", "table"]);

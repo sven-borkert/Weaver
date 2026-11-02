@@ -52,11 +52,17 @@ function badRequest(field: string, message: string): CoreError {
   return new CoreError("BAD_REQUEST", message, { field });
 }
 
+function sessionOnly(actor: Actor): void {
+  if (actor.authenticationMethod !== "session")
+    throw new CoreError("FORBIDDEN");
+}
+
 async function assertEditor(
   db: PrismaClient | Tx,
   actor: Actor,
   projectId: string,
 ): Promise<void> {
+  sessionOnly(actor);
   await assertProjectRole(db, projectId, actor, "Editor", {
     capability: "content:write",
   });
@@ -374,6 +380,7 @@ export async function listInputs(
   queueLimit: number;
   batchLimit: number;
 }> {
+  sessionOnly(actor);
   await assertProjectRole(db, input.projectId, actor, "Viewer", {
     capability: "content:read",
   });
@@ -467,8 +474,12 @@ async function bridgeFileItems(
         where: { id: item.sourceTableId, projectId: input.projectId },
       })) > 0;
     if (documentLive || tableLive) continue;
-    const { artifact, ingestionFile } = item;
-    if (!artifact || artifact.contentDigest !== item.artifactDigest) {
+    const { ingestionFile } = item;
+    const artifact =
+      item.artifact?.contentDigest === item.artifactDigest
+        ? item.artifact
+        : null;
+    if (!artifact) {
       await tx.wikiInputItem.update({
         where: { id: item.id },
         data: {
@@ -664,6 +675,7 @@ export async function unlinkInputArtifact(
   actor: Actor,
   input: { projectId: string; itemId: string },
 ): Promise<void> {
+  sessionOnly(actor);
   await assertProjectRole(db, input.projectId, actor, "Owner", {
     capability: "content:write",
   });

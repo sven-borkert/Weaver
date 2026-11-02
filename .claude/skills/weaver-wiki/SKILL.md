@@ -1,6 +1,6 @@
 ---
 name: weaver-wiki
-description: Use when changing Weaver's wiki-agent foundations: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset (find_page, inspect_links, list_recent_changes), the per-project wiki settings, bootstrap and guide approval, change kinds, or tracked-link teaching in prompts.
+description: Use when changing Weaver's wiki-agent foundations: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset (find_page, inspect_links, list_recent_changes), the per-project wiki settings, bootstrap and guide approval, the input queue, runs, source writer and Input page, change kinds, or tracked-link teaching in prompts.
 ---
 
 # Weaver Wiki
@@ -202,6 +202,12 @@ A title is authored text that Viewers see, so `safeInputTitle` scans the whole c
 its start behind) and stores `Note <date>` or `File <date>` on a hit. Every held note gets the neutral title and keeps it after
 Confirm; the title is outside the hold digest. `removeInput` overwrites the title and clears text, digests, notes, errors and
 people, keeping id, kind, status, timestamps and the source link the guard needs. Outcome notes and diagnostics never carry a title.
+
+## Input page
+
+`wiki/_components/WikiInputScreen.tsx` over `wiki.input.*` (`list`, `addText`, `addFiles`, `process`, `retry`, `confirm`, `remove`, `unlinkArtifact`) and
+`wiki.cancelRun`, session actors only. `uploadInputFiles` retries a name clash as `name-2.ext`, never replacing a file in Files.
+`wikiRunNotice` words `RUNNER_UNAVAILABLE` and `NO_WORKER` plainly; codes never reach the page.
 
 ## Commit text
 

@@ -2,6 +2,8 @@ import type { WorkDestination } from "@weaver/core/jobs/backgroundWorkSchema";
 
 export function backgroundWorkHref(destination: WorkDestination): string {
   switch (destination.kind) {
+    case "wiki":
+      return `/projects/${destination.projectId}/wiki`;
     case "exam":
       return `/projects/${destination.projectId}/exams/attempts/${destination.attemptId}`;
     case "task":

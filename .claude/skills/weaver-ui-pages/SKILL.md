@@ -9,6 +9,8 @@ Every signed-in page renders inside AppShell via the `(workspace)` route group w
 
 Project/personal-workspace lifecycle uses `weaver-projects`; dashboard/read-model policy uses `weaver-dashboard`. Shared explorer, appearance, shell and navigation rules remain here; the document/table skills own editor-specific behavior.
 
+The project sidebar gains Wiki between Imports and Tasks when `project.get` reports `wikiEnabled`. The route `wiki` is the Input page; a Runs tab comes with the runner.
+
 ## Key files
 
 | Path                                                                                              | Role                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
