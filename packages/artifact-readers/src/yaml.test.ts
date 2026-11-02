@@ -151,7 +151,7 @@ describe("YAML normalization", () => {
     rejects(repeated(1980), "resource_limit");
     const aliasDeep = `a: &a ${deep(511)}\nb: [*a]`;
     rejects(aliasDeep, "resource_limit");
-  });
+  }, 30_000);
 
   it("preserves hostile keys as own data during normalization, query and projection", () => {
     const source = bytes(

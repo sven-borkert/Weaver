@@ -5,8 +5,7 @@ description: Use when changing Weaver's wiki-agent foundations: page `properties
 
 # Weaver Wiki
 
-Design authority: `docs/superpowers/specs/2026-11-02-wiki-agent-design.md` (plan in the
-same folder's `plans/`). This skill records what has shipped; later slices extend it.
+This skill records what has shipped; later slices extend it.
 
 ## Page properties (reader only so far)
 
