@@ -79,6 +79,8 @@ query but render fixed, safe copy rather than provider error descriptions.
 - First login creates a normal `User`, without a local password or shared-project
   membership. The usual personal workspace is created on entry. Ignore provider
   role/group/password-change claims.
+- A reserved `@weaver.invalid` email returns no profile; the machine domain is never
+  provisioned or linked.
 - Verified matching email may link an existing account. Preserve local profile,
   role, memberships, bans, and `mustChangePassword`; do not whitelist the provider
   as trusted to bypass email verification or allow different-email linking.

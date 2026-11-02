@@ -23,6 +23,7 @@ import {
   API_KEY_NAME_MAX_LENGTH,
   API_KEY_MAX_EXPIRY_DAYS,
   API_KEY_MAX_RATE_LIMIT_PER_MINUTE,
+  isReservedEmail,
   OAUTH_SCOPES,
   PASSWORD_MAX_LENGTH,
   PASSWORD_MIN_LENGTH,
@@ -281,6 +282,18 @@ export function createWeaverAuth(options: WeaverAuthOptions) {
       }),
     },
     databaseHooks: {
+      user: {
+        create: {
+          // Every creation path ends here: admin create, bootstrap, seed, OIDC.
+          before: async (user) => {
+            if (isReservedEmail(user.email))
+              throw new APIError("BAD_REQUEST", {
+                message: "This email domain is reserved",
+              });
+            return { data: user };
+          },
+        },
+      },
       session: {
         create: {
           after: async (session) => {

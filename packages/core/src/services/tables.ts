@@ -47,13 +47,23 @@ import {
   MAX_TEXT_CHARS,
   columnShapeIssue,
 } from "@weaver/core/tables/validation";
-import { resolveAttribution, type EnrichedActor } from "./documents";
+import { wikiAgentEmail } from "./wikiAgents";
+import {
+  machineEditorOf,
+  machineRefOf,
+  resolveAttribution,
+  type EnrichedActor,
+} from "./documents";
 import {
   gitAuthorForContent,
   documentAuthorForContent,
   contentUserId,
-  contentProjectKeyId,
+  machineEditorColumns,
+  machineEditorFromRow,
+  machineIdentity,
   type ContentWriteActor,
+  type MachineEditor,
+  type MachineEditorRef,
 } from "./contentAuthor";
 import {
   type GitLogEntry,
@@ -702,8 +712,7 @@ async function tableProjectionState(db: Db, located: LocatedTable) {
   return {
     lastEditedBy,
     lastEditedById: lastEditedBy?.id ?? null,
-    lastEditedByProjectKeyId:
-      lastEditedBy?.kind === "projectApiKey" ? lastEditedBy.keyId : null,
+    ...machineEditorColumns(machineRefOf(lastEditedBy)),
     lastEditedByName: located.snapshot.entry.authorName,
     lastEditedAt: located.snapshot.entry.date,
   };
@@ -724,6 +733,8 @@ function tableProjectionMatches(
     row.headCommitSha === located.snapshot.entry.sha &&
     row.lastEditedById === state.lastEditedById &&
     row.lastEditedByProjectKeyId === state.lastEditedByProjectKeyId &&
+    row.lastEditedByMachineKind === state.lastEditedByMachineKind &&
+    row.lastEditedByMachineId === state.lastEditedByMachineId &&
     row.lastEditedByName === state.lastEditedByName &&
     row.lastEditedAt.getTime() === state.lastEditedAt.getTime() &&
     row.createdAt.getTime() ===
@@ -740,6 +751,8 @@ type TableProjectionData = {
   headCommitSha: string;
   lastEditedById: string | null;
   lastEditedByProjectKeyId?: string | null;
+  lastEditedByMachineKind?: string | null;
+  lastEditedByMachineId?: string | null;
   lastEditedByName?: string | null;
   lastEditedAt: Date;
   createdAt: Date;
@@ -836,6 +849,8 @@ async function repairTableProjection(
         headCommitSha: located.snapshot.entry.sha,
         lastEditedById: state.lastEditedById,
         lastEditedByProjectKeyId: state.lastEditedByProjectKeyId,
+        lastEditedByMachineKind: state.lastEditedByMachineKind,
+        lastEditedByMachineId: state.lastEditedByMachineId,
         lastEditedByName: state.lastEditedByName,
         lastEditedAt: state.lastEditedAt,
         createdAt: new Date(located.snapshot.schema.created),
@@ -882,9 +897,8 @@ export type TableTreeLeaf = {
     id: string | null;
     name: string;
     email: string;
-    kind?: "projectApiKey";
-    keyId?: string;
   } | null;
+  machineEditor: MachineEditor | null;
 };
 
 export async function reconcileTableTreeAtHead(
@@ -910,6 +924,7 @@ export async function reconcileTableTreeAtHead(
       tracked.has(`${row.path}/schema.json`) &&
       tracked.has(`${row.path}/data.jsonl`)
     ) {
+      const machine = machineEditorFromRow(row);
       tables.push({
         appearance: normalizeAppearance(row.appearance),
         id: row.id,
@@ -924,15 +939,17 @@ export async function reconcileTableTreeAtHead(
               name: row.lastEditedBy.name ?? "",
               email: row.lastEditedBy.email,
             }
-          : row.lastEditedByProjectKeyId
+          : machine
             ? {
                 id: null,
-                kind: "projectApiKey",
-                keyId: row.lastEditedByProjectKeyId,
-                name: row.lastEditedByName ?? "Project API key",
-                email: `${row.lastEditedByProjectKeyId}@project-api.invalid`,
+                name: machine.name,
+                email:
+                  machine.kind === "wikiAgent"
+                    ? wikiAgentEmail(machine.id)
+                    : `${machine.id}@project-api.invalid`,
               }
             : null,
+        machineEditor: machine,
       });
       continue;
     }
@@ -972,6 +989,7 @@ export async function reconcileTableTreeAtHead(
             email: state.lastEditedBy.email,
           }
         : null,
+      machineEditor: machineEditorOf(state.lastEditedBy),
     });
   }
   return tables.sort((left, right) => left.path.localeCompare(right.path));
@@ -1053,7 +1071,7 @@ type PreparedTableWrite = {
   oldDir: string | null;
   create: boolean;
   actorId: string | null;
-  actorProjectKeyId?: string | null;
+  actorMachine?: MachineEditorRef | null;
   actorName?: string | null;
   createdAt: Date;
 };
@@ -1162,7 +1180,7 @@ async function updateTableProjection(
           rowCount: prepared.rows.length,
           headCommitSha: prepared.sha,
           lastEditedById: prepared.actorId,
-          lastEditedByProjectKeyId: prepared.actorProjectKeyId ?? null,
+          ...machineEditorColumns(prepared.actorMachine ?? null),
           lastEditedByName: prepared.actorName ?? null,
           lastEditedAt: committedAt,
           createdAt: prepared.createdAt,
@@ -1317,7 +1335,7 @@ export async function writeTableInRepo(
         oldDir: null,
         create: true,
         actorId: contentUserId(actor),
-        actorProjectKeyId: contentProjectKeyId(actor),
+        actorMachine: machineIdentity(actor),
         actorName: documentAuthorForContent(actor).name,
         createdAt: new Date(request.createdAt),
       },
@@ -1440,7 +1458,7 @@ export async function writeTableInRepo(
       oldDir: located.dir,
       create: false,
       actorId: contentUserId(actor),
-      actorProjectKeyId: contentProjectKeyId(actor),
+      actorMachine: machineIdentity(actor),
       actorName: documentAuthorForContent(actor).name,
       createdAt: new Date(current.schema.created),
     },
@@ -1541,6 +1559,8 @@ export async function getTable(
         lastEditedAt: state.lastEditedAt,
         lastEditedById: state.lastEditedById,
         lastEditedByProjectKeyId: state.lastEditedByProjectKeyId,
+        lastEditedByMachineKind: state.lastEditedByMachineKind,
+        lastEditedByMachineId: state.lastEditedByMachineId,
         lastEditedByName: state.lastEditedByName,
         lastEditedBy: state.lastEditedBy,
       };
@@ -1795,7 +1815,7 @@ async function updateMovedTableProjection(
           rowCount: input.located.snapshot.rows.length,
           headCommitSha: input.sha,
           lastEditedById: input.actorId,
-          lastEditedByProjectKeyId: null,
+          ...machineEditorColumns(null),
           lastEditedByName: null,
           lastEditedAt,
           createdAt: new Date(input.located.snapshot.schema.created),
@@ -2038,14 +2058,29 @@ export async function listTables(
       headCommitSha: true,
       lastEditedAt: true,
       lastEditedBy: { select: { id: true, name: true, email: true } },
+      lastEditedByMachineKind: true,
+      lastEditedByMachineId: true,
+      lastEditedByName: true,
     },
   });
   const pageSize = input.pageSize > 0 ? input.pageSize : total;
   return {
-    items: items.map((item) => ({
-      ...item,
-      appearance: normalizeAppearance(item.appearance),
-    })),
+    items: items.map(
+      ({
+        lastEditedByMachineKind,
+        lastEditedByMachineId,
+        lastEditedByName,
+        ...item
+      }) => ({
+        ...item,
+        appearance: normalizeAppearance(item.appearance),
+        machineEditor: machineEditorFromRow({
+          lastEditedByMachineKind,
+          lastEditedByMachineId,
+          lastEditedByName,
+        }),
+      }),
+    ),
     total,
     page: input.page,
     pageSize,
@@ -2193,10 +2228,7 @@ export async function rebuildTableIndex(
                 rowCount: row.rowCount,
                 headCommitSha: row.head.sha,
                 lastEditedById: attribution[index]?.id ?? null,
-                lastEditedByProjectKeyId:
-                  attribution[index]?.kind === "projectApiKey"
-                    ? attribution[index].keyId
-                    : null,
+                ...machineEditorColumns(machineRefOf(attribution[index])),
                 lastEditedByName: row.head.authorName,
                 lastEditedAt: row.head.date,
                 createdAt: row.createdAt,
@@ -2278,7 +2310,11 @@ export async function getTableHistory(
             userId: resolved?.id ?? null,
             userName: resolved ? (resolved.name ?? resolved.email) : null,
             projectKeyId:
-              resolved?.kind === "projectApiKey" ? resolved.keyId : null,
+              resolved?.kind === "machine" &&
+              resolved.machineKind === "projectApiKey"
+                ? resolved.machineId
+                : null,
+            machineEditor: machineEditorOf(resolved),
             date: entry.date,
             message: entry.message,
           };

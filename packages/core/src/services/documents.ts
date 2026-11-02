@@ -81,9 +81,13 @@ import {
   gitAuthorForContent,
   documentAuthorForContent,
   contentUserId,
-  contentProjectKeyId,
+  machineEditorColumns,
+  machineEditorFromRow,
+  machineIdentity,
   skipsLabelEnrichment,
   type ContentWriteActor,
+  type MachineEditor,
+  type MachineEditorRef,
 } from "./contentAuthor";
 import { withExistingProjectRepoReader, withProjectRepo } from "./projectRepo";
 import { resolveSnapshotCommit } from "./contentSnapshots";
@@ -124,6 +128,10 @@ type WriteMetadata = {
   apiOperation?: string;
   /** Assistant run that produced the change, as a Weaver-Run-Id commit trailer. */
   runId?: string;
+  /** Weaver-Wiki-Request-Hash; the wiki agent's recovery key. */
+  wikiRequestHash?: string;
+  /** Runs under the project lock immediately before the commit; a throw aborts it. */
+  beforeCommit?: () => Promise<void>;
 };
 
 /** Trailers a caller may attach to a write (a scheduled task run, Phase 6A §7). */
@@ -207,7 +215,7 @@ type Projection = {
   excerpt: string;
   sha: string;
   actorId: string | null;
-  actorProjectKeyId?: string | null;
+  actorMachine?: MachineEditorRef | null;
   actorName?: string | null;
   meta: DocumentMeta;
   targets: CrossrefTarget[];
@@ -516,16 +524,35 @@ const trailerUserIdSchema = z.uuid();
 type AttributionEntry = Pick<
   GitLogEntry,
   "authorEmail" | "userId" | "trustedAuthor"
-> & { projectKeyId?: string | null; authorName?: string };
+> & {
+  projectKeyId?: string | null;
+  wikiAgentId?: string | null;
+  authorName?: string;
+};
 export type ResolvedContentAuthor =
   | { id: string; name: string | null; email: string; kind?: "user" }
   | {
-      kind: "projectApiKey";
+      kind: "machine";
+      machineKind: MachineEditorRef["machineKind"];
+      machineId: string;
       id: null;
-      keyId: string;
       name: string;
       email: string;
     };
+
+export function machineRefOf(
+  author: ResolvedContentAuthor | null | undefined,
+): MachineEditorRef | null {
+  return author?.kind === "machine" ? author : null;
+}
+
+export function machineEditorOf(
+  author: ResolvedContentAuthor | null | undefined,
+): MachineEditor | null {
+  return author?.kind === "machine"
+    ? { kind: author.machineKind, id: author.machineId, name: author.name }
+    : null;
+}
 
 export async function resolveAttribution(
   db: Db,
@@ -533,7 +560,10 @@ export async function resolveAttribution(
 ): Promise<Array<ResolvedContentAuthor | null>> {
   const parsed = entries.map((entry) => {
     const trailer =
-      entry.trustedAuthor !== false && !entry.projectKeyId && entry.userId
+      entry.trustedAuthor !== false &&
+      !entry.projectKeyId &&
+      !entry.wikiAgentId &&
+      entry.userId
         ? trailerUserIdSchema.safeParse(entry.userId)
         : null;
     return trailer?.success ? trailer.data.toLowerCase() : null;
@@ -557,6 +587,7 @@ export async function resolveAttribution(
           return (
             entries[index]!.trustedAuthor !== false &&
             !entries[index]!.projectKeyId &&
+            !entries[index]!.wikiAgentId &&
             (!trailerId || !byTrailer.has(trailerId))
           );
         })
@@ -573,13 +604,31 @@ export async function resolveAttribution(
   const byEmail = new Map(fallbackUsers.map((user) => [user.email, user]));
   return entries.map((entry, index) => {
     if (entry.trustedAuthor === false) return null;
+    // Only the ledger vouches for the agent: unset trust is not trust here.
+    if (entry.wikiAgentId) {
+      if (
+        entry.trustedAuthor !== true ||
+        entry.projectKeyId ||
+        !trailerUserIdSchema.safeParse(entry.wikiAgentId).success
+      )
+        return null;
+      return {
+        kind: "machine" as const,
+        machineKind: "wikiAgent" as const,
+        machineId: entry.wikiAgentId,
+        id: null,
+        name: entry.authorName ?? "Wiki agent",
+        email: entry.authorEmail,
+      };
+    }
     if (entry.projectKeyId) {
       if (!trailerUserIdSchema.safeParse(entry.projectKeyId).success)
         return null;
       return {
-        kind: "projectApiKey" as const,
+        kind: "machine" as const,
+        machineKind: "projectApiKey" as const,
+        machineId: entry.projectKeyId,
         id: null,
-        keyId: entry.projectKeyId,
         name: entry.authorName ?? "Project API key",
         email: entry.authorEmail,
       };
@@ -711,7 +760,7 @@ async function persistDocumentProjection(
       excerpt: projection.excerpt,
       headCommitSha: projection.sha,
       lastEditedById: projection.actorId,
-      lastEditedByProjectKeyId: projection.actorProjectKeyId ?? null,
+      ...machineEditorColumns(projection.actorMachine ?? null),
       lastEditedByName:
         projection.actorName ?? projection.meta.updatedBy?.name ?? null,
       lastEditedAt: committedAt,
@@ -813,7 +862,7 @@ async function updateMovedProjection(
         slug: input.slug,
         headCommitSha: input.sha,
         lastEditedById: input.actorId,
-        lastEditedByProjectKeyId: null,
+        ...machineEditorColumns(null),
         lastEditedByName: null,
         lastEditedAt,
       },
@@ -878,6 +927,8 @@ async function commitPreparedWrite(
       apiRequestHash: metadata.apiRequestHash,
       apiOperation: metadata.apiOperation,
       runId: metadata.runId,
+      wikiRequestHash: metadata.wikiRequestHash,
+      beforeCommit: metadata.beforeCommit,
       metadataOverride: overridden,
     },
   );
@@ -1249,7 +1300,7 @@ export async function writeDocumentInRepo(
       title: request.title,
       excerpt,
       actorId: contentUserId(actor),
-      actorProjectKeyId: contentProjectKeyId(actor),
+      actorMachine: machineIdentity(actor),
       actorName: documentAuthorForContent(actor).name,
       meta,
       targets: saved.targets,
@@ -1348,7 +1399,7 @@ export async function writeDocumentInRepo(
       title,
       excerpt,
       actorId: contentUserId(actor),
-      actorProjectKeyId: contentProjectKeyId(actor),
+      actorMachine: machineIdentity(actor),
       actorName: documentAuthorForContent(actor).name,
       meta,
       targets: saved.targets,
@@ -1552,6 +1603,7 @@ export async function getDocument(
     lastEditedAt: row.lastEditedAt,
     lastEditedById: row.lastEditedById,
     lastEditedBy,
+    machineEditor: machineEditorFromRow(row),
     ...(await presentDocumentMetadata(db, meta)),
     appearance: normalizeAppearance(meta.appearance),
     review: await presentDocumentReview(db, input.projectId, meta.review),
@@ -1721,7 +1773,11 @@ export async function getHistory(
         userId: resolved?.id ?? null,
         userName: resolved ? (resolved.name ?? resolved.email) : null,
         projectKeyId:
-          resolved?.kind === "projectApiKey" ? resolved.keyId : null,
+          resolved?.kind === "machine" &&
+          resolved.machineKind === "projectApiKey"
+            ? resolved.machineId
+            : null,
+        machineEditor: machineEditorOf(resolved),
         date: entry.date,
         message: entry.message,
         changeSummary: summaries.get(entry.sha) ?? null,
@@ -1753,7 +1809,7 @@ export async function projectPreparedDocumentInRepo(
     body: string;
     sha: string;
     actorId: string | null;
-    actorProjectKeyId?: string | null;
+    actorMachine?: MachineEditorRef | null;
     actorName?: string | null;
   },
 ): Promise<void> {
@@ -1778,7 +1834,7 @@ export async function projectPreparedDocumentInRepo(
     excerpt,
     sha: input.sha,
     actorId: input.actorId,
-    actorProjectKeyId: input.actorProjectKeyId,
+    actorMachine: input.actorMachine,
     actorName: input.actorName,
     meta: input.meta,
     targets,
@@ -1834,8 +1890,7 @@ export async function repairDocumentProjectionInRepo(
       body: candidate.body,
       sha: head.sha,
       actorId: attribution?.id ?? null,
-      actorProjectKeyId:
-        attribution?.kind === "projectApiKey" ? attribution.keyId : null,
+      actorMachine: machineRefOf(attribution),
       actorName: head.authorName,
     });
     return db.document.findFirst({ where: { id: documentId, projectId } });
@@ -2004,10 +2059,7 @@ export async function rebuildIndex(
             excerpt: row.excerpt,
             headCommitSha: row.head.sha,
             lastEditedById: attribution[index]?.id ?? null,
-            lastEditedByProjectKeyId:
-              attribution[index]?.kind === "projectApiKey"
-                ? attribution[index].keyId
-                : null,
+            ...machineEditorColumns(machineRefOf(attribution[index])),
             lastEditedByName: row.head.authorName,
             lastEditedAt: row.head.date,
             ...metadata[index]!,
@@ -2582,6 +2634,9 @@ export async function listDocuments(
       excerpt: true,
       lastEditedAt: true,
       lastEditedBy: { select: { id: true, name: true, email: true } },
+      lastEditedByMachineKind: true,
+      lastEditedByMachineId: true,
+      lastEditedByName: true,
       createdAt: true,
       createdById: true,
       createdByName: true,
@@ -2605,10 +2660,18 @@ export async function listDocuments(
         updatedByName,
         updatedBy,
         kind,
+        lastEditedByMachineKind,
+        lastEditedByMachineId,
+        lastEditedByName,
         ...item
       }) => ({
         ...item,
         documentKind: kind,
+        machineEditor: machineEditorFromRow({
+          lastEditedByMachineKind,
+          lastEditedByMachineId,
+          lastEditedByName,
+        }),
         appearance: normalizeAppearance(item.appearance),
         createdBy: presentAuthor(createdById, createdByName, createdBy),
         updatedBy: presentAuthor(updatedById, updatedByName, updatedBy),

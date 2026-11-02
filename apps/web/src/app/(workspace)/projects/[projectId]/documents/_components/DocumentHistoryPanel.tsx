@@ -171,7 +171,8 @@ export function DocumentHistoryPanel({
           {entries.map((entry) => {
             const isCurrent = entry.sha === currentSha;
             const isSelected = entry.sha === selectedSha;
-            const author = entry.userName ?? entry.authorName;
+            const author =
+              entry.machineEditor?.name ?? entry.userName ?? entry.authorName;
 
             return (
               <li key={entry.sha}>

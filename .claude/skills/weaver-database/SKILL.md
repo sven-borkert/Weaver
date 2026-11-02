@@ -187,8 +187,11 @@ ProjectApiAuditEvent metadata, and ProjectApiRateWindow counters cascade with
 the key/project. Composite key/project FKs prevent foreign operation/audit rows.
 Receipt state CHECKs require a non-null committed SHA for success; the forward
 20261013120100 migration preserves unknown-SHA receipts as reservations.
-Document/DataTable lastEditedByProjectKeyId and lastEditedByName are nullable
-Git-derived attribution, never User references. Apply both 20261013120000 and
+Document/DataTable lastEditedByMachineKind/lastEditedByMachineId (CHECK: both or
+neither, one editor kind; expand only), lastEditedByProjectKeyId (dual-written, no
+reader; a later release drops it) and lastEditedByName are nullable Git-derived
+attribution, never User references. WikiAgent has a partial unique index on
+projectId WHERE revokedAt IS NULL. Apply both 20261013120000 and
 20261013120100 through the guarded migration commands before machine APIs run.
 Key-policy writes run inside withProjectRepo, then a transaction that takes
 lockProjectMembershipWrites and rechecks the role; never take the database lock

@@ -17,3 +17,8 @@ export const OAUTH_SCOPES = [
   "offline_access",
 ] as const;
 export const OIDC_PROVIDER_ID = "oidc";
+
+/** Machine authors commit under this domain; no human account may hold it. */
+export function isReservedEmail(email: string): boolean {
+  return /@(?:.+\.)?weaver\.invalid\.?$/i.test(email.trim());
+}

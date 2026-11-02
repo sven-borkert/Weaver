@@ -157,7 +157,9 @@ export function TableHistoryPanel({
                     ) : null}
                   </span>
                   <span className="text-text-3 mt-1 block text-[11px]">
-                    {entry.userName ?? entry.authorName}
+                    {entry.machineEditor?.name ??
+                      entry.userName ??
+                      entry.authorName}
                   </span>
                   {mounted ? (
                     <time

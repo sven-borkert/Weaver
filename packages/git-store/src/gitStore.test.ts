@@ -1405,3 +1405,136 @@ it.each(["commitAll", "commitTreeWithParents"] as const)(
     warning.mockRestore();
   },
 );
+
+describe("machine commit authors", () => {
+  const agentId = "aaaaaaaa-1111-4111-8111-111111111111";
+  const keyId = "bbbbbbbb-1111-4111-8111-111111111111";
+  const agent = {
+    kind: "machine" as const,
+    machineKind: "wikiAgent" as const,
+    machineId: agentId,
+    name: "Wiki agent",
+    email: `wiki-agent+${agentId}@weaver.invalid`,
+  };
+  const trailers = {
+    operationId: "wiki-run:r1:0001",
+    runId: "r1",
+    wikiRequestHash: "c".repeat(64),
+  };
+
+  it("serializes a wiki agent with its trailers and no user trailer through both log formats", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("page.md", "body\n");
+      const sha = await repo.commitAll("wiki: page", agent, trailers);
+      const raw = await simpleGit(repo.dir).raw(["log", "-1", "--format=%B"]);
+      expect(raw).toContain(`Weaver-Wiki-Agent-Id: ${agentId}`);
+      expect(raw).toContain("Weaver-Run-Id: r1");
+      expect(raw).toContain(`Weaver-Wiki-Request-Hash: ${"c".repeat(64)}`);
+      expect(raw).not.toContain("Weaver-User-Id");
+      expect(raw).not.toContain("Weaver-Project-Key-Id");
+      const expected = {
+        sha,
+        trustedAuthor: true,
+        authorName: "Wiki agent",
+        authorEmail: agent.email,
+        wikiAgentId: agentId,
+        wikiRequestHash: "c".repeat(64),
+        projectKeyId: null,
+        userId: null,
+        operationId: "wiki-run:r1:0001",
+        runId: "r1",
+      };
+      const [viaPath] = await repo.logForPath("page.md", { skip: 0, limit: 1 });
+      expect(viaPath).toMatchObject({ ...expected, pathAtSha: "page.md" });
+      const [viaChanges] = await repo.logChangesBefore("HEAD", { limit: 1 });
+      expect(viaChanges).toMatchObject({
+        sha,
+        trustedAuthor: true,
+        wikiAgentId: agentId,
+        projectKeyId: null,
+        userId: null,
+        runId: "r1",
+      });
+      expect(viaChanges?.changes).toEqual([
+        { status: "A", path: "page.md", oldPath: null },
+      ]);
+      const [viaSince] = await repo.logSince(null, { limit: 1 });
+      expect(viaSince).toMatchObject({ wikiAgentId: agentId });
+    });
+  });
+
+  it("keeps the project key trailer on disk under the generalized author", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("key.md", "body\n");
+      await repo.commitAll("key", {
+        kind: "machine",
+        machineKind: "projectApiKey",
+        machineId: keyId,
+        name: "Nightly",
+        email: `project-key-${keyId}@weaver.invalid`,
+      });
+      const [entry] = await repo.logForPath("key.md", { skip: 0, limit: 1 });
+      expect(entry).toMatchObject({
+        projectKeyId: keyId,
+        wikiAgentId: null,
+        userId: null,
+      });
+    });
+  });
+
+  it("refuses an agent commit without its full identity, and a non-UUID machine id", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("x.md", "body\n");
+      for (const options of [
+        {},
+        { ...trailers, wikiRequestHash: undefined },
+        { ...trailers, wikiRequestHash: "short" },
+        { ...trailers, runId: undefined },
+        { ...trailers, operationId: undefined },
+      ])
+        await expect(repo.commitAll("x", agent, options)).rejects.toThrow(
+          /wiki/i,
+        );
+      await expect(
+        repo.commitAll("x", { ...agent, machineId: "not-a-uuid" }, trailers),
+      ).rejects.toThrow(/machine/i);
+      await expect(
+        repo.commitAll(
+          "x",
+          { name: "U", email: "u@test.local", userId: "u1" },
+          { wikiRequestHash: "c".repeat(64) },
+        ),
+      ).rejects.toThrow(/wiki/i);
+      const head = await repo.resolveHead();
+      await expect(
+        repo.commitTreeWithParents("x", agent, [head]),
+      ).rejects.toThrow(/wiki/i);
+    });
+  });
+
+  it("reports forged agent trailers as untrusted", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("forged.md", "body\n");
+      const git = simpleGit(repo.dir);
+      await git.add("forged.md");
+      await git.raw([
+        "-c",
+        "user.name=Wiki agent",
+        "-c",
+        `user.email=${agent.email}`,
+        "commit",
+        "-m",
+        `forged\n\nWeaver-Wiki-Agent-Id: ${agentId}\nWeaver-Wiki-Request-Hash: ${"c".repeat(64)}`,
+      ]);
+      const [entry] = await repo.logForPath("forged.md", { skip: 0, limit: 1 });
+      expect(entry).toMatchObject({
+        trustedAuthor: false,
+        wikiAgentId: agentId,
+      });
+    });
+  });
+});

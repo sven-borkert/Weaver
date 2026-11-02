@@ -15,11 +15,11 @@ import {
 } from "./access";
 import { parseRecentRows } from "./rows";
 export function authorizedContentSql(access: DashboardAccess): Prisma.Sql {
-  return Prisma.sql`SELECT 'document'::text AS source,d.id,left(d.title,200) AS title,p.id AS "projectId",p.name AS "projectName",d."lastEditedAt" AS "sortAt",d."lastEditedById",d."lastEditedByProjectKeyId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName") AS "editorName",(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE AS "isOwnChange",d."headCommitSha",d.kind::text AS "documentKind"
+  return Prisma.sql`SELECT 'document'::text AS source,d.id,left(d.title,200) AS title,p.id AS "projectId",p.name AS "projectName",d."lastEditedAt" AS "sortAt",d."lastEditedById",d."lastEditedByMachineKind",d."lastEditedByMachineId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName") AS "editorName",(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE AS "isOwnChange",d."headCommitSha",d.kind::text AS "documentKind"
  FROM "Document" d JOIN visible_projects p ON p.id=d."projectId" LEFT JOIN "User" u ON u.id=d."lastEditedById"
  WHERE ${access.projectId ? Prisma.sql`p.id=${access.projectId}::uuid` : Prisma.sql`TRUE`}
  UNION ALL
- SELECT 'table'::text,d.id,left(d.title,200),p.id,p.name,d."lastEditedAt",d."lastEditedById",d."lastEditedByProjectKeyId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName"),(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE,d."headCommitSha",NULL
+ SELECT 'table'::text,d.id,left(d.title,200),p.id,p.name,d."lastEditedAt",d."lastEditedById",d."lastEditedByMachineKind",d."lastEditedByMachineId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName"),(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE,d."headCommitSha",NULL
  FROM "DataTable" d JOIN visible_projects p ON p.id=d."projectId" LEFT JOIN "User" u ON u.id=d."lastEditedById"
  WHERE ${access.projectId ? Prisma.sql`p.id=${access.projectId}::uuid` : Prisma.sql`TRUE`}`;
 }
@@ -28,11 +28,11 @@ export function recentContentPageSql(
   access: DashboardAccess,
   limit: number,
 ): Prisma.Sql {
-  return Prisma.sql`SELECT d.source,d.id,left(d.title,200) AS title,p.id AS "projectId",p.name AS "projectName",d."lastEditedAt" AS "sortAt",d."lastEditedById",d."lastEditedByProjectKeyId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName") AS "editorName",(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE AS "isOwnChange",d."headCommitSha",d."documentKind"
+  return Prisma.sql`SELECT d.source,d.id,left(d.title,200) AS title,p.id AS "projectId",p.name AS "projectName",d."lastEditedAt" AS "sortAt",d."lastEditedById",d."lastEditedByMachineKind",d."lastEditedByMachineId",d."lastEditedByName",COALESCE(u.name,d."lastEditedByName") AS "editorName",(d."lastEditedById"=${access.actor.userId}::uuid) IS TRUE AS "isOwnChange",d."headCommitSha",d."documentKind"
  FROM visible_projects p CROSS JOIN LATERAL (
- (SELECT 'document'::text AS source,d.id,d.title,d."lastEditedAt",d."lastEditedById",d."lastEditedByProjectKeyId",d."lastEditedByName",d."headCommitSha",d.kind::text AS "documentKind" FROM "Document" d WHERE d."projectId"=p.id ORDER BY d."lastEditedAt" DESC,d.id DESC LIMIT ${limit})
+ (SELECT 'document'::text AS source,d.id,d.title,d."lastEditedAt",d."lastEditedById",d."lastEditedByMachineKind",d."lastEditedByMachineId",d."lastEditedByName",d."headCommitSha",d.kind::text AS "documentKind" FROM "Document" d WHERE d."projectId"=p.id ORDER BY d."lastEditedAt" DESC,d.id DESC LIMIT ${limit})
  UNION ALL
- (SELECT 'table'::text AS source,d.id,d.title,d."lastEditedAt",d."lastEditedById",d."lastEditedByProjectKeyId",d."lastEditedByName",d."headCommitSha",NULL FROM "DataTable" d WHERE d."projectId"=p.id ORDER BY d."lastEditedAt" DESC,d.id DESC LIMIT ${limit})
+ (SELECT 'table'::text AS source,d.id,d.title,d."lastEditedAt",d."lastEditedById",d."lastEditedByMachineKind",d."lastEditedByMachineId",d."lastEditedByName",d."headCommitSha",NULL FROM "DataTable" d WHERE d."projectId"=p.id ORDER BY d."lastEditedAt" DESC,d.id DESC LIMIT ${limit})
  ) d LEFT JOIN "User" u ON u.id=d."lastEditedById"
  WHERE ${access.projectId ? Prisma.sql`p.id=${access.projectId}::uuid` : Prisma.sql`TRUE`}
  ORDER BY "sortAt" DESC,d.source COLLATE "C" DESC,d.id DESC LIMIT ${limit}`;

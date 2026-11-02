@@ -33,6 +33,7 @@ function serverEnv() {
   return (parsedEnv ??= parseServerEnv(process.env));
 }
 
+export type MachineAuthorKind = "projectApiKey" | "wikiAgent";
 export type CommitAuthor =
   | {
       name: string | null;
@@ -41,10 +42,11 @@ export type CommitAuthor =
       kind?: "user";
     }
   | {
+      kind: "machine";
+      machineKind: MachineAuthorKind;
+      machineId: string;
       name: string | null;
       email: string;
-      kind: "projectApiKey";
-      keyId: string;
     };
 export type GitLogEntry = {
   sha: string;
@@ -53,6 +55,8 @@ export type GitLogEntry = {
   authorEmail: string;
   trustedAuthor?: boolean;
   projectKeyId?: string | null;
+  wikiAgentId?: string | null;
+  wikiRequestHash?: string | null;
   apiRequestHash?: string | null;
   apiOperation?: string | null;
   userId: string | null;
@@ -69,6 +73,7 @@ export type GitChangeEntry = {
   authorEmail: string;
   trustedAuthor?: boolean;
   projectKeyId?: string | null;
+  wikiAgentId?: string | null;
   userId: string | null;
   operationId: string | null;
   runId: string | null;
@@ -88,7 +93,7 @@ const COMMITTER = {
 const OPERATION_ID_RE = /^\S{1,200}$/;
 const MCP_REQUEST_HASH_RE = /^[0-9a-f]{64}$/;
 const MCP_TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,99}$/;
-const PROJECT_KEY_ID_RE =
+const MACHINE_ID_RE =
   /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 const API_OPERATION_RE = /^[a-z][a-z0-9.]{0,39}$/;
 const RUN_ID_RE = /^\S{1,200}$/;
@@ -275,6 +280,7 @@ const CHANGE_LOG_FORMAT =
   "%(trailers:key=Weaver-Operation-Id,valueonly,separator=%x1f,unfold)%x00" +
   "%(trailers:key=Weaver-Run-Id,valueonly,separator=%x1f,unfold)%x00" +
   "%(trailers:key=Weaver-Project-Key-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
   "%B%x00";
 
 function parseChangeLog(raw: string): GitChangeEntry[] {
@@ -283,7 +289,7 @@ function parseChangeLog(raw: string): GitChangeEntry[] {
     .map((block) => block.trim())
     .filter(
       (block) =>
-        block.split("\0").length === 10 && /^[0-9a-f]{40}\0/.test(block),
+        block.split("\0").length === 11 && /^[0-9a-f]{40}\0/.test(block),
     )
     .map((block) => {
       const [
@@ -295,6 +301,7 @@ function parseChangeLog(raw: string): GitChangeEntry[] {
         operationField,
         runField,
         keyField,
+        wikiAgentField,
         body,
         tail,
       ] = block.split("\0");
@@ -315,7 +322,8 @@ function parseChangeLog(raw: string): GitChangeEntry[] {
         authorName: an ?? "",
         authorEmail: ae ?? "",
         userId: trailerValue(userField, USER_ID_VALUE_RE),
-        projectKeyId: trailerValue(keyField, PROJECT_KEY_ID_RE),
+        projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
+        wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
         operationId: trailerValue(operationField, OPERATION_ID_RE),
         runId: trailerValue(runField, RUN_ID_RE),
         date: new Date(aI ?? 0),
@@ -422,12 +430,21 @@ function sanitizeCommitMessage(value: string): string {
 }
 
 function authorIdentityTrailer(author: CommitAuthor): string {
-  if (author.kind === "projectApiKey") {
-    if (!PROJECT_KEY_ID_RE.test(author.keyId))
-      throw new Error("invalid project key author");
-    return `Weaver-Project-Key-Id: ${author.keyId}`;
+  if (author.kind === "machine") {
+    if (!MACHINE_ID_RE.test(author.machineId))
+      throw new Error("invalid machine author");
+    switch (author.machineKind) {
+      case "projectApiKey":
+        return `Weaver-Project-Key-Id: ${author.machineId}`;
+      case "wikiAgent":
+        return `Weaver-Wiki-Agent-Id: ${author.machineId}`;
+    }
   }
   return `Weaver-User-Id: ${author.userId}`;
+}
+
+function isWikiAgentAuthor(author: CommitAuthor): boolean {
+  return author.kind === "machine" && author.machineKind === "wikiAgent";
 }
 
 function gitFor(dir: string, author?: CommitAuthor): SimpleGit {
@@ -685,6 +702,7 @@ function makeRepo(dir: string) {
         mcpToolName?: string;
         apiRequestHash?: string;
         apiOperation?: string;
+        wikiRequestHash?: string;
         beforeCommit?: () => Promise<void>;
         runId?: string;
         /** Document metadata fields the writer set explicitly instead of defaulting. */
@@ -722,6 +740,17 @@ function makeRepo(dir: string) {
       if (runId !== undefined && !RUN_ID_RE.test(runId)) {
         throw new Error("invalid run id");
       }
+      const wikiRequestHash = options?.wikiRequestHash;
+      // Recovery matches on these, so an agent commit without them cannot exist.
+      if (
+        wikiRequestHash !== undefined
+          ? !isWikiAgentAuthor(author) ||
+            !MCP_REQUEST_HASH_RE.test(wikiRequestHash)
+          : isWikiAgentAuthor(author)
+      )
+        throw new Error("invalid wiki request identity");
+      if (isWikiAgentAuthor(author) && (!operationId || !runId))
+        throw new Error("incomplete wiki request identity");
       const overridden = options?.metadataOverride ?? [];
       if (overridden.some((field) => !METADATA_OVERRIDE_FIELDS.has(field))) {
         throw new Error("invalid metadata override field");
@@ -756,6 +785,8 @@ function makeRepo(dir: string) {
           "--trailer",
           `Weaver-API-Operation: ${apiOperation}`,
         );
+      if (wikiRequestHash !== undefined)
+        args.push("--trailer", `Weaver-Wiki-Request-Hash: ${wikiRequestHash}`);
       if (overridden.length > 0) {
         args.push(
           "--trailer",
@@ -1079,6 +1110,8 @@ function makeRepo(dir: string) {
           "%(trailers:key=Weaver-Project-Key-Id,valueonly,separator=%x1f,unfold)%x00" +
           "%(trailers:key=Weaver-API-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
           "%(trailers:key=Weaver-API-Operation,valueonly,separator=%x1f,unfold)%x00" +
+          "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
+          "%(trailers:key=Weaver-Wiki-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
           "%B%x00",
         commitish,
         "--",
@@ -1090,7 +1123,7 @@ function makeRepo(dir: string) {
         .map((block) => block.trim())
         .filter(
           (block) =>
-            block.split("\0").length === 14 && /^[0-9a-f]{40}\0/.test(block),
+            block.split("\0").length === 16 && /^[0-9a-f]{40}\0/.test(block),
         )
         .map((block) => {
           const [
@@ -1106,6 +1139,8 @@ function makeRepo(dir: string) {
             keyField,
             apiHashField,
             apiOperationField,
+            wikiAgentField,
+            wikiRequestHashField,
             body,
             tail,
           ] = block.split("\0");
@@ -1123,7 +1158,12 @@ function makeRepo(dir: string) {
             date: new Date(aI ?? 0),
             message: (body ?? "").split("\n")[0] ?? "",
             userId: trailerValue(userField, USER_ID_VALUE_RE),
-            projectKeyId: trailerValue(keyField, PROJECT_KEY_ID_RE),
+            projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
+            wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
+            wikiRequestHash: trailerValue(
+              wikiRequestHashField,
+              MCP_REQUEST_HASH_RE,
+            ),
             apiRequestHash: trailerValue(apiHashField, MCP_REQUEST_HASH_RE),
             apiOperation: trailerValue(apiOperationField, API_OPERATION_RE),
             operationId: trailerValue(operationField, OPERATION_ID_RE),
@@ -1240,6 +1280,8 @@ function makeRepo(dir: string) {
       author: CommitAuthor,
       parents: string[],
     ) {
+      if (isWikiAgentAuthor(author))
+        throw new Error("wiki agent cannot author a merge commit");
       const git = gitFor(dir, author);
       await git.raw(["add", "-f", "-A"]);
       const tree = (await git.raw(["write-tree"])).trim();

@@ -53,6 +53,20 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
   `inspect_links` and `list_recent_changes` use it; the loadable table and graph reads
   do not yet.
 
+## Machine authorship
+
+- `wikiAgentContentAuthor(context)` gives header author `{ id: null, name: "Wiki agent" }` and
+  email `wiki-agent+<id>@weaver.invalid`; `skipsLabelEnrichment` stays false, so link labels
+  are rewritten as for a user.
+- Every agent commit must carry `Weaver-Wiki-Agent-Id`, `Weaver-Operation-Id`, `Weaver-Run-Id`
+  and `Weaver-Wiki-Request-Hash`; `commitAll` refuses otherwise and `commitTreeWithParents`
+  refuses the agent outright.
+- `machineEditor` on history and explorer items comes from trusted attribution or the
+  projection pair, never from a header name. A forged agent trailer resolves to no author
+  and `external`.
+- `@weaver.invalid` (and subdomains) is reserved: `isReservedEmail` in `@weaver/auth/constants`,
+  enforced by the Better Auth `user.create.before` hook, `createUser` and the OIDC profile gate.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

@@ -76,5 +76,23 @@ describe("OIDC provider adapter", () => {
         expectedIdTokenNonce: "wrong",
       }),
     ).toBeNull();
+    const reserved = await new SignJWT({
+      email: "bot@weaver.invalid",
+      email_verified: true,
+      nonce: "nonce",
+    })
+      .setProtectedHeader({ alg: "RS256", kid: "fixture" })
+      .setIssuer("https://idp.example.test")
+      .setAudience("weaver")
+      .setSubject("stable-subject")
+      .setIssuedAt()
+      .setExpirationTime("5m")
+      .sign(keys.privateKey);
+    expect(
+      await provider.getUserInfo({
+        idToken: reserved,
+        expectedIdTokenNonce: "nonce",
+      }),
+    ).toBeNull();
   });
 });

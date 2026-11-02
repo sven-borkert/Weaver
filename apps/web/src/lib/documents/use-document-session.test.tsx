@@ -57,6 +57,7 @@ const initialDocument: MarkdownDocument = {
   lastEditedAt: new Date("2026-09-14T12:00:00Z"),
   lastEditedById: null,
   lastEditedBy: null,
+  machineEditor: null,
   createdAt: new Date("2026-09-14T12:00:00Z"),
   createdBy: null,
   updatedAt: new Date("2026-09-14T12:00:00Z"),

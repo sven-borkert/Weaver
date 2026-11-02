@@ -1,5 +1,6 @@
 import { unlinkUserFromProjectTraining } from "./projectTraining";
 import type { UserAdministrator } from "@weaver/auth";
+import { isReservedEmail } from "@weaver/auth/constants";
 import { captureError, emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { CoreError } from "@weaver/core/errors";
 import { assertSystemAdmin } from "@weaver/core/security/context";
@@ -234,6 +235,10 @@ export async function createUser(
     throw new CoreError("BAD_REQUEST", "Invalid name", { field: "name" });
   }
   const email = input.email.trim().toLowerCase();
+  if (isReservedEmail(email))
+    throw new CoreError("BAD_REQUEST", "This email domain is reserved", {
+      field: "email",
+    });
   const existing = await db.user.findUnique({
     where: { email },
     select: { id: true },

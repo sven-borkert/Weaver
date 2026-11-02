@@ -329,7 +329,7 @@ real cause (`GitRemoteError.detail`: the denied target and setting, or SSH stder
 Direct-listener auth keeps Better Auth's shared per-path rate-limit fallback;
 proxy trust selects a trusted source header, never whether rate limiting exists.
 
-Project machine writes use a separate content author (`services/contentAuthor.ts`); they never gain membership. Preserve `lastEditedByProjectKeyId` and captured name when rebuilding, and clear the prior machine stamp on human edits/moves. Machine publishing flows through `projectApi/operations.ts` with operation→project locks and revision/idempotency guards. Operation locking has its own `WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX` (1–128, default 2) so single-connection repository/application pools remain safe.
+Project machine writes use a separate content author (`services/contentAuthor.ts`); they never gain membership. Preserve the machine editor pair (`lastEditedByMachineKind`/`Id`, dual-writing `lastEditedByProjectKeyId` this release) and captured name when rebuilding, and clear the prior machine stamp on human edits/moves. Machine publishing flows through `projectApi/operations.ts` with operation→project locks and revision/idempotency guards. Operation locking has its own `WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX` (1–128, default 2) so single-connection repository/application pools remain safe.
 
 OIDC client credentials stored under SystemSetting `auth.oidc` participate in
 startup decryptability checks in all three runtimes and `pnpm secrets:rotate`.

@@ -652,7 +652,8 @@ export function ContentExplorer<I extends ExplorerItem>(
                   </TableCell>
                   <TableCell className="text-text-2 max-w-48 truncate">
                     {entry.kind === "item"
-                      ? editorLabel(entry.lastEditedBy)
+                      ? (entry.machineEditor?.name ??
+                        editorLabel(entry.lastEditedBy))
                       : editorLabel(entry.updatedBy)}
                   </TableCell>
                   <TableCell className="text-right">

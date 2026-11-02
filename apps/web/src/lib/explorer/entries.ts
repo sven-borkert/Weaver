@@ -7,12 +7,20 @@ export type ExplorerEditor = {
   email?: string;
 } | null;
 
+/** Trusted machine author of the last commit; server-derived, never from a header name. */
+export type ExplorerMachineEditor = {
+  kind: "projectApiKey" | "wikiAgent";
+  id: string;
+  name: string;
+} | null;
+
 export type ExplorerItem = {
   id: string;
   title: string;
   path: string;
   lastEditedAt: Date;
   lastEditedBy: ExplorerEditor;
+  machineEditor?: ExplorerMachineEditor;
   appearance?: Appearance | null;
 };
 

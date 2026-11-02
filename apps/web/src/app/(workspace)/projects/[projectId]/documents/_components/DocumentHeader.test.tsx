@@ -17,6 +17,7 @@ const document = {
   lastEditedAt: new Date("2026-09-28T11:00:00Z"),
   lastEditedById: null,
   lastEditedBy: null,
+  machineEditor: null,
   createdAt: new Date("2020-03-11T09:00:00Z"),
   createdBy: { id: null, name: "Sven Borkert" },
   updatedAt: new Date("2026-09-28T11:00:00Z"),

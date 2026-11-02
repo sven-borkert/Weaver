@@ -9,7 +9,7 @@ import { getOAuthState } from "better-auth/api";
 import { createRemoteJWKSet, customFetch, decodeJwt } from "jose";
 import { OIDC_TIMEOUT_MS, type OidcRuntimeSnapshot } from "@weaver/config/oidc";
 import { oidcJsonRequest } from "@weaver/config/oidcDiscovery";
-import { OIDC_PROVIDER_ID } from "./constants";
+import { isReservedEmail, OIDC_PROVIDER_ID } from "./constants";
 
 export const OIDC_GENERATION_STATE_KEY = "weaverOidcGeneration";
 export function createOidcProvider(
@@ -112,7 +112,8 @@ export function createOidcProvider(
         !claims.sub ||
         typeof claims.email !== "string" ||
         !claims.email.trim() ||
-        claims.email_verified !== true
+        claims.email_verified !== true ||
+        isReservedEmail(claims.email)
       )
         return null;
       const name =

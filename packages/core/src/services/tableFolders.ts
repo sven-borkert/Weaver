@@ -1,5 +1,6 @@
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
 import type { PrismaClient } from "@weaver/db/client";
+import { machineEditorFromRow } from "./contentAuthor";
 import * as folders from "./folders";
 import { withExistingProjectRepoReader } from "./projectRepo";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
@@ -46,6 +47,9 @@ export async function getTree(
       appearance: true,
       lastEditedAt: true,
       lastEditedBy: { select: { id: true, name: true, email: true } },
+      lastEditedByMachineKind: true,
+      lastEditedByMachineId: true,
+      lastEditedByName: true,
     },
     orderBy: { path: "asc" },
   });
@@ -55,11 +59,17 @@ export async function getTree(
     folderNames: {} as Record<string, string>,
     folderStamps: {} as Record<string, folders.FolderStamps>,
     tables: fallbackRows.map((row) => ({
-      ...row,
+      id: row.id,
+      title: row.title,
+      slug: row.slug,
+      path: row.path,
+      rowCount: row.rowCount,
+      lastEditedAt: row.lastEditedAt,
       appearance: normalizeAppearance(row.appearance),
       lastEditedBy: row.lastEditedBy
         ? { ...row.lastEditedBy, name: row.lastEditedBy.name ?? "" }
         : null,
+      machineEditor: machineEditorFromRow(row),
     })),
   };
 }

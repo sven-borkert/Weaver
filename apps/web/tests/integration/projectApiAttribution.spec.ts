@@ -32,7 +32,7 @@ describe("project API content attribution", () => {
     const actor = {
       kind: "projectApiKey" as const,
       projectId: f.project.id,
-      keyId: key.keyId,
+      machineId: key.keyId,
       name: "Nightly audit",
       email: f.owner.email,
     };
@@ -67,6 +67,8 @@ describe("project API content attribution", () => {
     expect(row).toMatchObject({
       lastEditedById: null,
       lastEditedByProjectKeyId: key.keyId,
+      lastEditedByMachineKind: "projectApiKey",
+      lastEditedByMachineId: key.keyId,
       lastEditedByName: "Nightly audit",
     });
     await withProjectRepo(f.project.id, async (repo) => {
@@ -150,7 +152,7 @@ describe("project API content attribution", () => {
     const actor = {
       kind: "projectApiKey" as const,
       projectId: f.project.id,
-      keyId: key.keyId,
+      machineId: key.keyId,
       name: "Nightly audit",
       email: f.owner.email,
     };
@@ -235,9 +237,10 @@ describe("project API content attribution", () => {
     ];
     expect(await resolveAttribution(f.db, entries)).toEqual([
       {
-        kind: "projectApiKey",
+        kind: "machine",
+        machineKind: "projectApiKey",
+        machineId: keyId,
         id: null,
-        keyId,
         name: "Machine",
         email: f.owner.email,
       },

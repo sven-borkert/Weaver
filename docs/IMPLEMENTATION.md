@@ -3335,7 +3335,7 @@ storage and outbox synchronization. This remaining Phase 6 scope (provisionally
 “6D”) is deferred until after Phase 7; it has no approved design or implementation
 plan. Existing Git-backed table limits remain unchanged.
 
-Machine content authors use `services/contentAuthor.ts` and trusted `Weaver-Project-Key-Id` trailers. Document/table projections store captured machine names separately from user foreign keys; history and dashboard activity preserve them after rebuild. `projectApi/snapshots.ts` resolves committed resource UUIDs without requiring a membership or projection.
+Machine content authors use `services/contentAuthor.ts` and trusted `Weaver-Project-Key-Id` or `Weaver-Wiki-Agent-Id` trailers. `CommitAuthor` carries `kind: "machine"`, `machineKind` and `machineId`; `Document`/`DataTable` store the `lastEditedByMachineKind`/`lastEditedByMachineId` pair (migration `20261103090100_machine_editor`, expand only: `lastEditedByProjectKeyId` is dual-written this release and all readers use the pair), and history entries and explorer items expose `machineEditor`. The agent branch of `resolveAttribution` requires `trustedAuthor === true`. Document/table projections store captured machine names separately from user foreign keys; history and dashboard activity preserve them after rebuild. `projectApi/snapshots.ts` resolves committed resource UUIDs without requiring a membership or projection.
 
 Project machine read authority is isolated in `projectApi/policy.ts` and `queries.ts`: current live grants resolve against committed UUIDs under a shared repository lock. `cursors.ts` signs key/policy/query/HEAD-bound pagination. HEAD serves revisions independently of Read.
 

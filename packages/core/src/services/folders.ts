@@ -38,6 +38,7 @@ import {
   isTableDirName,
 } from "@weaver/core/tables/paths";
 import type { SecurityContext } from "../security/context";
+import { machineEditorColumns, machineEditorFromRow } from "./contentAuthor";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import {
   openProjectRepo,
@@ -403,11 +404,15 @@ export async function getTree(
         updaterEmail: string | null;
         reviewDueAt: Date | null;
         lastReviewedAt: Date | null;
+        lastEditedByMachineKind: string | null;
+        lastEditedByMachineId: string | null;
+        lastEditedByName: string | null;
       }
     >
   >(Prisma.sql`
     SELECT d."appearance", d."id", d."title", d."slug", d."path", d."kind", d."headCommitSha",
       d."reviewDueAt", d."lastReviewedAt",
+      d."lastEditedByMachineKind", d."lastEditedByMachineId", d."lastEditedByName",
       d."createdAt", d."createdById", d."createdByName",
       cu."name" AS "creatorName", cu."email" AS "creatorEmail",
       d."updatedAt", d."updatedById", d."updatedByName",
@@ -455,6 +460,7 @@ export async function getTree(
         ? null
         : { name: row.updaterName, email: row.updaterEmail },
     ),
+    machineEditor: machineEditorFromRow(row),
     index: documentIndexLights(row, generation, { coveredByBuild }),
   }));
   if (!repo)
@@ -620,7 +626,7 @@ export async function moveFolderToInRepo(
               path: `${toRelPath}/${document.path.slice(fromRel.length + 1)}`,
               headCommitSha: sha,
               lastEditedById: actor.userId,
-              lastEditedByProjectKeyId: null,
+              ...machineEditorColumns(null),
               lastEditedByName: actor.name ?? actor.email ?? null,
               lastEditedAt: committedAt,
             },
@@ -643,7 +649,7 @@ export async function moveFolderToInRepo(
               path: `${toRelPath}/${table.path.slice(fromRel.length + 1)}`,
               headCommitSha: sha,
               lastEditedById: actor.userId,
-              lastEditedByProjectKeyId: null,
+              ...machineEditorColumns(null),
               lastEditedByName: actor.name ?? actor.email ?? null,
               lastEditedAt: committedAt,
             },

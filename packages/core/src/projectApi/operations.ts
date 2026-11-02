@@ -501,7 +501,7 @@ export async function applyProjectMachineOperation(
         });
         const actor = {
           kind: "projectApiKey" as const,
-          keyId: context.keyId,
+          machineId: context.keyId,
           projectId: context.projectId,
           name: policy.context.name,
           email: `project-key-${context.keyId}@weaver.invalid`,

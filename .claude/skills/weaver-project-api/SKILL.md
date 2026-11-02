@@ -47,7 +47,7 @@ retry examples. Implementation changes also require `weaver-documents` or
 - Read, Create, Update and Delete are independent. Do not require Read for a
   write-only append. Table replacement derives additional Create/Delete needs
   from actual row, column and option deltas.
-- Preserve `lastEditedByProjectKeyId` and the captured author name on rebuild;
+- Preserve the machine editor pair (`lastEditedByMachineKind`/`Id`, dual-writing `lastEditedByProjectKeyId` this release) and the captured author name on rebuild;
   human edits/moves clear previous machine attribution. Do not impersonate the
   key creator in Git or content projections.
 

@@ -507,6 +507,10 @@ model Document {
   /// Last commit touching the file (activity); see updatedAt for the document metadata.
   lastEditedById      String?  @db.Uuid
   lastEditedByProjectKeyId String? @db.Uuid
+  /// Machine editor pair; the migration's CHECK requires both or neither and one editor kind.
+  lastEditedByMachineKind String?
+  /// projectApiKey or wikiAgent id, deliberately without an FK.
+  lastEditedByMachineId   String? @db.Uuid
   lastEditedByName String?
   lastEditedAt        DateTime
   /// Frontmatter `created`/`createdBy`/`updated`/`updatedBy`; names are as written in Git.
@@ -591,6 +595,10 @@ model DataTable {
   headCommitSha       String
   lastEditedById      String?  @db.Uuid
   lastEditedByProjectKeyId String? @db.Uuid
+  /// Machine editor pair; the migration's CHECK requires both or neither and one editor kind.
+  lastEditedByMachineKind String?
+  /// projectApiKey or wikiAgent id, deliberately without an FK.
+  lastEditedByMachineId   String? @db.Uuid
   lastEditedByName String?
   lastEditedAt        DateTime
   createdAt           DateTime

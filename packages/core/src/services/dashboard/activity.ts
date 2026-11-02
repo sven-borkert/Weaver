@@ -65,7 +65,7 @@ export async function listDashboardActivity(
  CASE WHEN c.source='document' THEN jsonb_build_object('kind','document','projectId',c."projectId",'documentId',c.id) ELSE jsonb_build_object('kind','table','projectId',c."projectId",'tableId',c.id) END AS destination,NULL::jsonb AS "currentReport"
  FROM authorized_content c CROSS JOIN clock o
  WHERE ${params.view !== "results"} AND c."sortAt" BETWEEN o."contentWindowStart" AND o."asOf"
- ${params.view === "others" ? Prisma.sql`AND ((c."lastEditedById" IS NOT NULL AND c."lastEditedById"<>${actor.userId}::uuid) OR c."lastEditedByProjectKeyId" IS NOT NULL)` : Prisma.empty}
+ ${params.view === "others" ? Prisma.sql`AND ((c."lastEditedById" IS NOT NULL AND c."lastEditedById"<>${actor.userId}::uuid) OR c."lastEditedByMachineKind" IS NOT NULL)` : Prisma.empty}
  ${params.view === "all" ? Prisma.sql`AND NOT (c.source='document' AND EXISTS (SELECT 1 FROM eligible_results r WHERE r.kind='task' AND r.state='succeeded' AND r."outputDocumentId"=c.id AND r."outputCommitSha"=c."headCommitSha"))` : Prisma.empty}
  UNION ALL
  SELECT r.id,r.kind,'work_result'::text,r.title,r."projectId",r."projectName",r."sortAt",r."finishedAt",NULL::text,NULL::boolean,r.state,r."sourceStatus",r.destination,r."currentReport" FROM eligible_results r WHERE ${params.view !== "others"}),

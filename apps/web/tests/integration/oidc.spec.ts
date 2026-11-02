@@ -372,6 +372,15 @@ describe("OIDC login", () => {
     },
   );
 
+  it("does not provision or sign in an account on the reserved machine domain", async () => {
+    const response = await finish(await begin(), {
+      claims: { email: "wiki-agent+x@weaver.invalid", email_verified: true },
+    });
+    expect((await session(response))?.user).toBeUndefined();
+    expect(await getPrisma().user.count()).toBe(0);
+    expect(await getPrisma().account.count()).toBe(0);
+  });
+
   it.each([false, "true", undefined])(
     "does not provision a new account for an unverified email (%s)",
     async (emailVerified) => {

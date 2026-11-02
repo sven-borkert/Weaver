@@ -169,6 +169,8 @@ describe("project machine publishing", () => {
           title: later === "update" ? "Newer report" : "Recovered report",
           headCommitSha: currentRevision,
           lastEditedByProjectKeyId: k.keyId,
+          lastEditedByMachineKind: "projectApiKey",
+          lastEditedByMachineId: k.keyId,
         });
       expect(queue.jobs).toContainEqual(
         later === "delete"

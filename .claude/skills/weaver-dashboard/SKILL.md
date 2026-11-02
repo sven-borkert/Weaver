@@ -76,3 +76,6 @@ web unit runner; `apps/web/tests/e2e/dashboard.spec.ts` is browser coverage and
 requires the normal Tier 3 consent. Query changes should cover ownership under
 project filters, nonmembers/Admins without membership, read-only maintainers,
 unavailable pin capacity and pagination after data changes.
+
+Raw readers select the machine editor pair (`lastEditedByMachineKind`/`Id`), not the old
+project key column; Activity's "Changes by others" counts any machine editor.

@@ -94,7 +94,7 @@ export async function authorOf(
   entry: GitLogEntry,
 ): Promise<DocumentAuthor> {
   const [user] = await resolveAttribution(db, [entry]);
-  if (user?.kind === "projectApiKey") return { id: null, name: user.name };
+  if (user?.kind === "machine") return { id: null, name: user.name };
   if (user) return authorForUser(user);
   try {
     assertAuthorName(entry.authorName);

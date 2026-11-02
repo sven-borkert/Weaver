@@ -71,7 +71,12 @@ pull claims; `weaver-env-deploy` for SSH trust and network policy.
   real trailers come only from `commitAll` options and are appended afterwards.
   In `batchCatFile`, drain skipped oversized/non-blob payloads and retain request
   order and bounded buffering; skipping bytes incorrectly corrupts later blobs.
-- User/project-key attribution is trusted only for locally recorded commits in
+- `CommitAuthor` is a user or `{ kind: "machine", machineKind, machineId }`
+  (`projectApiKey` → `Weaver-Project-Key-Id`, `wikiAgent` → `Weaver-Wiki-Agent-Id`, UUID
+  validated). `commitAll` requires a wiki agent commit to carry operation id, run id
+  and `wikiRequestHash`. Adding a log field touches both positional formats
+  (`CHANGE_LOG_FORMAT`, `logForPath`) and their field counts.
+- User/machine attribution is trusted only for locally recorded commits in
   `.git/weaver-trusted-commits`. Remote trailers alone do not establish an
   author. Preserve distinct human and project-machine `CommitAuthor` variants.
 - A remote push captures an immutable HEAD under the shared lock and releases

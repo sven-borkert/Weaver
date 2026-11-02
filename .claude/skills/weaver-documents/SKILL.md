@@ -1154,7 +1154,7 @@ hash/type/2 MiB bounds before creation, and include icons in existing transfer c
 Image sends require `whoami.capabilities.contentAppearance=1` before content POST;
 text-only legacy transfers remain valid. Errors contain no icon bytes.
 
-Project machine writes use a separate content author (`services/contentAuthor.ts`); they never gain membership. Preserve `lastEditedByProjectKeyId` and captured name when rebuilding, and clear the prior machine stamp on human edits/moves. Machine publishing flows through `projectApi/operations.ts` with operation→project locks and revision/idempotency guards. Operation locking has its own `WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX` (1–128, default 2) so single-connection repository/application pools remain safe.
+Project machine writes use a separate content author (`services/contentAuthor.ts`); they never gain membership. Preserve the machine editor pair (`lastEditedByMachineKind`/`Id`, dual-writing `lastEditedByProjectKeyId` this release) and captured name when rebuilding, and clear the prior machine stamp on human edits/moves. Machine publishing flows through `projectApi/operations.ts` with operation→project locks and revision/idempotency guards. Operation locking has its own `WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX` (1–128, default 2) so single-connection repository/application pools remain safe.
 
 ## Review hardening invariants
 
