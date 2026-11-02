@@ -100,6 +100,60 @@ describe("document header", () => {
     ).toBe(composeDocumentFile(meta, "Body\n", "markdown"));
   });
 
+  it("roundtrips_properties_after_appearance_for_markdown_and_python", () => {
+    const properties = {
+      type: "entity",
+      summary: "A --> page",
+      tags: ["x"],
+      sources: [{ kind: "url" as const, url: "https://a.example/p" }],
+    };
+    const withBoth = {
+      ...authored,
+      appearance: { backgroundColor: "#aabbcc" },
+      properties,
+    };
+    for (const kind of ["markdown", "python"] as const) {
+      const file = composeDocumentFile(withBoth, "Body\n", kind);
+      expect(file.indexOf("appearance:")).toBeLessThan(
+        file.indexOf("properties:"),
+      );
+      expect(file).toContain("A --\\u003e page");
+      if (kind === "markdown")
+        expect(file.indexOf("-->")).toBe(file.lastIndexOf("-->"));
+      const parsed = parseDocumentFile(file, kind);
+      expect(parsed.meta.properties).toEqual(properties);
+      expect(composeDocumentFile(parsed.meta, parsed.body, kind)).toBe(file);
+    }
+  });
+  it("keeps_files_without_properties_byte_identical_and_reads_bad_lines_tolerantly", () => {
+    const plain = composeDocumentFile(authored, "Body\n", "markdown");
+    expect(plain).not.toContain("properties");
+    for (const raw of [
+      "not json",
+      "[]",
+      '{"type":5,"tags":"x","extra":1}',
+      JSON.stringify({ summary: "x".repeat(70_000) }),
+    ]) {
+      expect(
+        parseDocumentFile(
+          plain.replace("-->\n", `properties: ${raw}\n-->\n`),
+          "markdown",
+        ),
+      ).toEqual({ meta: authored, body: "Body\n", legacy: false });
+    }
+    const reserved = parseDocumentFile(
+      plain.replace(
+        "-->\n",
+        'properties: {"type":"source","reviewExempt":true}\n-->\n',
+      ),
+      "markdown",
+    );
+    expect(reserved.meta.properties).toEqual({
+      type: "source",
+      reviewExempt: true,
+    });
+  });
+
   it("hides the metadata in a comment and shows the title as the first heading", () => {
     expect(composeDocumentFile(authored, "Hello\n", "markdown")).toBe(
       `<!-- weaver\n` +

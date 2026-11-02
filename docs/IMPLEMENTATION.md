@@ -922,6 +922,13 @@ metadata, roving focus and drag/drop. Size persists at
 `<adapter.viewStorageKey>:iconSize`; the initial render is Standard and storage
 restores after mount, with usable defaults when storage is blocked.
 
+Wiki page properties: an optional `properties` JSON line follows `appearance` in
+the version-3 header (Markdown and Python). [`wiki/properties.ts`](../packages/core/src/wiki/properties.ts)
+`normalizeProperties` drops invalid values on read (never fatal) and fixes key order;
+`type: source` and `reviewExempt` are plain data that grant nothing by themselves.
+Slice 1 only reads and carries the line; writers arrive later. An older instance
+cannot parse a file with this line, so upgrade every instance before the first write.
+
 A document file starts with a hidden `<!-- weaver … -->` comment holding
 `id`, `created`, `createdBy`, `updated`, `updatedBy` and the review block
 (`reviewers`, `reviewEvery`, `reviewSince`, and once reviewed `lastReviewed` and

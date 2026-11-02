@@ -1,6 +1,11 @@
 import type { DocumentKind } from "./kinds";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
 import {
+  normalizeProperties,
+  parsePropertiesLine,
+  type WikiPageProperties,
+} from "../wiki/properties";
+import {
   canonicalReviewers,
   MAX_REVIEWERS,
   REVIEW_MONTHS_MAX,
@@ -23,6 +28,7 @@ export type DocumentMeta = {
   /** Null only in files written before DOCUMENT_HEADER_VERSION 3. */
   review: DocumentReview | null;
   appearance?: Appearance;
+  properties?: WikiPageProperties;
 };
 
 export const MAX_AUTHOR_NAME_CHARS = 200;
@@ -160,6 +166,7 @@ function reviewLines(review: DocumentReview | null): string[] {
 function headerLines(
   meta: DocumentMeta,
   appearance: Appearance | null,
+  properties: WikiPageProperties | null,
 ): string[] {
   return [
     `id: ${meta.id}`,
@@ -169,6 +176,7 @@ function headerLines(
     ...(meta.updatedBy ? [authorLine("updatedBy", meta.updatedBy)] : []),
     ...reviewLines(meta.review),
     ...(appearance ? [`appearance: ${encodeCommentJson(appearance)}`] : []),
+    ...(properties ? [`properties: ${encodeCommentJson(properties)}`] : []),
   ];
 }
 
@@ -268,6 +276,7 @@ type HeaderGroups = {
   lastReviewed?: string;
   reviewedBy?: string;
   appearance?: string;
+  properties?: string;
 };
 
 /** The header field lines, each prefixed by `prefix` ("" in a comment block, "# " in Python). */
@@ -285,7 +294,8 @@ function headerSource(prefix: string, withTitle: boolean): string {
     `${p}reviewSince: (?<reviewSince>\\S+)\\n` +
     `(?:${p}lastReviewed: (?<lastReviewed>\\S+)\\n` +
     `${p}reviewedBy: (?<reviewedBy>\\{[^\\n]*\\})\\n)?)?` +
-    `(?:${p}appearance: (?<appearance>[^\\n]*)\\n)?`
+    `(?:${p}appearance: (?<appearance>[^\\n]*)\\n)?` +
+    `(?:${p}properties: (?<properties>[^\\n]*)\\n)?`
   );
 }
 
@@ -305,7 +315,11 @@ export function composeDocumentFile(
   assertCanonicalMeta(meta);
   if (/[\r\n]/.test(meta.title))
     throw new FrontmatterError("title must be a single line");
-  const lines = headerLines(meta, normalizeAppearance(meta.appearance));
+  const lines = headerLines(
+    meta,
+    normalizeAppearance(meta.appearance),
+    normalizeProperties(meta.properties),
+  );
   if (kind === "python") {
     const shebang = SHEBANG_RE.exec(body)?.[0] ?? "";
     const rest = body.slice(shebang.length);
@@ -335,8 +349,11 @@ function metaFromGroups(g: HeaderGroups, title: string): DocumentMeta {
       /* Invalid optional metadata is ignored. */
     }
   }
+  const properties =
+    g.properties === undefined ? null : parsePropertiesLine(g.properties);
   const meta: DocumentMeta = {
     ...(appearance === null ? {} : { appearance }),
+    ...(properties === null ? {} : { properties }),
     id: g.id,
     title,
     created: g.created,
