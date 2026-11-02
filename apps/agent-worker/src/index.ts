@@ -23,6 +23,7 @@ import { assertConnectionSecretsDecryptable } from "@weaver/core/services/llmCon
 import { db } from "@weaver/db";
 import { createAssistantRunner } from "@weaver/ai/runner";
 import { createScheduledTaskRunner } from "@weaver/ai/taskRunner";
+import { createWikiRunner } from "@weaver/ai/wikiRunner";
 import { createIngestionAnalyzeRunner } from "@weaver/ingestion/analyzeStage";
 import { createIngestionLinkRunner } from "@weaver/ingestion/linkStage";
 import { createIngestionParseRunner } from "@weaver/ingestion/parseStage";
@@ -67,6 +68,7 @@ const lifecycle = createRuntimeLifecycle({
     await startKnowledgeWorkers({
       assistantRunner: createAssistantRunner({ db, ring, workerId }),
       taskRunner: createScheduledTaskRunner({ db, ring, workerId }),
+      wikiRunner: createWikiRunner({ db, ring, workerId }),
       ingestionParseRunner: createIngestionParseRunner({
         db,
         ring,
