@@ -538,8 +538,8 @@ default-ignorables or bidi controls) before its SHA-256, and approval stores the
 access (`resolveProjectAccess`) requires `ProjectWikiSettings.enabled` and the agent equal to `agentId`;
 `wikiWriteGuardsFor` supplies the guide and source-folder guards to `applyWikiOperation`. `LlmPurpose.wiki`
 (chat + tool use) is the optional model route. The Project settings card is
-[`WikiCard.tsx`](../apps/web/src/app/(workspace)/projects/[projectId]/settings/_components/WikiCard.tsx) with the
-[`ReviewGuideDialog.tsx`](../apps/web/src/app/(workspace)/projects/[projectId]/settings/_components/ReviewGuideDialog.tsx);
+[`WikiCard.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/settings/_components/WikiCard.tsx>) with the
+[`ReviewGuideDialog.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/settings/_components/ReviewGuideDialog.tsx>);
 `get_wiki_guide` ([`tools/wiki.ts`](../packages/assistant-tools/src/tools/wiki.ts), via `readApprovedWikiGuide`) serves the
 approved body in byte-bounded pages.
 
