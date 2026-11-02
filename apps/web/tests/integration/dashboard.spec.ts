@@ -82,6 +82,31 @@ async function content(
 }
 describe("dashboard read model", () => {
   beforeEach(resetDb);
+  it("leaves work kinds outside the activity feed out instead of failing it", async () => {
+    const f = await fixture();
+    await getPrisma().projectGitRemote.create({
+      data: {
+        projectId: f.project.id,
+        remoteUrl: "git@example.test:repo.git",
+        branch: "main",
+        enabled: true,
+        keyName: "test key",
+        keyFingerprint: "SHA256:test",
+        keyUploadedAt: new Date(),
+        credentialCiphertext: new Uint8Array([1]),
+        credentialNonce: new Uint8Array([1]),
+        credentialTag: new Uint8Array([1]),
+        credentialKeyVersion: 1,
+        nextAttemptAt: new Date(),
+        lastErrorCode: "NETWORK_ERROR",
+        failureCount: 1,
+      },
+    });
+    const doc = await content(f.project.id, f.editor.id);
+    const { items } = await listDashboardActivity(getPrisma(), f.actor, {});
+    expect(items.map((item) => item.id)).toEqual([doc.id]);
+  });
+
   it("authorizes before recent limits, returns current projections and safe attribution", async () => {
     const f = await fixture();
     const foreign = await makeProject("Foreign");

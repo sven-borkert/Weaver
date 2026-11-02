@@ -122,6 +122,14 @@ async function guarded(
   if (count === 0) throw stale();
 }
 
+/** Serializes with Process, which creates its run holding this row lock. */
+async function lockSettingsRow(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+): Promise<void> {
+  await tx.$queryRaw`SELECT 1 FROM "ProjectWikiSettings" WHERE "projectId" = ${projectId}::uuid FOR UPDATE`;
+}
+
 async function requireRow(
   db: PrismaClient | Prisma.TransactionClient,
   projectId: string,
@@ -317,6 +325,7 @@ export async function disableWiki(
   await requireRole(db, actor, input.projectId, "Owner", true);
   let cancelled: WikiRunEnded[] = [];
   await db.$transaction(async (tx) => {
+    await lockSettingsRow(tx, input.projectId);
     await requireRow(tx, input.projectId, input.expectedRevision);
     cancelled = await cancelActiveRunsInTx(
       tx,
@@ -341,6 +350,7 @@ export async function revokeAgent(
   await requireRole(db, actor, input.projectId, "Owner", true);
   let cancelled: WikiRunEnded[] = [];
   await db.$transaction(async (tx) => {
+    await lockSettingsRow(tx, input.projectId);
     await requireRow(tx, input.projectId, input.expectedRevision);
     await revokeWikiAgent(tx, { projectId: input.projectId });
     cancelled = await cancelActiveRunsInTx(

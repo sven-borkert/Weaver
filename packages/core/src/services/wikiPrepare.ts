@@ -396,21 +396,7 @@ async function prepareFile(
     .join(" ")
     .slice(0, 2_000);
   await db.$transaction(async (tx) => {
-    const finalized = await tx.ingestionFile.updateMany({
-      where: { id: file.id, status: "accepting" },
-      data: { status: "accepted", failureKind: null, failureMessage: null },
-    });
-    if (finalized.count === 1)
-      await tx.ingestionDraft.update({
-        where: { fileId: file.id },
-        data: {
-          acceptedResourceId: written.resourceId,
-          acceptedCommitSha: written.commitSha,
-          markdown: null,
-          tableRows: Prisma.DbNull,
-          tableSchema: Prisma.DbNull,
-        },
-      });
+    await finalizeFileInTx(tx, file.id, written.resourceId, written.commitSha);
     if (warnings)
       await tx.wikiInputItem.updateMany({
         where: { id: item.id },
@@ -447,6 +433,44 @@ async function prepareFile(
   );
 }
 
+async function finalizeFileInTx(
+  tx: Prisma.TransactionClient,
+  fileId: string,
+  resourceId: string,
+  commitSha?: string,
+): Promise<void> {
+  const finalized = await tx.ingestionFile.updateMany({
+    where: { id: fileId, status: "accepting" },
+    data: { status: "accepted", failureKind: null, failureMessage: null },
+  });
+  if (finalized.count === 1)
+    await tx.ingestionDraft.update({
+      where: { fileId },
+      data: {
+        acceptedResourceId: resourceId,
+        ...(commitSha ? { acceptedCommitSha: commitSha } : {}),
+        markdown: null,
+        tableRows: Prisma.DbNull,
+        tableSchema: Prisma.DbNull,
+      },
+    });
+}
+
+/** A crash after the source commit left the file accepting, with its draft kept. */
+async function finalizeCommittedFile(
+  db: PrismaClient,
+  item: {
+    ingestionFileId: string | null;
+    sourceDocumentId: string | null;
+    sourceTableId: string | null;
+  },
+): Promise<void> {
+  const resourceId = item.sourceDocumentId ?? item.sourceTableId;
+  if (!item.ingestionFileId || !resourceId) return;
+  const fileId = item.ingestionFileId;
+  await db.$transaction((tx) => finalizeFileInTx(tx, fileId, resourceId));
+}
+
 /** One tick's work on a preparing run. A refused or broken item never blocks its neighbours. */
 export async function prepareRunItems(
   db: PrismaClient,
@@ -460,6 +484,7 @@ export async function prepareRunItems(
   for (const item of items) {
     try {
       if (await isLiveSource(db, item)) {
+        await finalizeCommittedFile(db, item);
         await markItemReady(db, run, item.id);
       } else if (item.kind === "text") {
         await prepareText(db, run, item);

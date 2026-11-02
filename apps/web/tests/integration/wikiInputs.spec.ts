@@ -230,6 +230,61 @@ describe("wiki input queue", () => {
   }, 15_000);
 });
 
+describe("disable racing Process", () => {
+  beforeEach(resetDb);
+
+  it("cancels a run created while disable was waiting for the settings lock", async () => {
+    const f = await fixture();
+    const expectedRevision = await revision(f);
+    const { id: itemId } = await addNote(f);
+    const settings = await f.db.projectWikiSettings.findUniqueOrThrow({
+      where: { projectId: f.projectId },
+    });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let locked!: () => void;
+    const holding = new Promise<void>((resolve) => (locked = resolve));
+    let runId = "";
+    const process = f.db.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT 1 FROM "ProjectWikiSettings" WHERE "projectId" = ${f.projectId}::uuid FOR UPDATE`;
+        locked();
+        await gate;
+        const run = await tx.wikiRun.create({
+          data: {
+            projectId: f.projectId,
+            agentId: settings.agentId!,
+            kind: "ingest",
+            trigger: "manual",
+            status: "preparing",
+          },
+        });
+        runId = run.id;
+        await tx.wikiInputItem.update({
+          where: { id: itemId },
+          data: { status: "preparing", runId: run.id },
+        });
+      },
+      { timeout: 20_000 },
+    );
+    await holding;
+    const disable = disableWiki(f.db, f.ownerContext, {
+      projectId: f.projectId,
+      expectedRevision,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    release();
+    await process;
+    await disable;
+    const run = await f.db.wikiRun.findUniqueOrThrow({ where: { id: runId } });
+    expect(run.status).toBe("cancelled");
+    const item = await f.db.wikiInputItem.findUniqueOrThrow({
+      where: { id: itemId },
+    });
+    expect(item.status).toBe("queued");
+  }, 30_000);
+});
+
 describe("processInputs", () => {
   beforeEach(resetDb);
 

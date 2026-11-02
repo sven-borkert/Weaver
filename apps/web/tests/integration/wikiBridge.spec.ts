@@ -166,6 +166,40 @@ describe("file inputs", () => {
   afterEach(() => setJobQueueForTests(null));
 
   it(
+    "finishes a file whose source committed before finalization was interrupted",
+    async () => {
+      const f = await fixture();
+      const { itemId, runId } = await addAndProcess(f, "note.md", "# Note\n");
+      await parseAll(f);
+      await runWikiTick(f.db);
+      const done = await itemOf(f, itemId);
+      expect(done.sourceDocumentId).not.toBeNull();
+      await f.db.ingestionFile.update({
+        where: { id: done.ingestionFileId! },
+        data: { status: "accepting" },
+      });
+      await f.db.ingestionDraft.update({
+        where: { fileId: done.ingestionFileId! },
+        data: { markdown: "# Note\n" },
+      });
+      await f.db.wikiRun.update({
+        where: { id: runId },
+        data: { status: "preparing" },
+      });
+      await f.db.wikiInputItem.update({
+        where: { id: itemId },
+        data: { status: "preparing" },
+      });
+      await runWikiTick(f.db);
+      const healed = await itemOf(f, itemId);
+      expect(healed.status).toBe("ready");
+      expect(healed.ingestionFile!.status).toBe("accepted");
+      expect(healed.ingestionFile!.draft!.markdown).toBeNull();
+    },
+    LONG,
+  );
+
+  it(
     "accepts only the caller's own uploads of a supported type",
     async () => {
       const f = await fixture();

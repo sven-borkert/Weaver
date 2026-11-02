@@ -4,6 +4,10 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Fixed
+
+- The activity feed no longer fails with "Invalid dashboard result" when a released exam attempt, a finished notebook or a failing Git sync falls inside its window.
+
 ### Added
 
 - A Wiki section appears in the sidebar, between Imports and Tasks, once the wiki is enabled for a project. Its Input page takes notes and files, shows the queue and what needs attention, and offers Process, Retry, Confirm and Remove to Editors; Viewers can read. Runs appear in the bell for whoever started them and in Project Activity.

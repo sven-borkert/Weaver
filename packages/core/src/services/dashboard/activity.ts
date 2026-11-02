@@ -1,6 +1,7 @@
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../../errors";
 import {
+  ACTIVITY_SOURCES,
   activityInput,
   DASHBOARD_LIMITS,
   type ActivityInput,
@@ -59,7 +60,7 @@ export async function listDashboardActivity(
  FROM authorized_work w CROSS JOIN clock o
  LEFT JOIN "ScheduledTaskRun" r ON w.kind='task' AND r.id=w.id AND w.state='succeeded'
  LEFT JOIN "Document" d ON d.id=r."outputDocumentId" AND d."projectId"=w."projectId"
- WHERE ${terminalWorkSql} AND COALESCE(w."finishedAt",w."createdAt")>=o."workWindowStart" AND w."sortAt"<=o."asOf"),
+ WHERE ${terminalWorkSql} AND w.kind IN (${Prisma.join(ACTIVITY_SOURCES)}) AND COALESCE(w."finishedAt",w."createdAt")>=o."workWindowStart" AND w."sortAt"<=o."asOf"),
  entries AS (
  SELECT c.id,c.source,'content_update'::text AS category,c.title,c."projectId",c."projectName",c."sortAt",c."sortAt" AS "occurredAt",c."editorName",c."isOwnChange",NULL::text AS state,NULL::text AS "sourceStatus",
  CASE WHEN c.source='document' THEN jsonb_build_object('kind','document','projectId',c."projectId",'documentId',c.id) ELSE jsonb_build_object('kind','table','projectId',c."projectId",'tableId',c.id) END AS destination,NULL::jsonb AS "currentReport"
