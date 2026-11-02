@@ -546,7 +546,7 @@ model Document {
   /// System-set marker of a wiki source page; re-derived from WikiInputItem.sourceDocumentId on rebuild.
   wikiSourceItemId    String?  @db.Uuid
 
-  wikiSourceItem WikiInputItem?      @relation("WikiSourceDocument", fields: [wikiSourceItemId], references: [id], onDelete: Restrict)
+  wikiSourceItem WikiInputItem?      @relation("WikiSourceDocument", fields: [wikiSourceItemId], references: [id], onDelete: NoAction)
   project      Project               @relation(fields: [projectId], references: [id], onDelete: Cascade)
   reviewedBy   User?                 @relation("DocumentReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewers    DocumentReviewer[]
@@ -813,7 +813,7 @@ model DataTable {
   /// System-set marker of a wiki source table; re-derived from WikiInputItem.sourceTableId on rebuild.
   wikiSourceItemId    String?  @db.Uuid
 
-  wikiSourceItem WikiInputItem? @relation("WikiSourceTable", fields: [wikiSourceItemId], references: [id], onDelete: Restrict)
+  wikiSourceItem WikiInputItem? @relation("WikiSourceTable", fields: [wikiSourceItemId], references: [id], onDelete: NoAction)
   project      Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   lastEditedBy User?   @relation(fields: [lastEditedById], references: [id], onDelete: SetNull)
 

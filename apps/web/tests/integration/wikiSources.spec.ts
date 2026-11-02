@@ -616,6 +616,21 @@ describe("resume and recovery", () => {
     },
     LONG,
   );
+
+  it(
+    "deleting an item before its page in one transaction succeeds, so cascade order cannot matter",
+    async () => {
+      const f = await fixture();
+      const { itemId } = await process1(f);
+      await runWikiTick(f.db);
+      await f.db.$transaction(async (tx) => {
+        await tx.wikiInputItem.delete({ where: { id: itemId } });
+        await tx.document.deleteMany({ where: { wikiSourceItemId: itemId } });
+      });
+      expect(await f.db.wikiInputItem.count()).toBe(0);
+    },
+    LONG,
+  );
 });
 
 describe("source folder recreation", () => {
