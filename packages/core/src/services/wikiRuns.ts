@@ -1,4 +1,10 @@
-import type { Prisma, PrismaClient, WikiRunStatus } from "@weaver/db/client";
+import { randomUUID } from "node:crypto";
+import type {
+  Prisma,
+  PrismaClient,
+  WikiRunKind,
+  WikiRunStatus,
+} from "@weaver/db/client";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
 import { redactSecrets } from "../security/redactSecrets";
@@ -188,6 +194,90 @@ export async function failRunWithoutRunner(
   return ended !== null;
 }
 
+export const WIKI_RUN_LEASE_MS = 60_000;
+export const WIKI_RUN_HEARTBEAT_MS = 15_000;
+
+export type LeasedWikiRun = {
+  id: string;
+  projectId: string;
+  agentId: string;
+  kind: WikiRunKind;
+  attempt: number;
+  leaseToken: string;
+  runningAt: Date;
+  startedById: string | null;
+  steps: number;
+  writes: number;
+};
+
+/** Claims a queued run for one worker; a second delivery of the same job finds nothing to claim. */
+export async function leaseWikiRun(
+  db: PrismaClient,
+  input: {
+    runId: string;
+    workerId: string;
+    leaseMs?: number;
+    now?: Date;
+  },
+): Promise<LeasedWikiRun | null> {
+  const now = input.now ?? new Date();
+  const current = await db.wikiRun.findUnique({
+    where: { id: input.runId },
+    select: { status: true, runningAt: true },
+  });
+  if (current?.status !== "queued") return null;
+  const leaseToken = randomUUID();
+  const [row] = await db.wikiRun.updateManyAndReturn({
+    where: { id: input.runId, status: "queued" },
+    data: {
+      status: "running",
+      attempts: { increment: 1 },
+      leaseToken,
+      leaseExpiresAt: new Date(
+        now.getTime() + (input.leaseMs ?? WIKI_RUN_LEASE_MS),
+      ),
+      workerId: input.workerId.slice(0, 128),
+      runningAt: current.runningAt ?? now,
+    },
+    select: {
+      id: true,
+      projectId: true,
+      agentId: true,
+      kind: true,
+      attempts: true,
+      runningAt: true,
+      startedById: true,
+      steps: true,
+      writes: true,
+    },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    projectId: row.projectId,
+    agentId: row.agentId,
+    kind: row.kind,
+    attempt: row.attempts,
+    leaseToken,
+    runningAt: row.runningAt ?? now,
+    startedById: row.startedById,
+    steps: row.steps,
+    writes: row.writes,
+  };
+}
+
+export async function heartbeatWikiRun(
+  db: PrismaClient,
+  lease: Pick<LeasedWikiRun, "id" | "leaseToken">,
+  leaseMs: number = WIKI_RUN_LEASE_MS,
+): Promise<boolean> {
+  const { count } = await db.wikiRun.updateMany({
+    where: { id: lease.id, status: "running", leaseToken: lease.leaseToken },
+    data: { leaseExpiresAt: new Date(Date.now() + leaseMs) },
+  });
+  return count === 1;
+}
+
 export function closedFence(message: string): CoreError {
   return new CoreError("CONFLICT", message, { reason: "WIKI_FENCE_CLOSED" });
 }
@@ -196,6 +286,68 @@ export function isClosedFence(error: unknown): boolean {
   return (
     error instanceof CoreError && error.details?.reason === "WIKI_FENCE_CLOSED"
   );
+}
+
+/** The liveness core both fences share: feature on, agent live and the run's own, project live. */
+async function assertWikiLiveness(
+  db: PrismaClient,
+  input: { projectId: string; agentId: string },
+): Promise<void> {
+  const [settings, agent, project] = await Promise.all([
+    db.projectWikiSettings.findUnique({
+      where: { projectId: input.projectId },
+      select: { enabled: true, agentId: true },
+    }),
+    db.wikiAgent.findFirst({
+      where: { id: input.agentId, projectId: input.projectId, revokedAt: null },
+      select: { id: true },
+    }),
+    db.project.findFirst({
+      where: { id: input.projectId, ...notDeleted },
+      select: { id: true },
+    }),
+  ]);
+  if (!settings?.enabled || settings.agentId !== input.agentId || !agent)
+    throw closedFence("The wiki is disabled or its agent changed");
+  if (!project) throw closedFence("The project was deleted");
+}
+
+/** Every tool call, prepareStep and beforeCommit pass through this; a closed fence writes nothing. */
+export async function assertLiveWikiRun(
+  db: PrismaClient,
+  lease: Pick<LeasedWikiRun, "id" | "projectId" | "agentId" | "leaseToken">,
+  now: Date = new Date(),
+): Promise<void> {
+  await assertWikiLiveness(db, lease);
+  const run = await db.wikiRun.findFirst({
+    where: { id: lease.id, projectId: lease.projectId, agentId: lease.agentId },
+    select: { status: true, leaseToken: true, leaseExpiresAt: true },
+  });
+  if (run?.status !== "running") throw closedFence("The run is not running");
+  if (
+    run.leaseToken !== lease.leaseToken ||
+    !run.leaseExpiresAt ||
+    run.leaseExpiresAt <= now
+  )
+    throw closedFence("The run's lease is gone");
+}
+
+/** The write fence applyWikiOperation takes, bound to one lease. */
+export function wikiRunFence(
+  db: PrismaClient,
+  lease: Pick<LeasedWikiRun, "id" | "projectId" | "agentId" | "leaseToken">,
+): {
+  agentId: string;
+  projectId: string;
+  runId: string;
+  assertLive(): Promise<void>;
+} {
+  return {
+    agentId: lease.agentId,
+    projectId: lease.projectId,
+    runId: lease.id,
+    assertLive: () => assertLiveWikiRun(db, lease),
+  };
 }
 
 /** Feature on, agent live and the run's own, project live, run preparing, item preparing for this run. */
@@ -210,19 +362,8 @@ export async function assertPreparingFence(
     fileDigest?: string;
   },
 ): Promise<void> {
-  const [settings, agent, project, run, item] = await Promise.all([
-    db.projectWikiSettings.findUnique({
-      where: { projectId: input.projectId },
-      select: { enabled: true, agentId: true },
-    }),
-    db.wikiAgent.findFirst({
-      where: { id: input.agentId, projectId: input.projectId, revokedAt: null },
-      select: { id: true },
-    }),
-    db.project.findFirst({
-      where: { id: input.projectId, ...notDeleted },
-      select: { id: true },
-    }),
+  await assertWikiLiveness(db, input);
+  const [run, item] = await Promise.all([
     db.wikiRun.findFirst({
       where: {
         id: input.runId,
@@ -244,9 +385,6 @@ export async function assertPreparingFence(
       },
     }),
   ]);
-  if (!settings?.enabled || settings.agentId !== input.agentId || !agent)
-    throw closedFence("The wiki is disabled or its agent changed");
-  if (!project) throw closedFence("The project was deleted");
   if (run?.status !== "preparing")
     throw closedFence("The run is not preparing");
   if (item?.status !== "preparing")

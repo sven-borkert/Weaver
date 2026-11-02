@@ -424,6 +424,7 @@ model Project {
   wikiAgents                   WikiAgent[]
   wikiRuns                     WikiRun[]
   wikiInputItems               WikiInputItem[]
+  wikiOwnedPages               WikiOwnedPage[]
   assistantConversationPins    AssistantConversation[]       @relation("AssistantConversationPin")
   assistantProposals           AssistantProposal[]           @relation("AssistantProposalProject")
   scheduledTasks               ScheduledTask[]               @relation("ScheduledTaskOutputProject")
@@ -553,6 +554,7 @@ model Document {
   lastEditedBy User?                 @relation("DocumentLastEditedBy", fields: [lastEditedById], references: [id], onDelete: SetNull)
   createdBy    User?                 @relation("DocumentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
   updatedBy    User?                 @relation("DocumentUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  wikiOwnedPage WikiOwnedPage?
   linksTo      DocumentLink[]        @relation("LinksFrom")
   searchChunks DocumentSearchChunk[]
 
@@ -620,6 +622,8 @@ model ProjectWikiSettings {
   destructiveBudget24h    Int       @default(100000)
   destructivePausedAt     DateTime?
   spendAlertCentsPerDay   Int?
+  /// When the Owners were last told the daily spend alert fired.
+  spendAlertedAt          DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
@@ -701,6 +705,8 @@ model WikiRun {
   startedAt         DateTime       @default(now())
   /// When preparation finished; the no-worker timeout counts from here.
   queuedAt          DateTime?
+  /// First lease; the wall-clock cap counts from here across restarts.
+  runningAt         DateTime?
   endedAt           DateTime?
   leaseToken        String?        @db.Uuid
   leaseExpiresAt    DateTime?
@@ -708,6 +714,10 @@ model WikiRun {
   attempts          Int            @default(0)
   steps             Int            @default(0)
   writes            Int            @default(0)
+  /// Highest allocated WikiRunOperation.n; a restart resumes above it.
+  operationCounter  Int            @default(0)
+  /// Budget refusals in this run; three stop it.
+  budgetRefusals    Int            @default(0)
   grossCharsChanged Int            @default(0)
   summary           String?        @db.VarChar(4000)
   errorCode         String?        @db.VarChar(64)
@@ -724,11 +734,83 @@ model WikiRun {
   startedBy   User?                 @relation("WikiRunStartedBy", fields: [startedById], references: [id], onDelete: SetNull)
   items       WikiInputItem[]
   suggestions WikiGuideSuggestion[]
+  operations  WikiRunOperation[]
+  ownedPages  WikiOwnedPage[]
+  pageBudgets WikiPageBudget[]
 
   @@index([projectId, startedAt])
   @@index([status, queuedAt])
   @@index([agentId])
   @@index([startedById])
+}
+
+enum WikiOperationStatus {
+  reserved
+  committed
+  failed
+}
+
+/// One reserved or finished write of a run: the ledger behind Revert, the restart briefing,
+/// complete_input and the rolling 24-hour sum. Kept 90 days. CHECK in the migration: n is 1..9999.
+model WikiRunOperation {
+  runId             String              @db.Uuid
+  n                 Int
+  inputItemId       String?             @db.Uuid
+  toolName          String              @db.VarChar(64)
+  requestHash       String              @db.VarChar(64)
+  operationId       String              @unique @db.VarChar(200)
+  documentId        String?             @db.Uuid
+  path              String?             @db.VarChar(1024)
+  baseCommitSha     String?             @db.VarChar(40)
+  commitSha         String?             @db.VarChar(40)
+  /// The write appended the current input to the page's sources.
+  sourceReferenced  Boolean             @default(false)
+  grossCharsChanged Int                 @default(0)
+  charsAdded        Int                 @default(0)
+  status            WikiOperationStatus @default(reserved)
+  createdAt         DateTime            @default(now())
+  committedAt       DateTime?
+
+  run   WikiRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  input WikiInputItem? @relation(fields: [inputItemId], references: [id], onDelete: SetNull)
+
+  @@id([runId, n])
+  @@index([inputItemId])
+  @@index([documentId])
+  @@index([status, committedAt])
+  @@index([createdAt])
+}
+
+/// Cache of pages only trusted agent run commits have touched; verified against Git at write time.
+model WikiOwnedPage {
+  documentId         String   @id @db.Uuid
+  projectId          String   @db.Uuid
+  runId              String   @db.Uuid
+  createdCommitSha   String   @db.VarChar(40)
+  lastAgentCommitSha String   @db.VarChar(40)
+  createdAt          DateTime @default(now())
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  project  Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run      WikiRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([runId])
+}
+
+/// Counters of non-owned writes per page per run, so a restart cannot reset them.
+model WikiPageBudget {
+  runId             String @db.Uuid
+  /// Plain uuid: the page may be deleted while the run's counters still matter.
+  documentId        String @db.Uuid
+  baselineCommitSha String @db.VarChar(40)
+  grossCharsChanged Int    @default(0)
+  charsAdded        Int    @default(0)
+
+  run WikiRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@id([runId, documentId])
+  @@index([documentId])
 }
 
 /// One queued input. sourceDocumentId and sourceTableId are plain uuids into derived rows; the
@@ -763,6 +845,8 @@ model WikiInputItem {
   heldDigest         String?         @db.VarChar(64)
   confirmedById      String?         @db.Uuid
   confirmedDigest    String?         @db.VarChar(64)
+  /// The agent's scratch notes for this input, cleared with the item's text.
+  agentNote          String?         @db.VarChar(8000)
   updatedAt          DateTime        @updatedAt
 
   project        Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -774,6 +858,7 @@ model WikiInputItem {
   ingestionFile  IngestionFile? @relation(fields: [ingestionFileId], references: [id], onDelete: SetNull)
   sourceDocuments Document[]    @relation("WikiSourceDocument")
   sourceTables    DataTable[]   @relation("WikiSourceTable")
+  operations      WikiRunOperation[]
 
   @@index([projectId, status, createdAt])
   @@index([runId])

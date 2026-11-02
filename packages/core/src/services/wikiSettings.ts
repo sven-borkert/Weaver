@@ -353,6 +353,10 @@ export async function revokeAgent(
     await lockSettingsRow(tx, input.projectId);
     await requireRow(tx, input.projectId, input.expectedRevision);
     await revokeWikiAgent(tx, { projectId: input.projectId });
+    // Pages owned by a revoked agent become non-owned.
+    await tx.wikiOwnedPage.deleteMany({
+      where: { projectId: input.projectId },
+    });
     cancelled = await cancelActiveRunsInTx(
       tx,
       input.projectId,

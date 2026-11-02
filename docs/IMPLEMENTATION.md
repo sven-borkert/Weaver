@@ -559,6 +559,9 @@ File items parse through Imports with `IngestionOrigin.wiki` (hidden from `listB
 work feed): `completeParse` stops at `ready`, the parse runner skips analyze, and the tick accepts. `knowledge/aiExempt.ts` holds the
 `isAiExempt` TypeScript and SQL forms; `knowledgeGenerations.ts` keeps such documents terminal `ready` in change recording, builds,
 carry-forward, delivery and the route-block paths, and `flipDocumentAiExempt` handles a changed link in both directions.
+Runs keep a ledger: `WikiRunOperation` (one row per reserved write), `WikiPageBudget` (non-owned counters per page per run) and the
+`WikiOwnedPage` cache, maintained by [`wikiOwnership.ts`](../packages/core/src/services/wikiOwnership.ts) from the projection writers and verified
+against Git at write time. `wikiRuns.ts` also holds the run lease and `assertLiveWikiRun`.
 The Input page is [`wiki/_components/WikiInputScreen.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/_components/WikiInputScreen.tsx>) over the
 `wiki.input` router; the sidebar link depends on `project.get`'s `wikiEnabled`. Runs reach the bell and Activity through
 [`backgroundWork/wikiSource.ts`](../packages/core/src/services/backgroundWork/wikiSource.ts) (`PersonalWorkKind.wiki`).

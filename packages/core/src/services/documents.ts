@@ -7,6 +7,11 @@ import { flipDocumentAiExempt } from "./knowledgeGenerations";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
 import { presentWikiProperties } from "./wikiProperties";
 import {
+  applyOwnershipDecision,
+  deriveOwnership,
+  type OwnershipDecision,
+} from "./wikiOwnership";
+import {
   applyPagePropertiesInput,
   type WikiPageProperties,
   type WikiPagePropertiesInput,
@@ -782,6 +787,13 @@ async function persistDocumentProjection(
 ): Promise<void> {
   const committedAt = await repo.commitDate(projection.sha);
   let linkChanged = false;
+  const ownership = await deriveOwnership(db, repo, {
+    projectId: projection.projectId,
+    documentId: projection.id,
+    path: projection.path,
+    sha: projection.sha,
+    headIsAgent: projection.actorMachine?.machineKind === "wikiAgent",
+  });
   await db.$transaction(async (tx) => {
     const [metadata] = await documentMetadataColumns(tx, [projection.meta]);
     const wikiSourceItemId =
@@ -834,6 +846,11 @@ async function persistDocumentProjection(
       projection.projectId,
       projection.id,
       projection.meta.review,
+    );
+    await applyOwnershipDecision(
+      tx,
+      { projectId: projection.projectId, documentId: projection.id },
+      ownership,
     );
   });
   if (linkChanged)
@@ -904,17 +921,25 @@ async function updateMovedProjection(
 ): Promise<void> {
   try {
     const lastEditedAt = await repo.commitDate(input.sha);
-    await db.document.update({
-      where: { id: input.documentId },
-      data: {
-        path: input.path,
-        slug: input.slug,
-        headCommitSha: input.sha,
-        lastEditedById: input.actorId,
-        ...machineEditorColumns(null),
-        lastEditedByName: null,
-        lastEditedAt,
-      },
+    await db.$transaction(async (tx) => {
+      await tx.document.update({
+        where: { id: input.documentId },
+        data: {
+          path: input.path,
+          slug: input.slug,
+          headCommitSha: input.sha,
+          lastEditedById: input.actorId,
+          ...machineEditorColumns(null),
+          lastEditedByName: null,
+          lastEditedAt,
+        },
+      });
+      // A move is always a human commit: the page stops being owned.
+      await applyOwnershipDecision(
+        tx,
+        { projectId: input.projectId, documentId: input.documentId },
+        { action: "delete" },
+      );
     });
   } catch (error) {
     reportProjectionFailure({
@@ -2114,6 +2139,17 @@ export async function rebuildIndex(
               (sourceItems.get(row.id) ?? null),
         )
         .map((row) => row.id);
+      const ownership: OwnershipDecision[] = [];
+      for (const [index, row] of rows.entries())
+        ownership.push(
+          await deriveOwnership(db, repo, {
+            projectId: input.projectId,
+            documentId: row.id,
+            path: row.path,
+            sha: row.head.sha,
+            headIsAgent: attribution[index]?.kind === "machine",
+          }),
+        );
 
       await db.$transaction(async (tx) => {
         await tx.document.deleteMany({
@@ -2165,6 +2201,11 @@ export async function rebuildIndex(
             create: data,
             update: data,
           });
+          await applyOwnershipDecision(
+            tx,
+            { projectId: input.projectId, documentId: row.id },
+            ownership[index]!,
+          );
         }
         await tx.documentIndexState.updateMany({
           where: {

@@ -209,6 +209,18 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 `wiki.cancelRun`, session actors only. `uploadInputFiles` retries a name clash as `name-2.ext`, never replacing a file in Files.
 `wikiRunNotice` words `RUNNER_UNAVAILABLE` and `NO_WORKER` plainly; codes never reach the page.
 
+## Ownership and the run ledger
+
+- `WikiRunOperation` (ids `wiki-run:<runId>:<nnnn>`, `n` 1..9999) drives Revert, the restart briefing, `complete_input` and the
+  rolling 24-hour sum. `WikiPageBudget` keeps non-owned counters per page per run so a restart cannot reset them.
+- `WikiOwnedPage` is a cache. `deriveOwnership`/`applyOwnershipDecision` (`wikiOwnership.ts`) run inside `persistDocumentProjection`'s
+  transaction and in `rebuildIndex`; a move deletes the row. Only ledger-trusted `wiki-run:` commits of a live agent own; source and
+  bootstrap commits never do, and an agent commit cannot paper over a missed human commit. Revoke deletes the rows.
+- At write time `isOwnedAtWrite` needs the row, this agent's run and `lastCommitForPath === lastAgentCommitSha`, so a missed hook or a
+  Git pull fails safe to non-owned.
+- `leaseWikiRun`, `heartbeatWikiRun`, `assertLiveWikiRun` and `wikiRunFence` (`wikiRuns.ts`): lease 60 s, heartbeat 15 s. The fence shares its
+  liveness core with `assertPreparingFence`.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only
