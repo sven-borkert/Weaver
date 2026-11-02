@@ -744,9 +744,12 @@ function makeRepo(dir: string) {
       }
       const wikiRequestHash = options?.wikiRequestHash;
       // Recovery matches on these, so an agent commit without them cannot exist.
+      // A revert is authored by the Editor who started it, with its hash and no agent trailer.
+      const revertOperation = operationId?.startsWith("wiki-revert:") === true;
       if (
         wikiRequestHash !== undefined
-          ? !isWikiAgentAuthor(author) ||
+          ? (!isWikiAgentAuthor(author) && !revertOperation) ||
+            (isWikiAgentAuthor(author) && revertOperation) ||
             !MCP_REQUEST_HASH_RE.test(wikiRequestHash)
           : isWikiAgentAuthor(author)
       )

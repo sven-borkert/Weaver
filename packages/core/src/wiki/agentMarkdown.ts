@@ -185,6 +185,35 @@ function unstableLinks(): CoreError {
   );
 }
 
+/** Every weaver: target the writer's parser finds, tracked or not. */
+export function weaverLinkTargets(markdown: string): string[] {
+  const found: string[] = [];
+  const walk = (node: JSONContent) => {
+    if (node.type === "crossref")
+      found.push(
+        `weaver://${node.attrs?.targetType === "table" ? "table" : "document"}/${String(node.attrs?.targetId)}`,
+      );
+    if (node.type === "image" && NEAR_MISS_RE.test(String(node.attrs?.src)))
+      found.push(String(node.attrs?.src));
+    for (const mark of node.marks ?? []) {
+      const href = mark.type === "link" ? String(mark.attrs?.href) : "";
+      if (NEAR_MISS_RE.test(href)) found.push(href);
+    }
+    node.content?.forEach(walk);
+  };
+  walk(parseDocumentBody(markdown));
+  return found;
+}
+
+export function parseTrackedTarget(
+  target: string,
+): { kind: "document" | "table"; id: string } | null {
+  const tracked = TRACKED_RE.exec(target);
+  return tracked
+    ? { kind: tracked[1] as "document" | "table", id: tracked[2]! }
+    : null;
+}
+
 /** Turns the agent's link forms into tracked links; nothing unresolved becomes a link. */
 export async function preprocessAgentMarkdown(
   markdown: string,

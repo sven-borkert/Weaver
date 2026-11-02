@@ -223,7 +223,7 @@ export async function graphFromDocument(
 export async function getGraphNeighborhood(
   db: PrismaClient,
   input: GraphNeighborhoodInput,
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   const focus = await loadActiveEntity(db, input.entityId, actor);
   const maxNodes = input.maxNodes ?? 50;

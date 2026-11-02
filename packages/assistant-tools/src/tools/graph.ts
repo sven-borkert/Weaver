@@ -52,7 +52,7 @@ export const searchEntitiesTool = defineSharedReadTool({
   },
 });
 
-export const entityNeighborhoodTool = defineTool({
+export const entityNeighborhoodTool = defineSharedReadTool({
   name: "entity_neighborhood",
   kind: "read",
   capability: "content:read",

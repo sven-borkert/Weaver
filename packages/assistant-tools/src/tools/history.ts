@@ -6,7 +6,7 @@ import { getTableDiff, getTableHistory } from "@weaver/core/services/tables";
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newPageBudget,
   requireScope,
   type ToolOutcome,
@@ -21,13 +21,29 @@ type VersionEntry = {
   changeSummary: ChangeSummaryView | null;
 };
 
+/** What the wiki agent sees: Weaver vouches for nothing an untrusted commit says. */
+type AgentVersionEntry = {
+  sha: string;
+  date: Date;
+  author: string | null;
+  subject: string | null;
+};
+
+function oneLine(text: string): string {
+  return (text.split("\n", 1)[0] ?? "")
+    .replace(/[\x00-\x1f\x7f\p{Zl}\p{Zp}]/gu, " ")
+    .trim()
+    .slice(0, 200);
+}
+
 type ContentHistoryOutput =
   | { entries: VersionEntry[]; hasMore: boolean }
+  | { entries: AgentVersionEntry[]; hasMore: boolean }
   | Awaited<ReturnType<typeof getDiff>>
   | Awaited<ReturnType<typeof getTableDiff>>
   | Awaited<ReturnType<typeof listDeletedContent>>;
 
-export const contentHistoryTool = defineTool({
+export const contentHistoryTool = defineSharedReadTool({
   name: "content_history",
   kind: "read",
   capability: "content:read",
@@ -56,6 +72,54 @@ export const contentHistoryTool = defineTool({
     // .default()s, e.g. in tests), so default offset/limit here too.
     const offset = input.offset ?? 0;
     const limit = input.limit ?? 20;
+    const { actor } = ctx;
+
+    if (actor.kind === "wikiAgent") {
+      if (input.mode !== "versions")
+        throw new CoreError(
+          "BAD_REQUEST",
+          "the wiki agent reads commit metadata only: use mode=versions",
+        );
+      if (!input.resourceType || !input.resourceId)
+        throw new CoreError(
+          "BAD_REQUEST",
+          "mode=versions requires resourceType and resourceId",
+        );
+      const page =
+        input.resourceType === "document"
+          ? await getHistory(
+              ctx.db,
+              {
+                projectId: input.projectId,
+                documentId: input.resourceId,
+                offset,
+                limit,
+              },
+              actor,
+            )
+          : await getTableHistory(
+              ctx.db,
+              {
+                projectId: input.projectId,
+                tableId: input.resourceId,
+                offset,
+                limit,
+              },
+              actor,
+            );
+      const { items, truncated } = boundItems(
+        page.entries.map((entry): AgentVersionEntry => ({
+          sha: entry.sha,
+          date: entry.date,
+          author: entry.trustedAuthor ? entry.authorName : null,
+          subject: entry.trustedAuthor ? oneLine(entry.message) : null,
+        })),
+        newPageBudget(),
+      );
+      return {
+        output: { entries: items, hasMore: page.hasMore || truncated },
+      };
+    }
 
     if (input.mode === "deleted") {
       if (input.resourceId !== undefined)
@@ -70,7 +134,7 @@ export const contentHistoryTool = defineTool({
       const result = await listDeletedContent(
         ctx.db,
         { ...request, limit },
-        ctx.actor,
+        actor,
       );
       const { items } = boundItems(result.items, newPageBudget());
       // The service's cursor already sits past everything it scanned, so a
@@ -83,7 +147,7 @@ export const contentHistoryTool = defineTool({
           : await listDeletedContent(
               ctx.db,
               { ...request, limit: Math.max(1, items.length) },
-              ctx.actor,
+              actor,
             );
       return {
         output: {
@@ -117,7 +181,7 @@ export const contentHistoryTool = defineTool({
                 fromSha: input.fromSha,
                 toSha: input.toSha,
               },
-              ctx.actor,
+              actor,
             )
           : await getTableDiff(
               ctx.db,
@@ -127,7 +191,7 @@ export const contentHistoryTool = defineTool({
                 fromSha: input.fromSha,
                 toSha: input.toSha,
               },
-              ctx.actor,
+              actor,
             );
       // The service's own tooLarge/complete shape is returned as-is — an
       // incomplete comparison must never be presented as a complete one.
@@ -144,7 +208,7 @@ export const contentHistoryTool = defineTool({
               offset,
               limit,
             },
-            ctx.actor,
+            actor,
           )
         : await getTableHistory(
             ctx.db,
@@ -154,7 +218,7 @@ export const contentHistoryTool = defineTool({
               offset,
               limit,
             },
-            ctx.actor,
+            actor,
           );
     const mapped: VersionEntry[] = result.entries.map((entry) => ({
       sha: entry.sha,

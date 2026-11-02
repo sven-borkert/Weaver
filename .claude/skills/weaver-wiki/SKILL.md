@@ -36,7 +36,7 @@ This skill records what has shipped; later slices extend it.
   Properties never travel through `metadata` or the `Weaver-Metadata-Override` trailer.
 - `writeDocumentInRepo` requests: `propertiesInput` (public, merged) on create and update; `properties` on create is
   the internal system path (source writer, agent page creates, bootstrap) and is not in any tRPC, MCP or proposal
-  schema. `assertPatchHasWork` counts `properties`. `applyWikiOperation`'s narrow schema is unchanged.
+  schema. `assertPatchHasWork` counts `properties`. `applyWikiOperation`'s narrow schema takes the tool subset (see Agent tools).
 - `documentReview.writeReview` strips `reviewExempt` (§7.6: a human who sets review settings or marks reviewed ends the exemption).
 - Surfaces: tRPC `document.create`/`update` (`properties`), `document.setProperties` (header-only write, Editor,
   head guard), MCP/assistant `create_document`/`patch_document` and `propose_document_create`/`propose_document_patch`
@@ -77,9 +77,8 @@ This skill records what has shipped; later slices extend it.
   project is not deleted and `ProjectWikiSettings` is enabled for this agent, `NOT_FOUND`
   otherwise. See `weaver-auth` for which services accept the union.
 - Reused read tools are declared with `defineSharedReadTool`, whose `ctx.actor` is the union,
-  so a user-only service does not compile inside them. The seven reads of spec §8.2, `find_page`,
-  `inspect_links` and `list_recent_changes` use it; the loadable table and graph reads
-  do not yet.
+  so a user-only service does not compile inside them. Every read the agent reaches uses it. For the agent `content_history`
+  is commit metadata only, with null subject and author on untrusted commits.
 
 ## Machine authorship
 
@@ -110,7 +109,7 @@ is the agent's only write path.
   guide and source folders, which live in settings.
 - Refused: Python, task output (task and run), the guide, `wikiSourceItemId` pages, source folders,
   `weaver-image:`, `<img>`. A patch may not raise either count in the canonical body, so
-  markup cannot be assembled from existing text. Existing images stay. Budgets belong to the runner.
+  markup cannot be assembled from existing text. Existing images stay.
 - Operation ids: only `wiki-run:<fence runId>:<nnnn>`. The agent cannot mint `wiki-input:`, `wiki-revert:` or `ingestion:` ids.
 - Recovery goes through `recoverCheckApply` with identity `{ wikiAgentId, wikiRequestHash }`: a
   match needs `trustedAuthor === true`, the agent trailer and the hash, else `CONFLICT`. A patch
@@ -220,6 +219,23 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   Git pull fails safe to non-owned.
 - `leaseWikiRun`, `heartbeatWikiRun`, `assertLiveWikiRun` and `wikiRunFence` (`wikiRuns.ts`): lease 60 s, heartbeat 15 s. The fence shares its
   liveness core with `assertPreparingFence`.
+
+## Agent tools
+
+- `tools/wikiAgent.ts` and `wikiAgentRegistry.ts`: `WIKI_AGENT_TOOLS` (always active) and `WIKI_AGENT_LOADABLE_TOOLS` (through `load_tools`, charged to a
+  schema reserve); `WIKI_AGENT_DISPATCH` is the allowlist. None takes `projectId`: `runScopedRead` omits it and the run row supplies it. Definitions measure
+  13,876 B always and 8,012 B loadable, pinned in `wikiAgentRegistry.test.ts`.
+- `WikiRunSession` (`wikiRunSession.ts`) is the tools' only way in: inputs, notes, suggestions, `finish_run` and the writes. A write reserves `n` atomically
+  under the fence, then `applyWikiOperation` runs with a ledger. In an ingest run a write needs `read_input` first, so every page gets that input's source reference.
+- `applyWikiOperation` enforces ownership and budgets itself under the project lock on the worktree body (`admitPatch`, `compileDocumentPatch`, `wiki/budget.ts`),
+  so no caller can skip them. Gross is what edits replace or remove; added is everything edits insert. Owned pages are unlimited; `WikiPageBudget` holds non-owned writes only.
+  Counters are written in `beforeCommit`, so a crash over-counts and never forgets. Three refusals stop the run.
+- The agent's `properties` are `type`, `summary`, `tags`; `reviewExempt` and `sources` come only from the internal path. `complete_input integrated` needs a committed
+  operation with `sourceReferenced` for that input (`NOT_INTEGRATED`).
+- Links: `preprocessAgentMarkdown` resolves `[[Title]]` and relative `.md`, then re-reads the result with `parseDocumentBody` and demotes every `weaver:` target it did not
+  verify, to a fixed point, refusing the write if it does not settle. A regex cannot agree with the parser on every destination form. `applyWikiOperation` repeats the check on
+  the patched body (`assertNewLinkTargetsExist`), because a fragment can only form a link once it meets the surrounding text.
+- A refusal's wording reaches the model (`teachingError`); `toolErrorFromUnknown` would flatten it to "not permitted".
 
 ## Commit text
 

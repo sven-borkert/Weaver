@@ -5,6 +5,7 @@
   "exports": {
     "./contract": "./src/contract.ts",
     "./registry": "./src/registry.ts",
+    "./wikiAgentRegistry": "./src/wikiAgentRegistry.ts",
     "./toolsetNames": "./src/toolsetNames.ts",
     "./toolsets": "./src/toolsets.ts",
     "./tools/*": "./src/tools/*.ts"

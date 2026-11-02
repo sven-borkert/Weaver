@@ -19,7 +19,7 @@ import { getTableAtSnapshot } from "@weaver/core/services/tables";
 import { z } from "zod";
 import {
   boundItems,
-  defineTool,
+  defineSharedReadTool,
   newOutputBudget,
   requireScope,
   MAX_TOOL_OUTPUT_CHARS,
@@ -96,7 +96,7 @@ function requireEnvelopeBudget(envelope: unknown): number {
   return available;
 }
 
-export const aggregateTableTool = defineTool({
+export const aggregateTableTool = defineSharedReadTool({
   name: "aggregate_table",
   kind: "read",
   capability: "content:read",

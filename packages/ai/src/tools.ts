@@ -6,6 +6,7 @@ import {
   truncatedToolOutput,
   type AnyToolContract,
   type ToolContext,
+  type ToolOutcome,
 } from "@weaver/assistant-tools/contract";
 import {
   boundedJson,
@@ -37,10 +38,18 @@ function summarize(output: unknown): string {
     : text;
 }
 
-export function toAiToolSet(
-  contracts: readonly AnyToolContract[],
+/** What the adapter needs of a contract; the wiki agent's tools take their own context. */
+export type AdaptableTool<C> = Pick<
+  AnyToolContract,
+  "name" | "description" | "kind" | "inputSchema"
+> & {
+  execute(input: unknown, ctx: C): Promise<ToolOutcome<unknown>>;
+};
+
+export function toAiToolSet<C extends { signal?: AbortSignal } = ToolContext>(
+  contracts: readonly AdaptableTool<C>[],
   options: {
-    context: () => Promise<ToolContext>;
+    context: () => Promise<C>;
     onEvent: (event: AssistantEvent) => Promise<void>;
     collector: ToolCollector;
   },

@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   boundItems,
   clampText,
+  defineSharedReadTool,
   defineTool,
   newPageBudget,
   requireScope,
@@ -107,7 +108,7 @@ export function pageTextCell(
   return { ...page, text, nextCursor, hasMore: nextCursor !== null };
 }
 
-export const listTableColumnsTool = defineTool({
+export const listTableColumnsTool = defineSharedReadTool({
   name: "list_table_columns",
   kind: "read",
   capability: "content:read",
@@ -285,7 +286,7 @@ export const listTableColumnOptionsTool = defineTool({
   },
 });
 
-export const readTableCellTool = defineTool({
+export const readTableCellTool = defineSharedReadTool({
   name: "read_table_cell",
   kind: "read",
   capability: "content:read",

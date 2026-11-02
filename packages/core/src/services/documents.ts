@@ -160,6 +160,8 @@ export type DocumentWriteAudit = Pick<
   | "runId"
   | "apiRequestHash"
   | "apiOperation"
+  | "wikiRequestHash"
+  | "beforeCommit"
 >;
 
 /** A binary file committed together with the document, named relative to its
@@ -222,6 +224,8 @@ type WriteRequest =
       assets?: DocumentAssetFile[];
       /** Public writer input, merged over the page's stored properties. */
       propertiesInput?: WikiPagePropertiesInput;
+      /** Revert only: the header's properties become exactly this. */
+      exactProperties?: { value: WikiPageProperties | undefined };
     };
 
 export type DocumentWriteRequest = WriteRequest;
@@ -1457,8 +1461,9 @@ export async function writeDocumentInRepo(
     }
     if (saved.json) assertImageSourcesContained(saved.json, path);
     const override = request.metadata ?? {};
-    const properties =
-      request.propertiesInput === undefined
+    const properties = request.exactProperties
+      ? request.exactProperties.value
+      : request.propertiesInput === undefined
         ? oldFile.meta.properties
         : applyPagePropertiesInput(
             oldFile.meta.properties,
@@ -1833,7 +1838,7 @@ export async function getHistory(
     offset: number;
     limit: number;
   },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   if (
@@ -1867,6 +1872,7 @@ export async function getHistory(
       const resolved = attribution[index];
       return {
         sha: entry.sha,
+        trustedAuthor: entry.trustedAuthor === true,
         authorName: entry.authorName,
         userId: resolved?.id ?? null,
         userName: resolved ? (resolved.name ?? resolved.email) : null,
@@ -2353,6 +2359,8 @@ export async function restoreDocumentInRepo(
     documentId: string;
     sha: string;
     expectedHeadCommitSha: string;
+    /** Revert restores the old header's properties too; a user restore keeps the current ones. */
+    restoreProperties?: boolean;
   },
   actor: EnrichedActor,
   audit: DocumentWriteAudit = {},
@@ -2434,6 +2442,9 @@ export async function restoreDocumentInRepo(
             }
           : { kind, text: restored.body },
       changeSummary: "",
+      ...(input.restoreProperties
+        ? { exactProperties: { value: restored.meta.properties } }
+        : {}),
     },
     actor,
     { operation: "restore", sourceCommitSha: input.sha, ...audit },

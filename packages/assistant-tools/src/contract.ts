@@ -135,6 +135,11 @@ export const TOOL_ERROR_REASONS = [
   "INVALID_FINAL_STATE",
   "PAYLOAD_TOO_LARGE",
   "FOLDER_NOT_FOUND",
+  "BUDGET_REFUSED",
+  "NOT_INTEGRATED",
+  "RUN_CAP",
+  "UNVERIFIABLE_LINKS",
+  "SOURCE_FOLDER_UNRESOLVED",
 ] as const;
 export type ToolErrorReason = (typeof TOOL_ERROR_REASONS)[number];
 

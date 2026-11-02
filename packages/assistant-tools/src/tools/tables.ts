@@ -18,6 +18,7 @@ import {
 import { z } from "zod";
 import {
   boundItems,
+  defineSharedReadTool,
   defineTool,
   newOutputBudget,
   newPageBudget,
@@ -181,7 +182,7 @@ export function summarizeColumn(column: TableColumn): {
     : { id: column.id, name: column.name, type: column.type };
 }
 
-export const getTableTool = defineTool({
+export const getTableTool = defineSharedReadTool({
   name: "get_table",
   kind: "read",
   capability: "content:read",
@@ -243,7 +244,7 @@ export const getTableTool = defineTool({
   },
 });
 
-export const queryTableRowsTool = defineTool({
+export const queryTableRowsTool = defineSharedReadTool({
   name: "query_table_rows",
   kind: "read",
   capability: "content:read",

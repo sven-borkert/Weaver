@@ -42,6 +42,7 @@ export const DIAGNOSTIC_CATEGORY_OF = {
   "wiki.run.stopped": "wiki",
   "wiki.run.failed": "wiki",
   "wiki.run.cancelled": "wiki",
+  "wiki.revert.completed": "wiki",
 
   "external.call.prepared": "mcp",
   "external.call.dispatched": "mcp",

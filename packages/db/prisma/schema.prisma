@@ -726,6 +726,10 @@ model WikiRun {
   usageTokens       Int            @default(0)
   usageCostMicros   BigInt         @default(0)
   planDigest        String?        @db.VarChar(64)
+  /// A revert run: the run it undoes.
+  revertsRunId      String?        @db.Uuid
+  /// A revert run: pages restored, deleted and skipped with the reason.
+  report            Json?
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
 
@@ -737,11 +741,14 @@ model WikiRun {
   operations  WikiRunOperation[]
   ownedPages  WikiOwnedPage[]
   pageBudgets WikiPageBudget[]
+  revertsRun  WikiRun?              @relation("WikiRunReverts", fields: [revertsRunId], references: [id], onDelete: SetNull)
+  revertedBy  WikiRun[]             @relation("WikiRunReverts")
 
   @@index([projectId, startedAt])
   @@index([status, queuedAt])
   @@index([agentId])
   @@index([startedById])
+  @@index([revertsRunId])
 }
 
 enum WikiOperationStatus {
@@ -839,6 +846,8 @@ model WikiInputItem {
   errorCode          String?         @db.VarChar(64)
   errorMessage       String?         @db.VarChar(500)
   attempts           Int             @default(0)
+  /// Runs lost while this input was being processed; two quarantine it.
+  lostLeases         Int             @default(0)
   revision           Int             @default(0)
   /// Scanner findings of a held item: kinds and locations only, never values.
   heldHits           Json?

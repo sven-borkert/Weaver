@@ -33,6 +33,9 @@ export type WikiRunEnd = {
   errorMessage?: string;
   /** Shown on every item handed back to the queue. */
   note: string;
+  summary?: string;
+  /** A worker that lost its lease must not end the run its successor holds. */
+  leaseToken?: string;
 };
 
 export type WikiRunEnded = {
@@ -56,10 +59,15 @@ export async function endRunInTx(
     ? redactSecrets(end.errorMessage).slice(0, 500)
     : null;
   const ended = await tx.wikiRun.updateManyAndReturn({
-    where: { id: runId, status: { in: [...from] } },
+    where: {
+      id: runId,
+      status: { in: [...from] },
+      ...(end.leaseToken ? { leaseToken: end.leaseToken } : {}),
+    },
     data: {
       status: end.status,
       endedAt: now,
+      ...(end.summary === undefined ? {} : { summary: end.summary }),
       stopReason: end.stopReason ?? null,
       errorCode: end.errorCode ?? null,
       errorMessage,

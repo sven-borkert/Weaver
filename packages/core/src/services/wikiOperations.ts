@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { PrismaClient } from "@weaver/db/client";
 import { z } from "zod";
+import { documentKindOfPath } from "../documents/kinds";
+import { compileDocumentPatch, applyDocumentPatch } from "../documents/patch";
 import { slugify } from "../documents/slug";
+import { parseDocumentFile } from "../documents/frontmatter";
+import { parseDocumentBody, serializeDocumentBody } from "../editor/markdown";
 import { CoreError } from "../errors";
 import { createWikiAgentSecurityContext } from "../security/context";
 import { wikiAgentContentAuthor } from "./contentAuthor";
@@ -20,6 +24,23 @@ import {
   type ContentOperation,
   type RecoveryIdentity,
 } from "./contentOperations";
+import {
+  checkBudget,
+  checkNonOwnedActions,
+  measureCreate,
+  measurePatch,
+  type BudgetDecision,
+  type BudgetDelta,
+} from "../wiki/budget";
+import { parseTrackedTarget, weaverLinkTargets } from "../wiki/agentMarkdown";
+import {
+  MAX_WIKI_SOURCES,
+  normalizeProperties,
+  wikiPagePropertiesToolSchema,
+  type WikiPageProperties,
+  type WikiSourceRef,
+} from "../wiki/properties";
+import { isOwnedAtWrite } from "./wikiOwnership";
 import { assertProjectRole } from "./projectAccess";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
@@ -40,7 +61,13 @@ export type WikiWriteGuards = {
   sourceFoldersUnresolved: boolean;
 };
 
+const sourceRefSchema = z.strictObject({
+  kind: z.enum(["document", "table"]),
+  id: z.uuid(),
+});
+
 // Strict: no title on a patch and no author metadata, structurally.
+// `properties` is the tool subset: no sources and no reviewExempt; `source` is set by the session.
 export const wikiOperationSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("document.create"),
@@ -48,13 +75,17 @@ export const wikiOperationSchema = z.discriminatedUnion("kind", [
     folderPath,
     title,
     markdown: z.string().max(MAX_MARKDOWN_CHARS),
+    properties: wikiPagePropertiesToolSchema.optional(),
+    source: sourceRefSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("document.patch"),
     projectId: z.uuid(),
     documentId: z.uuid(),
     baseCommitSha: sha,
-    actions: z.array(patchActionSchema).min(1).max(50),
+    actions: z.array(patchActionSchema).max(50),
+    properties: wikiPagePropertiesToolSchema.optional(),
+    source: sourceRefSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("content.lifecycle"),
@@ -73,6 +104,85 @@ export type WikiWriteResult = {
   commitSha: string;
   recovered: boolean;
 };
+
+/** What a write will change; persisted immediately before the commit. */
+export type WikiWriteMeasure = BudgetDelta & {
+  documentId: string | null;
+  path: string | null;
+  baseCommitSha: string | null;
+  /** Non-owned page writes count against the run's page and run budgets. */
+  owned: boolean;
+  /** One per commit, plus one per property changed on a non-owned page. */
+  writes: number;
+};
+
+/** The run's ledger as the write path sees it; read and written under the project lock. */
+export type WikiWriteLedger = {
+  counters(
+    documentId: string,
+  ): Promise<{ page: BudgetDelta; run: BudgetDelta }>;
+  record(measure: WikiWriteMeasure): Promise<void>;
+  refused(decision: Extract<BudgetDecision, { allowed: false }>): Promise<void>;
+};
+
+const NO_LEDGER: WikiWriteLedger = {
+  counters: async () => ({
+    page: { grossCharsChanged: 0, charsAdded: 0 },
+    run: { grossCharsChanged: 0, charsAdded: 0 },
+  }),
+  record: async () => undefined,
+  refused: async () => undefined,
+};
+
+export function appendSource(
+  sources: readonly WikiSourceRef[] | undefined,
+  source: WikiSourceRef,
+): WikiSourceRef[] {
+  const kept = (sources ?? []).filter(
+    (entry) => !(entry.kind === source.kind && entry.id === source.id),
+  );
+  return [...kept, source].slice(-MAX_WIKI_SOURCES);
+}
+
+function budgetRefusal(
+  decision: Extract<BudgetDecision, { allowed: false }>,
+): CoreError {
+  return new CoreError("CONFLICT", decision.message, {
+    reason: "BUDGET_REFUSED",
+    budget: decision.code,
+  });
+}
+
+/** A fragment can only form a link once combined with its surroundings, so the result is what is checked. */
+async function assertNewLinkTargetsExist(
+  db: PrismaClient,
+  projectId: string,
+  before: string | null,
+  after: string,
+): Promise<void> {
+  const known = new Set(before === null ? [] : weaverLinkTargets(before));
+  for (const target of new Set(weaverLinkTargets(after))) {
+    if (known.has(target)) continue;
+    const tracked = parseTrackedTarget(target);
+    const exists = !tracked
+      ? false
+      : tracked.kind === "document"
+        ? await db.document.count({ where: { id: tracked.id, projectId } })
+        : await db.dataTable.count({ where: { id: tracked.id, projectId } });
+    if (!exists)
+      throw new CoreError(
+        "BAD_REQUEST",
+        "This write would create a link to something that does not exist in this project",
+        { reason: "UNVERIFIABLE_LINKS" },
+      );
+  }
+}
+
+function changedPropertyCount(
+  properties: Extract<WikiOperation, { kind: "document.patch" }>["properties"],
+): number {
+  return properties ? Object.keys(properties).length : 0;
+}
 
 const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 // The agent mints only run ids; source and revert writers have their own entry points.
@@ -199,11 +309,117 @@ function assertOperationLocation(
     );
 }
 
+/** Agent pages get the exemption through this internal path; the operation cannot name it. */
+function agentPageProperties(
+  operation: Extract<WikiOperation, { kind: "document.create" }>,
+): WikiPageProperties {
+  const { type, summary, tags } = operation.properties ?? {};
+  return (
+    normalizeProperties({
+      type: type ?? undefined,
+      summary: summary ?? undefined,
+      tags: tags ?? undefined,
+      reviewExempt: true,
+      ...(operation.source ? { sources: [operation.source] } : {}),
+    }) ?? { reviewExempt: true }
+  );
+}
+
+/** Under the project lock, on the worktree body: ownership, shape, then counters. */
+async function admitPatch(
+  db: PrismaClient,
+  repo: Parameters<typeof applyDocumentPatchOperation>[1],
+  operation: Extract<WikiOperation, { kind: "document.patch" }>,
+  agentId: string,
+  ledger: WikiWriteLedger,
+): Promise<{
+  measure: WikiWriteMeasure;
+  propertiesInput: Extract<
+    ContentOperation,
+    { kind: "document.patch" }
+  >["properties"];
+}> {
+  // A source reference alone must not let an untouched page count as integration.
+  if (operation.actions.length === 0 && !operation.properties)
+    throw new CoreError("BAD_REQUEST", "A patch needs actions or properties");
+  const row = await db.document.findFirstOrThrow({
+    where: { id: operation.documentId, projectId: operation.projectId },
+    select: { path: true },
+  });
+  const owned = await isOwnedAtWrite(db, repo, {
+    documentId: operation.documentId,
+    path: row.path,
+    agentId,
+  });
+  const refuseWith = async (
+    decision: Extract<BudgetDecision, { allowed: false }>,
+  ): Promise<never> => {
+    await ledger.refused(decision);
+    throw budgetRefusal(decision);
+  };
+  if (!owned) {
+    const shape = checkNonOwnedActions(operation.actions);
+    if (!shape.allowed) await refuseWith(shape);
+  }
+  const kind = documentKindOfPath(row.path);
+  const file = parseDocumentFile(
+    await repo.readFileFromWorktree(row.path),
+    kind,
+  );
+  const canonical = serializeDocumentBody(parseDocumentBody(file.body));
+  const delta = measurePatch(
+    compileDocumentPatch(canonical, operation.actions, kind),
+  );
+  const counters = await ledger.counters(operation.documentId);
+  const budget = checkBudget({ owned, ...counters, delta });
+  if (!budget.allowed) await refuseWith(budget);
+  await assertNewLinkTargetsExist(
+    db,
+    operation.projectId,
+    canonical,
+    applyDocumentPatch(canonical, operation.actions, kind),
+  );
+  const sources = operation.source
+    ? appendSource(file.meta.properties?.sources, operation.source)
+    : undefined;
+  const propertiesInput =
+    operation.properties || sources
+      ? {
+          ...operation.properties,
+          ...(sources ? { sources } : {}),
+        }
+      : undefined;
+  const baseCommitSha = operation.baseCommitSha;
+  return {
+    propertiesInput,
+    measure: {
+      ...delta,
+      documentId: operation.documentId,
+      path: row.path,
+      baseCommitSha,
+      owned,
+      writes: owned
+        ? 1
+        : Math.max(
+            1,
+            (operation.actions.length > 0 ? 1 : 0) +
+              changedPropertyCount(operation.properties),
+          ),
+    },
+  };
+}
+
 /** The canonical request identity recorded as Weaver-Wiki-Request-Hash. */
 export function wikiRequestHash(operation: WikiOperation): string {
-  return createHash("sha256")
-    .update(JSON.stringify(wikiOperationSchema.parse(operation)))
-    .digest("hex");
+  const parsed = wikiOperationSchema.safeParse(operation);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    throw new CoreError(
+      "BAD_REQUEST",
+      `Invalid wiki operation${issue ? `: ${issue.path.join(".")} ${issue.message}` : ""}`,
+    );
+  }
+  return createHash("sha256").update(JSON.stringify(parsed.data)).digest("hex");
 }
 
 /**
@@ -221,8 +437,10 @@ export async function applyWikiOperation(
     operationId: string;
     summary?: string;
     beforeCommit?: () => Promise<void>;
+    ledger?: WikiWriteLedger;
   },
 ): Promise<WikiWriteResult> {
+  const ledger = input.ledger ?? NO_LEDGER;
   const { run } = input;
   assertWikiOperationKind(input.operation);
   const parsed = wikiOperationSchema.safeParse(input.operation);
@@ -254,6 +472,7 @@ export async function applyWikiOperation(
     wikiAgentId: run.agentId,
     wikiRequestHash: requestHash,
   };
+  let measure: WikiWriteMeasure | null = null;
   const options = {
     table: null,
     summary,
@@ -266,6 +485,8 @@ export async function applyWikiOperation(
       await run.assertLive();
       await assertProjectRole(db, operation.projectId, actor, "Editor");
       await input.beforeCommit?.();
+      // Before the commit, so a crash over-counts rather than forgetting a written change.
+      if (measure) await ledger.record(measure);
     },
   };
 
@@ -321,18 +542,59 @@ export async function applyWikiOperation(
       operation: content,
       operationId: input.operationId,
       identity,
-      apply: (): Promise<AppliedOperation> => {
+      apply: async (): Promise<AppliedOperation> => {
         switch (content.kind) {
-          case "document.create":
-            return applyDocumentCreate(db, repo, content, author, options);
-          case "document.patch":
+          case "document.create": {
+            await assertNewLinkTargetsExist(
+              db,
+              operation.projectId,
+              null,
+              content.markdown,
+            );
+            const created = operation as Extract<
+              WikiOperation,
+              { kind: "document.create" }
+            >;
+            measure = {
+              ...measureCreate(content.markdown),
+              documentId: null,
+              path: null,
+              baseCommitSha: null,
+              owned: true,
+              writes: 1,
+            };
+            return applyDocumentCreate(
+              db,
+              repo,
+              { ...content, properties: undefined },
+              author,
+              {
+                ...options,
+                systemProperties: agentPageProperties(created),
+              },
+            );
+          }
+          case "document.patch": {
+            const patch = operation as Extract<
+              WikiOperation,
+              { kind: "document.patch" }
+            >;
+            const admitted = await admitPatch(
+              db,
+              repo,
+              patch,
+              run.agentId,
+              ledger,
+            );
+            measure = admitted.measure;
             return applyDocumentPatchOperation(
               db,
               repo,
-              content,
+              { ...content, properties: admitted.propertiesInput },
               author,
               options,
             );
+          }
           case "content.lifecycle":
             return applyFolderCreate(repo, content, author, {
               operationId: options.operationId,

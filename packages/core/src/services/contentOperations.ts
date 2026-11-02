@@ -24,7 +24,10 @@ import {
 import { assetsDirForDocPath, hasAssetsSegment } from "../documents/images";
 import { withoutTitleHeading } from "../documents/importMarkdown";
 import { MAX_MARKDOWN_CHARS } from "../documents/limits";
-import { wikiPagePropertiesInputSchema } from "../wiki/properties";
+import {
+  wikiPagePropertiesInputSchema,
+  type WikiPageProperties,
+} from "../wiki/properties";
 import { assertSafeSegments } from "../documents/paths";
 import { collectImageReferences } from "../documents/imageReferences";
 import { applyDocumentPatch } from "../documents/patch";
@@ -647,12 +650,19 @@ export type TableAtHead = Awaited<ReturnType<typeof getTableInRepo>>;
 /** Who a recovered commit must belong to; a wiki identity also needs the ledger's trust. */
 export type RecoveryIdentity =
   | { requestHash: string; toolName: string }
-  | { wikiAgentId: string; wikiRequestHash: string };
+  | { wikiAgentId: string; wikiRequestHash: string }
+  | { wikiRevertRequestHash: string };
 
 export function matchesRecoveryIdentity(
   entry: GitLogEntry,
   identity: RecoveryIdentity,
 ): boolean {
+  if ("wikiRevertRequestHash" in identity)
+    return (
+      entry.trustedAuthor === true &&
+      !entry.wikiAgentId &&
+      entry.wikiRequestHash === identity.wikiRevertRequestHash
+    );
   return "wikiAgentId" in identity
     ? entry.trustedAuthor === true &&
         entry.wikiAgentId === identity.wikiAgentId &&
@@ -1214,6 +1224,8 @@ export type ApplyOperationOptions = {
   beforeCommit?: () => Promise<void>;
   /** Overrides the default document commit message (direct writes). */
   message?: (path: string, oldPath: string | null) => string;
+  /** Internal create path for machine writers; never reachable from a request schema. */
+  systemProperties?: WikiPageProperties;
   /** Sees the canonical body before and after a patch; a throw refuses it. */
   assertPatched?: (before: string, after: string) => void;
 };
@@ -1689,6 +1701,9 @@ export async function applyDocumentCreate(
         operation.metadata,
       ),
       ...(operation.properties && { propertiesInput: operation.properties }),
+      ...(options.systemProperties && {
+        properties: options.systemProperties,
+      }),
     },
     author,
     {

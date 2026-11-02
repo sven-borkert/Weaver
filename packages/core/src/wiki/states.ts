@@ -118,3 +118,5 @@ export function afterPreparation(
   if (items.some((item) => item.status === "preparing")) return null;
   return items.some((item) => item.status === "ready") ? "queued" : "stopped";
 }
+
+export type WikiRunKindName = "ingest" | "lint" | "classify" | "revert";

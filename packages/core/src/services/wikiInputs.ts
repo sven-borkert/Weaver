@@ -582,6 +582,18 @@ export async function processInputs(
           },
         });
         if (active > 0) throw runActive();
+        const paused = await tx.projectWikiSettings.count({
+          where: {
+            projectId: input.projectId,
+            destructivePausedAt: { not: null },
+          },
+        });
+        if (paused > 0)
+          throw new CoreError(
+            "CONFLICT",
+            "Wiki runs are paused: changes in the last 24 hours exceed the project's budget",
+            { reason: "DESTRUCTIVE_PAUSED" },
+          );
         const where: Prisma.WikiInputItemWhereInput = {
           projectId: input.projectId,
           status: "queued",
@@ -807,6 +819,7 @@ export async function removeInput(
         createdById: null,
         processStartedById: null,
         outcomeNote: null,
+        agentNote: null,
         errorCode: null,
         errorMessage: null,
         revision: { increment: 1 },

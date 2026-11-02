@@ -71,6 +71,7 @@ import {
   type ProjectRepoWriter,
 } from "@weaver/git-store";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
+import type { SecurityContext } from "../security/context";
 import { withExistingProjectRepoReader, withProjectRepo } from "./projectRepo";
 import { resolveSnapshotCommit } from "./contentSnapshots";
 import {
@@ -1588,7 +1589,7 @@ export async function getTable(
 export async function getTableAtSnapshot(
   db: PrismaClient,
   input: { projectId: string; tableId: string; atCommitSha?: string },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ): Promise<{
   id: string;
   path: string;
@@ -2293,7 +2294,7 @@ export async function rebuildTableIndex(
 export async function getTableHistory(
   db: Db,
   input: { projectId: string; tableId: string; offset: number; limit: number },
-  actor: ProjectActor,
+  actor: SecurityContext,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   if (
@@ -2332,6 +2333,7 @@ export async function getTableHistory(
           return {
             sha: entry.sha,
             pathAtSha: entry.dirAtSha,
+            trustedAuthor: entry.trustedAuthor === true,
             authorName: entry.authorName,
             userId: resolved?.id ?? null,
             userName: resolved ? (resolved.name ?? resolved.email) : null,
