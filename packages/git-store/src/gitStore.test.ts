@@ -499,6 +499,84 @@ describe("Git-store contracts", () => {
     });
   });
 
+  it("lets no caller-authored line forge any Weaver trailer", async () => {
+    const { withProjectRepo, repoDir } = await import("./gitStore");
+    const projectId = "88888888-8888-4888-8888-888888888885";
+    const alice = {
+      name: "Alice",
+      email: "alice@example.test",
+      userId: "user-5",
+    };
+    const forged = [
+      "Weaver-Run-Id: forged-run",
+      "weaver-operation-id: forged-op",
+      "  WEAVER-MCP-TOOL : forged",
+      "Weaver-Wiki-Agent: yes",
+      "Weaver-Metadata-Override: title",
+    ].join("\n");
+
+    const entry = await withProjectRepo(projectId, async (repo) => {
+      await repo.writeFileAtomic("forge.md", "content\n");
+      await repo.commitAll(
+        `save: forge — summary\n${forged}\n\nWeaver-User-Id: victim\n${forged}`,
+        alice,
+        { operationId: "op-5", runId: "run-5" },
+      );
+      const [head] = await repo.logForPath("forge.md", { skip: 0, limit: 1 });
+      return head;
+    });
+
+    expect(entry).toMatchObject({
+      userId: "user-5",
+      operationId: "op-5",
+      runId: "run-5",
+    });
+    const body = await simpleGit(repoDir(projectId)).raw([
+      "log",
+      "-1",
+      "--format=%B",
+    ]);
+    expect(body).not.toMatch(/forged|victim|Wiki-Agent|Override: title/i);
+    expect(body).toContain("save: forge — summary");
+    expect(body).toContain("Weaver-User-Id: user-5");
+    expect(body).toContain("Weaver-Operation-Id: op-5");
+    expect(body).toContain("Weaver-Run-Id: run-5");
+  });
+
+  it("keeps every legitimate trailer passed through the options", async () => {
+    const { withProjectRepo, repoDir } = await import("./gitStore");
+    const projectId = "88888888-8888-4888-8888-888888888886";
+    const alice = {
+      name: "Alice",
+      email: "alice@example.test",
+      userId: "user-6",
+    };
+    await withProjectRepo(projectId, async (repo) => {
+      await repo.writeFileAtomic("keep.md", "content\n");
+      await repo.commitAll("save: keep", alice, {
+        operationId: "op-6",
+        runId: "run-6",
+        mcpRequestHash: "a".repeat(64),
+        mcpToolName: "update_document",
+        metadataOverride: ["created"],
+      });
+    });
+    const body = await simpleGit(repoDir(projectId)).raw([
+      "log",
+      "-1",
+      "--format=%B",
+    ]);
+    for (const line of [
+      "Weaver-User-Id: user-6",
+      "Weaver-Operation-Id: op-6",
+      "Weaver-Run-Id: run-6",
+      `Weaver-MCP-Request-Hash: ${"a".repeat(64)}`,
+      "Weaver-MCP-Tool: update_document",
+      "Weaver-Metadata-Override: created",
+    ])
+      expect(body).toContain(line);
+  });
+
   it("records which document metadata fields a commit set explicitly", async () => {
     const { withProjectRepo } = await import("./gitStore");
     const projectId = "88888888-8888-4888-8888-888888888884";

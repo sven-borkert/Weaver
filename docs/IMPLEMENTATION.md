@@ -122,7 +122,8 @@ rebuildable projection state.
   and backlinks hold the shared lock; history candidate scans are capped at 2,000.
 - Accepted commits can carry a validated `Weaver-Operation-Id` trailer for
   recovery/idempotency work. Trailer parsing trusts only the terminal Git
-  trailer block. History uses NUL framing, and user attribution accepts only SHAs
+  trailer block; caller message text can never carry a `Weaver-*:` line (stripped before
+  the real trailers are appended). History uses NUL framing, and user attribution accepts only SHAs
   recorded locally in `.git/weaver-trusted-commits`, never remote identity claims.
 - Every repository root carries `project.json`
   ([`projectMetadata.ts`](../packages/core/src/services/projectMetadata.ts)):

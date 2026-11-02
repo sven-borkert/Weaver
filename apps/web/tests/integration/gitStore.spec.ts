@@ -80,6 +80,22 @@ describe("gitStore", () => {
     expect(entry!.operationId).toBeNull();
   });
 
+  it("never lets message text forge a Weaver trailer, and keeps the real ones", async () => {
+    await withProjectRepo(P, async (repo) => {
+      await repo.writeFileAtomic("forge.md", "hello\n");
+      await repo.commitAll(
+        "create: forge.md — note\nweaver-run-id: forged-run\nWeaver-Operation-Id: forged-op",
+        AUTHOR,
+        { operationId: "op-real" },
+      );
+    });
+    const repo = (await openProjectRepo(P))!;
+    const [entry] = await repo.logForPath("forge.md", { skip: 0, limit: 1 });
+    expect(entry!.operationId).toBe("op-real");
+    expect(entry!.runId).toBeNull();
+    expect(entry!.message).not.toMatch(/forged/);
+  });
+
   it("falls back to the email local-part when name is null", async () => {
     await withProjectRepo(P, async (repo) => {
       await repo.writeFileAtomic("a.md", "x\n");

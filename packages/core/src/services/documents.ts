@@ -81,7 +81,7 @@ import {
   documentAuthorForContent,
   contentUserId,
   contentProjectKeyId,
-  isMachineContentAuthor,
+  skipsLabelEnrichment,
   type ContentWriteActor,
 } from "./contentAuthor";
 import { withExistingProjectRepoReader, withProjectRepo } from "./projectRepo";
@@ -1164,7 +1164,7 @@ export async function writeDocumentInRepo(
     db,
     projectId,
     request.content,
-    !isMachineContentAuthor(actor),
+    !skipsLabelEnrichment(actor),
   );
   const { excerpt } = prepared0;
   let prepared: PreparedWrite;

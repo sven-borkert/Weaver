@@ -67,6 +67,8 @@ pull claims; `weaver-env-deploy` for SSH trust and network policy.
 - Keep binary reads byte-exact and bounded, literal pathspecs and NUL-framed
   history safe for unusual names, and commit messages/trailers separately
   validated. Operation provenance comes from the terminal trailer block.
+  `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line (case-insensitive);
+  real trailers come only from `commitAll` options and are appended afterwards.
   In `batchCatFile`, drain skipped oversized/non-blob payloads and retain request
   order and bounded buffering; skipping bytes incorrectly corrupts later blobs.
 - User/project-key attribution is trusted only for locally recorded commits in

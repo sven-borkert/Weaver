@@ -11,14 +11,28 @@ export type MachineContentAuthor = {
 };
 export type ContentWriteActor = EnrichedActor | MachineContentAuthor;
 
-export function isMachineContentAuthor(
+/** True when the writer has no `User` row behind it. */
+export function hasNoUser(
   actor: ContentWriteActor,
 ): actor is MachineContentAuthor {
   return "kind" in actor && actor.kind === "projectApiKey";
 }
 
+/** Project API keys write verbatim; other machine authors may still enrich labels. */
+export function skipsLabelEnrichment(actor: ContentWriteActor): boolean {
+  return "kind" in actor && actor.kind === "projectApiKey";
+}
+
+export function machineIdentity(
+  actor: ContentWriteActor,
+): { machineKind: MachineContentAuthor["kind"]; machineId: string } | null {
+  return hasNoUser(actor)
+    ? { machineKind: actor.kind, machineId: actor.keyId }
+    : null;
+}
+
 export function gitAuthorForContent(actor: ContentWriteActor): CommitAuthor {
-  return isMachineContentAuthor(actor)
+  return hasNoUser(actor)
     ? {
         kind: "projectApiKey",
         keyId: actor.keyId,
@@ -31,15 +45,15 @@ export function gitAuthorForContent(actor: ContentWriteActor): CommitAuthor {
 export function documentAuthorForContent(
   actor: ContentWriteActor,
 ): DocumentAuthor {
-  return isMachineContentAuthor(actor)
+  return hasNoUser(actor)
     ? { id: null, name: actor.name }
     : authorForUser({ id: actor.userId, name: actor.name, email: actor.email });
 }
 
 export function contentUserId(actor: ContentWriteActor): string | null {
-  return isMachineContentAuthor(actor) ? null : actor.userId;
+  return hasNoUser(actor) ? null : actor.userId;
 }
 
 export function contentProjectKeyId(actor: ContentWriteActor): string | null {
-  return isMachineContentAuthor(actor) ? actor.keyId : null;
+  return hasNoUser(actor) ? actor.keyId : null;
 }

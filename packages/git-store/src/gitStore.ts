@@ -412,17 +412,12 @@ function sanitizeCommitText(value: string): string {
   return value.replace(/[\x00-\x1f\x7f]/g, "");
 }
 
-// Reserve machine provenance trailers for the commit writer.
+// Caller text can never carry a Weaver-* line; real trailers are appended after this.
 function sanitizeCommitMessage(value: string): string {
   return value
     .replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")
     .split("\n")
-    .filter(
-      (line) =>
-        !/^\s*Weaver-(?:Project-Key-Id|API-Request-Hash|API-Operation)\s*:/i.test(
-          line,
-        ),
-    )
+    .filter((line) => !/^\s*Weaver-[A-Za-z0-9_-]+\s*:/i.test(line))
     .join("\n");
 }
 
