@@ -183,6 +183,9 @@ belongs in `adminKnowledgeReconciliation.ts`. All writes await their actual resu
   provider bodies, and emits `document.summary.*` events. Explicit API comments
   bypass generation. Keep the same route schemas for the UI and `set_llm_route`
   MCP tool; enum additions require a Prisma migration.
+- `wiki` ("Project wiki agent") is active and optional too: it needs `chat` and `tool_use`, shows
+  neutral when unassigned, and its card says unassigning it stops every project's agent. The
+  per-project setting and runner live in `weaver-wiki`.
 - Connection timeouts range 1–120,000 ms (`MAX_REQUEST_TIMEOUT_MS`; the core
   and form schemas repeat the bound). The enrichment lease budget in
   `jobs/queue.test.ts` multiplies it, so raise both together. Knowledge

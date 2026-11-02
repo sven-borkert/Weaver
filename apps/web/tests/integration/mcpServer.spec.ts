@@ -1453,12 +1453,15 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
         "jobs",
         "knowledge_embedding",
         "knowledge_extraction",
+        "wiki",
       ]);
       expect(
         routes.items.every(
           (route) =>
             route.health ===
-            (route.purpose === "document_summary" ? "unassigned" : "ready"),
+            (route.purpose === "document_summary" || route.purpose === "wiki"
+              ? "unassigned"
+              : "ready"),
         ),
       ).toBe(true);
       for (const output of [connections, first, second, routes]) {

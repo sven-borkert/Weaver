@@ -79,6 +79,10 @@ describe("resolved knowledge routing", () => {
     expect(ACTIVE_LLM_PURPOSES).toContain("document_summary");
     expect(REQUIRED_CAPABILITIES).toHaveProperty("document_summary", ["chat"]);
   });
+  it("exposes an optional wiki route that needs chat and tool use", () => {
+    expect(ACTIVE_LLM_PURPOSES).toContain("wiki");
+    expect(REQUIRED_CAPABILITIES).toHaveProperty("wiki", ["chat", "tool_use"]);
+  });
   it("assembles both purposes from one raw database statement", async () => {
     const coherentRows = [
       rawRouteRow("knowledge_extraction", "a"),

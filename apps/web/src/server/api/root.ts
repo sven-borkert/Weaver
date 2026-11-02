@@ -24,6 +24,7 @@ import { llmRouter } from "~/server/api/routers/llm";
 import { oauthConsentRouter } from "~/server/api/routers/oauthConsent";
 import { projectRouter } from "~/server/api/routers/project";
 import { projectGitRemoteRouter } from "~/server/api/routers/projectGitRemote";
+import { wikiRouter } from "~/server/api/routers/wiki";
 import { projectApiKeyRouter } from "~/server/api/routers/projectApiKey";
 import { projectMemberRouter } from "~/server/api/routers/projectMember";
 import { remoteInstanceRouter } from "~/server/api/routers/remoteInstance";
@@ -76,6 +77,7 @@ export const appRouter = createTRPCRouter({
   table: tableRouter,
   tableFolder: tableFolderRouter,
   user: userRouter,
+  wiki: wikiRouter,
 });
 
 export type AppRouter = typeof appRouter;

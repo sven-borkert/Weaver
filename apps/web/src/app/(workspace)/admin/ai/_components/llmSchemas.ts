@@ -75,6 +75,7 @@ export const PURPOSE_LABELS = {
   ingestion: "Import parsing",
   jobs: "Scheduled tasks",
   document_summary: "Document change summaries",
+  wiki: "Project wiki agent",
 } as const;
 export const HEALTH_LABELS = {
   ready: "Ready",

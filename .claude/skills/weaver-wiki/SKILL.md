@@ -1,6 +1,6 @@
 ---
 name: weaver-wiki
-description: Use when changing Weaver's wiki-agent foundations: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset (find_page, inspect_links, list_recent_changes), change kinds, or tracked-link teaching in prompts.
+description: Use when changing Weaver's wiki-agent foundations: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset (find_page, inspect_links, list_recent_changes), the per-project wiki settings, bootstrap and guide approval, change kinds, or tracked-link teaching in prompts.
 ---
 
 # Weaver Wiki
@@ -45,9 +45,9 @@ same folder's `plans/`). This skill records what has shipped; later slices exten
   no `User`, `Member` or bearer credential; revoked rows stay so old commits resolve.
 - `createWikiAgentSecurityContext({ agentId, projectId })` builds the principal; ids come
   from the run row. It carries `content:read` and `content:write` for one project.
-- `resolveProjectAccess` gives it a synthetic `Editor` while the agent row is live and the
-  project is not deleted, `NOT_FOUND` otherwise; the enabled check arrives with
-  `ProjectWikiSettings`. See `weaver-auth` for which services accept the union.
+- `resolveProjectAccess` gives it a synthetic `Editor` while the agent row is live, the
+  project is not deleted and `ProjectWikiSettings` is enabled for this agent, `NOT_FOUND`
+  otherwise. See `weaver-auth` for which services accept the union.
 - Reused read tools are declared with `defineSharedReadTool`, whose `ctx.actor` is the union,
   so a user-only service does not compile inside them. The seven reads of spec §8.2, `find_page`,
   `inspect_links` and `list_recent_changes` use it; the loadable table and graph reads
@@ -87,6 +87,33 @@ is the agent's only write path.
 - Recovery goes through `recoverCheckApply` with identity `{ wikiAgentId, wikiRequestHash }`: a
   match needs `trustedAuthor === true`, the agent trailer and the hash, else `CONFLICT`. A patch
   retried with a newer base still finds its own commit first, so it cannot apply twice.
+
+## Settings, bootstrap and guide
+
+- `ProjectWikiSettings` (`wikiSettings.ts`, router `wiki`) follows the `ProjectGitRemote` pattern: 1:1,
+  integer `revision` CAS on every write (0 means no row yet), session actors only, Owner enable /
+  disable / revoke / budgets / guide pick, Maintainer settings read, review and approve; non-members
+  (including global Admins) get `NOT_FOUND`. Anchor ids (`guideDocumentId`, `sourcesFolderId`, ...) are
+  plain uuids without FKs. Columns for later slices (`lint*`, `destructive*`, `sourceTablesFolderId`,
+  `reportDocumentId`, `WikiGuideSuggestion.runId`) exist but only budgets and the guide are edited.
+- `enableWiki`: creates or reuses the live agent in one transaction, then `runWikiBootstrap` writes
+  folders, guide, overview as the agent (ids `wiki-bootstrap:<projectId>:0001..0004`, request hash per
+  step, no `Weaver-Run-Id`; `commitAll` allows a missing run id only for that prefix). It is idempotent by
+  operation id and skips anchors already recorded; an existing human `wiki/` folder is reused, an existing
+  `wiki/sources` folder or page is never adopted (`CONFLICT`). A failed first enable rolls back to off.
+  Guide and overview headers get `type` and `reviewExempt: true` through the internal bootstrap writer
+  only; `applyWikiOperation` cannot set `reviewExempt`. Disable keeps everything (TODO: cancel runs in
+  slice 5); revoke disables and a later enable creates a new agent.
+- Guide: `normalizeGuideText` (NFC, strip Default_Ignorable_Code_Point and bidi controls, then NFC) runs
+  before the SHA-256, so the approver sees exactly what runs inject. `approveGuide` refuses a stale
+  revision, a digest mismatch (`GUIDE_CHANGED`) and over 16,000 bytes (`GUIDE_TOO_LARGE`); re-pointing
+  `guideDocumentId` clears approval and refuses other-project, missing, Python, source-page and task-output
+  documents. The template is the approved body at enable (digest of the canonical document body).
+- `resolveProjectAccess` gives the agent access only while `ProjectWikiSettings.enabled` and
+  `agentId` equals the agent. `wikiWriteGuardsFor(db, projectId)` is the `guards` provider for
+  `applyWikiOperation`: guide id from settings and the source folder path resolved from its folder id
+  (`.folder.json`) at call time.
+- Change kind `wiki-bootstrap` was added to `changeKinds.ts`.
 
 ## Commit text
 

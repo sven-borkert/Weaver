@@ -749,7 +749,12 @@ function makeRepo(dir: string) {
           : isWikiAgentAuthor(author)
       )
         throw new Error("invalid wiki request identity");
-      if (isWikiAgentAuthor(author) && (!operationId || !runId))
+      // Deterministic bootstrap has no run, so only its own id prefix may omit the run id.
+      const bootstrap = operationId?.startsWith("wiki-bootstrap:") === true;
+      if (
+        isWikiAgentAuthor(author) &&
+        (!operationId || (bootstrap ? runId !== undefined : !runId))
+      )
         throw new Error("incomplete wiki request identity");
       const overridden = options?.metadataOverride ?? [];
       if (overridden.some((field) => !METADATA_OVERRIDE_FIELDS.has(field))) {

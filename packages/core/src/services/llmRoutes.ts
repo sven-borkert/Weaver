@@ -40,6 +40,7 @@ export const ACTIVE_LLM_PURPOSES = [
   "ingestion",
   "jobs",
   "document_summary",
+  "wiki",
 ] as const;
 export type ActiveLlmPurpose = (typeof ACTIVE_LLM_PURPOSES)[number];
 
@@ -53,6 +54,7 @@ export const REQUIRED_CAPABILITIES: Record<
   ingestion: ["chat"],
   jobs: ["chat"],
   document_summary: ["chat"],
+  wiki: ["chat", "tool_use"],
 };
 
 export type LlmModelSnapshot = {

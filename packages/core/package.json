@@ -25,6 +25,7 @@
     "./security/*": "./src/security/*.ts",
     "./services/*": "./src/services/*.ts",
     "./tables/*": "./src/tables/*.ts",
+    "./wiki/*": "./src/wiki/*.ts",
     "./externalMcp/*": "./src/externalMcp/*.ts"
   },
   "scripts": {

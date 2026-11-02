@@ -197,6 +197,18 @@ export async function addMembership(
   });
 }
 
+/** Marks the wiki enabled for the agent without running bootstrap. */
+export async function bindWikiSettings(
+  projectId: string,
+  agentId: string,
+): Promise<void> {
+  await getPrisma().projectWikiSettings.upsert({
+    where: { projectId },
+    create: { projectId, agentId, enabled: true, enabledAt: new Date() },
+    update: { agentId, enabled: true },
+  });
+}
+
 export function securityContextFor(user: { id: string; role: Role }) {
   return createSessionSecurityContext({
     userId: user.id,

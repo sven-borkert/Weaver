@@ -107,6 +107,12 @@ export function RoutesCard({
                     standard comment when unavailable.
                   </p>
                 )}
+                {route.purpose === "wiki" && (
+                  <p className="text-text-2 mt-1 text-xs font-normal">
+                    Optional. Needs chat and tool use. Unassigning it stops the
+                    wiki agent in every project.
+                  </p>
+                )}
               </div>
               <div className="flex flex-col gap-1">
                 <label
@@ -207,7 +213,8 @@ export function RoutesCard({
                 variant={
                   route.health === "ready"
                     ? "default"
-                    : route.purpose === "document_summary" &&
+                    : (route.purpose === "document_summary" ||
+                          route.purpose === "wiki") &&
                         route.health === "unassigned"
                       ? "outline"
                       : "destructive"

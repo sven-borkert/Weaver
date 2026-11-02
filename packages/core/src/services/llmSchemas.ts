@@ -35,6 +35,7 @@ export const activeLlmPurposes = [
   "ingestion",
   "jobs",
   "document_summary",
+  "wiki",
 ] as const;
 
 export const connectionIdInput = z.object({ connectionId: z.uuid() });

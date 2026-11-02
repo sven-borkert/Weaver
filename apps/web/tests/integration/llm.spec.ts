@@ -1460,6 +1460,7 @@ describe("llm routes", () => {
         ["ingestion", "unassigned"],
         ["jobs", "unassigned"],
         ["document_summary", "unassigned"],
+        ["wiki", "unassigned"],
       ],
     );
     expect(await resolveKnowledgeRouting(getPrisma())).toBeNull();

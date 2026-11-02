@@ -53,6 +53,8 @@ primitives, and `weaver-database` when changing schema or migrations.
   the last Owner, and enforce grantable rank. The separately guarded global
   Admin recovery path lives in user administration; do not copy its bypass into
   normal project-member mutations.
+- The wiki setting (`ProjectWikiSettings`, enable/bootstrap/guide) is not mirrored into `project.json`;
+  see `weaver-wiki`. Enabling writes the `wiki/` folder, guide and overview pages as the wiki agent.
 - `project.json` is a Git representation of current database metadata. Preserve
   history and reviewer settings when synchronizing it. Domain operations must
   continue to ignore this root metadata file as user content.

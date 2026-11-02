@@ -525,6 +525,20 @@ Its only write path is [`wikiOperations.ts`](../packages/core/src/services/wikiO
 calls the branch functions of `applyOperationInRepo` and recovers through `recoverCheckApply`,
 trusting only ledger-trusted commits with the agent trailer and request hash.
 
+Wiki settings: `ProjectWikiSettings` (1:1 per project, integer revision CAS, `WikiGuideSuggestion`)
+is read and written by [`wikiSettings.ts`](../packages/core/src/services/wikiSettings.ts) through the
+`wiki` tRPC router ([`routers/wiki.ts`](../apps/web/src/server/api/routers/wiki.ts)): Owners enable,
+disable, revoke, edit budgets and pick the guide document; Maintainers read settings and approve the
+guide; session actors only. Enable creates or reuses the agent, then
+[`wikiBootstrap.ts`](../packages/core/src/services/wikiBootstrap.ts) writes `wiki/`, `wiki/sources/`, the
+guide (from [`wiki/templates/guide-v1.md.ts`](../packages/core/src/wiki/templates/guide-v1.md.ts)) and an
+overview as the agent, one commit per step under `wiki-bootstrap:<projectId>:<nnnn>` ids (no run id).
+[`wiki/guideText.ts`](../packages/core/src/wiki/guideText.ts) normalizes the guide (NFC, no
+default-ignorables or bidi controls) before its SHA-256, and approval stores the exact text. Agent
+access (`resolveProjectAccess`) requires `ProjectWikiSettings.enabled` and the agent equal to `agentId`;
+`wikiWriteGuardsFor` supplies the guide and source-folder guards to `applyWikiOperation`. `LlmPurpose.wiki`
+(chat + tool use) is the optional model route.
+
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS
 transport in [`oidcProvider.ts`](../packages/auth/src/oidcProvider.ts). The web

@@ -40,6 +40,7 @@ import {
 } from "@weaver/core/services/wikiAgents";
 import {
   addMembership,
+  bindWikiSettings,
   callerFor,
   callerWithSecurity,
   getPrisma,
@@ -164,6 +165,7 @@ describe("wiki agent principal", () => {
     const home = await makeProject("Home");
     const other = await makeProject("Other");
     const agent = await createWikiAgent(db, home.id);
+    await bindWikiSettings(home.id, agent.id);
     const context = createWikiAgentSecurityContext({
       agentId: agent.id,
       projectId: home.id,
@@ -218,6 +220,7 @@ describe("wiki agent principal", () => {
     ).resolves.toMatchObject({ projectId: home.id });
 
     const fresh = await createWikiAgent(db, home.id);
+    await bindWikiSettings(home.id, fresh.id);
     expect(fresh.id).not.toBe(agent.id);
     const again = createWikiAgentSecurityContext({
       agentId: fresh.id,

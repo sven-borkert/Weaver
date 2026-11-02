@@ -10,6 +10,7 @@ describe("changeKindOf", () => {
     ["project-api:k", "project-api"],
     ["exam:1", "exam"],
     ["wiki-run:r:0001", "wiki-run"],
+    ["wiki-bootstrap:p:0001", "wiki-bootstrap"],
     ["wiki-input:i", "wiki-input"],
     ["wiki-revert:r:0001", "wiki-revert"],
     ["mystery:1", "external"],

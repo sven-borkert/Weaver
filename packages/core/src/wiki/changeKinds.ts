@@ -7,6 +7,7 @@ export const WIKI_CHANGE_KINDS = [
   "project-api",
   "exam",
   "wiki-run",
+  "wiki-bootstrap",
   "wiki-input",
   "wiki-revert",
   "external",

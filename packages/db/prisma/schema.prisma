@@ -80,6 +80,7 @@ enum LlmPurpose {
   ingestion
   jobs
   document_summary
+  wiki
 }
 
 enum LlmModelCapability {
@@ -429,6 +430,8 @@ model Project {
   artifacts                    Artifact[]                    @relation("ArtifactProject")
   contentPins                  ProjectContentPin[]
   gitRemote                    ProjectGitRemote?
+  wikiSettings                 ProjectWikiSettings?
+  wikiGuideSuggestions         WikiGuideSuggestion[]
   uploadReservations           UploadReservation[]
 
   @@index([deletedAt])
@@ -572,9 +575,67 @@ model WikiAgent {
   createdAt DateTime  @default(now())
   revokedAt DateTime?
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  settings ProjectWikiSettings[]
 
   @@index([projectId])
+}
+
+/// 1:1 wiki-agent setting per project (integer revision CAS). Anchor ids are plain uuids
+/// into Git-backed content (no FK, rebuildable). The migration adds CHECKs: approved body
+/// <= 16,000 bytes and body/digest set together.
+model ProjectWikiSettings {
+  id                      String    @id @default(uuid()) @db.Uuid
+  projectId               String    @unique @db.Uuid
+  enabled                 Boolean   @default(false)
+  revision                Int       @default(1)
+  enabledById             String?   @db.Uuid
+  enabledAt               DateTime?
+  agentId                 String?   @db.Uuid
+  guideDocumentId         String?   @db.Uuid
+  approvedGuideDigest     String?   @db.VarChar(64)
+  approvedGuideBody       String?
+  approvedGuideCommitSha  String?   @db.VarChar(40)
+  approvedGuideAt         DateTime?
+  approvedGuideById       String?   @db.Uuid
+  sourcesFolderId         String?   @db.Uuid
+  sourceTablesFolderId    String?   @db.Uuid
+  overviewDocumentId      String?   @db.Uuid
+  reportDocumentId        String?   @db.Uuid
+  lintSchedule            Json?
+  lintTimezone            String    @default("UTC")
+  lintCron                String?
+  lintNextRunAt           DateTime?
+  lintConsecutiveFailures Int       @default(0)
+  lintPausedAt            DateTime?
+  destructiveBudget24h    Int       @default(100000)
+  destructivePausedAt     DateTime?
+  spendAlertCentsPerDay   Int?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  project Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agent   WikiAgent? @relation(fields: [agentId], references: [id], onDelete: NoAction)
+
+  @@index([agentId])
+  @@index([enabled, lintNextRunAt])
+}
+
+/// Agent-written guide change proposals, plain text for a human to act on.
+/// runId is a plain uuid until WikiRun exists.
+model WikiGuideSuggestion {
+  id           String    @id @default(uuid()) @db.Uuid
+  projectId    String    @db.Uuid
+  runId        String?   @db.Uuid
+  text         String    @db.VarChar(1000)
+  createdAt    DateTime  @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?   @db.Uuid
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, resolvedAt])
+  @@index([runId])
 }
 
 /// Derived projection of schema.json/data.jsonl under tables/**; the

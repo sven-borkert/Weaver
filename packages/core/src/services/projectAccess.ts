@@ -47,12 +47,12 @@ async function resolveWikiAgentAccess(
   projectId: string,
   agentId: string,
 ): Promise<WikiAgentProjectAccess> {
-  // TODO(wiki slice 3): also require ProjectWikiSettings.enabled.
   const project = await tx.project.findFirst({
     where: {
       id: projectId,
       ...notDeleted,
       wikiAgents: { some: { id: agentId, revokedAt: null } },
+      wikiSettings: { is: { enabled: true, agentId } },
     },
   });
   if (!project) throw new CoreError("NOT_FOUND");

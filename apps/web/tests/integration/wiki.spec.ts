@@ -23,19 +23,38 @@ import {
 import { getTree } from "@weaver/core/services/folders";
 import {
   createWikiAgent,
+  getLiveWikiAgent,
   revokeWikiAgent,
 } from "@weaver/core/services/wikiAgents";
+import {
+  approveGuide,
+  disableWiki,
+  enableWiki,
+  getWikiSettings,
+  listGuideSuggestions,
+  resolveGuideSuggestion,
+  revokeAgent,
+  reviewGuide,
+  setGuideDocument,
+  updateWikiSettings,
+  wikiWriteGuardsFor,
+} from "@weaver/core/services/wikiSettings";
+import { resolveProjectAccess } from "@weaver/core/services/projectAccess";
+import { setLlmRoute } from "@weaver/core/services/llmRoutes";
+import { normalizeGuideText } from "@weaver/core/wiki/guideText";
 import { listRecentChanges } from "@weaver/core/services/wikiReads";
 import { parseDocumentBody } from "@weaver/core/editor/markdown";
 import { withProjectRepo } from "@weaver/git-store";
 import {
   addMembership,
+  bindWikiSettings,
   callerFor,
   getPrisma,
   makeProject,
   makeUser,
   resetDb,
   securityContextFor,
+  seedTestLlmRouting,
   testAuth,
 } from "./_harness";
 import { createTaskRun } from "./_dashboardFixtures";
@@ -49,6 +68,7 @@ async function fixture(suffix = "w") {
   const project = await makeProject(`Wiki-${suffix}`);
   await addMembership(project.id, owner.id, "Owner");
   const agent = await createWikiAgent(db, project.id);
+  await bindWikiSettings(project.id, agent.id);
   const context = createWikiAgentSecurityContext({
     agentId: agent.id,
     projectId: project.id,
@@ -887,6 +907,7 @@ describe("applyWikiOperation", () => {
 
     await revokeWikiAgent(w.db, { projectId: w.project.id });
     const successor = await createWikiAgent(w.db, w.project.id);
+    await bindWikiSettings(w.project.id, successor.id);
     const fence = { ...w.fence, agentId: successor.id };
     await expect(
       w.apply(folder(w), { operationId: folderId, fence }),
@@ -978,5 +999,808 @@ describe("applyWikiOperation", () => {
         w.apply(w.create(), { operationId }),
         operationId,
       ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});
+
+describe("wiki settings, bootstrap and guide", () => {
+  beforeEach(resetDb);
+
+  async function project(suffix = "s") {
+    const db = getPrisma();
+    const owner = await makeUser("User", `own-${suffix}`);
+    const maintainer = await makeUser("User", `mnt-${suffix}`);
+    const editor = await makeUser("User", `edt-${suffix}`);
+    const viewer = await makeUser("User", `vwr-${suffix}`);
+    const admin = await makeUser("Admin", `adm-${suffix}`);
+    const p = await makeProject(`WikiSettings-${suffix}`);
+    await addMembership(p.id, owner.id, "Owner");
+    await addMembership(p.id, maintainer.id, "Maintainer");
+    await addMembership(p.id, editor.id, "Editor");
+    await addMembership(p.id, viewer.id, "Viewer");
+    const ctx = securityContextFor;
+    const enable = async (expectedRevision = 0) =>
+      enableWiki(db, ctx(owner), { projectId: p.id, expectedRevision });
+    const settings = () =>
+      db.projectWikiSettings.findUniqueOrThrow({ where: { projectId: p.id } });
+    const log = () =>
+      withProjectRepo(p.id, (repo) =>
+        simpleGit(repo.dir).raw(["log", "--format=%an|%ae|%B%x00"]),
+      ).then((out) => out.split("\0").filter((c) => c.trim()));
+    return {
+      db,
+      owner,
+      maintainer,
+      editor,
+      viewer,
+      admin,
+      project: p,
+      ctx,
+      enable,
+      settings,
+      log,
+      id: p.id,
+    };
+  }
+  type P = Awaited<ReturnType<typeof project>>;
+
+  async function editGuide(f: P, markdown: string) {
+    const row = await f.settings();
+    const doc = await f.db.document.findUniqueOrThrow({
+      where: { id: row.guideDocumentId! },
+    });
+    return f.db.document.findUniqueOrThrow({ where: { id: doc.id } }).then(() =>
+      callerFor(f.owner).document.update({
+        projectId: f.id,
+        documentId: doc.id,
+        baseCommitSha: doc.headCommitSha,
+        content: { kind: "markdown", contentJson: parseDocumentBody(markdown) },
+        changeSummary: "Edit guide",
+      }),
+    );
+  }
+
+  it("enables: creates the agent, folders, guide, overview and approves the template", async () => {
+    const f = await project();
+    const view = await f.enable();
+    expect(view).toMatchObject({
+      enabled: true,
+      revision: 1,
+      routeReady: false,
+      guide: { approved: true, approvedById: null },
+    });
+    const row = await f.settings();
+    const agent = await getLiveWikiAgent(f.db, f.id);
+    expect(agent).not.toBeNull();
+    expect(row).toMatchObject({ agentId: agent!.id, enabledById: f.owner.id });
+    expect(row.sourcesFolderId).toMatch(/^[0-9a-f-]{36}$/);
+
+    const tree = await getTree(f.db, { projectId: f.id }, f.ctx(f.owner));
+    const paths = JSON.stringify(tree);
+    expect(paths).toContain("wiki");
+    expect(paths).toContain("sources");
+
+    const guide = await f.db.document.findUniqueOrThrow({
+      where: { id: row.guideDocumentId! },
+    });
+    expect(guide).toMatchObject({
+      wikiType: "guide",
+      reviewExempt: true,
+      reviewDueAt: null,
+      lastEditedByMachineKind: "wikiAgent",
+      lastEditedByMachineId: agent!.id,
+    });
+    expect(guide.path.startsWith("wiki/")).toBe(true);
+    const overview = await f.db.document.findUniqueOrThrow({
+      where: { id: row.overviewDocumentId! },
+    });
+    expect(overview).toMatchObject({
+      wikiType: "overview",
+      reviewExempt: true,
+    });
+
+    const review = await reviewGuide(f.db, f.ctx(f.owner), f.id);
+    expect(review).toMatchObject({
+      digest: row.approvedGuideDigest,
+      matchesApproved: true,
+      tooLarge: false,
+    });
+    expect(review.text).toBe(row.approvedGuideBody);
+    expect(row.approvedGuideCommitSha).toBe(guide.headCommitSha);
+    expect(review.flags).toEqual([]);
+  });
+
+  it("commits each bootstrap step as the agent with a bootstrap id and no run or user trailer", async () => {
+    const f = await project();
+    await f.enable();
+    const agent = (await getLiveWikiAgent(f.db, f.id))!;
+    const commits = await f.log();
+    const steps = commits.filter((c) =>
+      c.includes("Weaver-Operation-Id: wiki-bootstrap:"),
+    );
+    expect(steps).toHaveLength(4);
+    const ids = steps
+      .map((c) => /Weaver-Operation-Id: (\S+)/.exec(c)![1])
+      .sort();
+    expect(ids).toEqual(
+      [1, 2, 3, 4].map((n) => `wiki-bootstrap:${f.id}:000${n}`),
+    );
+    for (const commit of steps) {
+      expect(commit).toContain(`Weaver-Wiki-Agent-Id: ${agent.id}`);
+      expect(commit).toMatch(/Weaver-Wiki-Request-Hash: [0-9a-f]{64}/);
+      expect(commit).not.toContain("Weaver-Run-Id");
+      expect(commit).not.toContain("Weaver-User-Id");
+      expect(commit).toContain("Wiki agent|");
+    }
+    const changes = await listRecentChanges(
+      f.db,
+      { projectId: f.id },
+      f.ctx(f.owner),
+    );
+    expect(changes.changes.map((c) => c.kind)).toEqual(
+      expect.arrayContaining(["wiki-bootstrap"]),
+    );
+    expect(
+      await f.db.user.count({
+        where: { email: { endsWith: "@weaver.invalid" } },
+      }),
+    ).toBe(0);
+  });
+
+  it("resumes missing pieces by operation id and never adopts an existing page", async () => {
+    const f = await project();
+    const human = await callerFor(f.owner).folder.create({
+      projectId: f.id,
+      parentPath: [],
+      name: "wiki",
+    });
+    expect(human).toBeTruthy();
+    const mine = await callerFor(f.owner).document.create({
+      projectId: f.id,
+      folderPath: ["wiki"],
+      title: "Wiki guide",
+      contentJson: parseDocumentBody("Mine, not the agent's"),
+    });
+    const view = await f.enable();
+    const row = await f.settings();
+    expect(row.guideDocumentId).not.toBe(mine.id);
+    expect(view.guide.approved).toBe(true);
+    const untouched = await f.db.document.findUniqueOrThrow({
+      where: { id: mine.id },
+    });
+    expect(untouched.headCommitSha).toBe(mine.headCommitSha);
+    expect(untouched.wikiType).toBeNull();
+
+    // A crash after the commits but before the anchors were recorded.
+    const before = await f.log();
+    await f.db.projectWikiSettings.update({
+      where: { projectId: f.id },
+      data: {
+        enabled: false,
+        guideDocumentId: null,
+        overviewDocumentId: null,
+        sourcesFolderId: null,
+        approvedGuideBody: null,
+        approvedGuideDigest: null,
+      },
+    });
+    const again = await f.enable((await f.settings()).revision);
+    expect(again.enabled).toBe(true);
+    expect(await f.settings()).toMatchObject({
+      guideDocumentId: row.guideDocumentId,
+      overviewDocumentId: row.overviewDocumentId,
+      sourcesFolderId: row.sourcesFolderId,
+      approvedGuideDigest: row.approvedGuideDigest,
+    });
+    expect(await f.log()).toHaveLength(before.length);
+  });
+
+  it("rolls a failed first enable back to off and can be retried", async () => {
+    const f = await project();
+    await callerFor(f.owner).folder.create({
+      projectId: f.id,
+      parentPath: [],
+      name: "wiki",
+    });
+    await callerFor(f.owner).folder.create({
+      projectId: f.id,
+      parentPath: ["wiki"],
+      name: "sources",
+    });
+    await expect(f.enable()).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(await f.settings()).toMatchObject({ enabled: false });
+    const agent = await getLiveWikiAgent(f.db, f.id);
+    await expect(
+      resolveProjectAccess(
+        f.db,
+        f.id,
+        createWikiAgentSecurityContext({ agentId: agent!.id, projectId: f.id }),
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("gates settings by role and keeps non-members out", async () => {
+    const f = await project();
+    for (const user of [f.maintainer, f.editor, f.viewer])
+      await expect(
+        enableWiki(f.db, f.ctx(user), { projectId: f.id, expectedRevision: 0 }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      enableWiki(f.db, f.ctx(f.admin), {
+        projectId: f.id,
+        expectedRevision: 0,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await f.enable();
+    const revision = (await f.settings()).revision;
+
+    for (const user of [f.editor, f.viewer])
+      await expect(
+        getWikiSettings(f.db, f.ctx(user), f.id),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      getWikiSettings(f.db, f.ctx(f.admin), f.id),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    for (const user of [f.owner, f.maintainer])
+      await expect(
+        getWikiSettings(f.db, f.ctx(user), f.id),
+      ).resolves.toMatchObject({ enabled: true, revision });
+
+    const guideId = (await f.settings()).guideDocumentId!;
+    for (const user of [f.maintainer, f.editor, f.viewer]) {
+      const actor = f.ctx(user);
+      const input = { projectId: f.id, expectedRevision: revision };
+      await expect(disableWiki(f.db, actor, input)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+      await expect(revokeAgent(f.db, actor, input)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+      await expect(
+        updateWikiSettings(f.db, actor, {
+          ...input,
+          destructiveBudget24h: 5000,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        setGuideDocument(f.db, actor, { ...input, documentId: guideId }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    const review = await reviewGuide(f.db, f.ctx(f.maintainer), f.id);
+    for (const user of [f.editor, f.viewer]) {
+      await expect(
+        approveGuide(f.db, f.ctx(user), {
+          projectId: f.id,
+          expectedRevision: revision,
+          expectedDigest: review.digest,
+        }),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(reviewGuide(f.db, f.ctx(user), f.id)).rejects.toMatchObject({
+        code: "FORBIDDEN",
+      });
+    }
+    await expect(
+      approveGuide(f.db, f.ctx(f.maintainer), {
+        projectId: f.id,
+        expectedRevision: revision,
+        expectedDigest: review.digest,
+      }),
+    ).resolves.toMatchObject({
+      revision: revision + 1,
+      guide: { approvedById: f.maintainer.id },
+    });
+    expect((await f.settings()).revision).toBe(revision + 1);
+  });
+
+  it("refuses every non-session actor on every settings read and write", async () => {
+    const f = await project();
+    await f.enable();
+    const revision = (await f.settings()).revision;
+    const row = await f.settings();
+    const session = f.ctx(f.owner);
+    const actors = [
+      { ...session, authenticationMethod: "apiKey" as const },
+      { ...session, authenticationMethod: "oauth" as const },
+      { ...session, authenticationMethod: "task" as const },
+      createWikiAgentSecurityContext({
+        agentId: row.agentId!,
+        projectId: f.id,
+      }) as never,
+    ];
+    const base = { projectId: f.id, expectedRevision: revision };
+    for (const actor of actors) {
+      const calls = [
+        () => getWikiSettings(f.db, actor, f.id),
+        () => enableWiki(f.db, actor, base),
+        () => disableWiki(f.db, actor, base),
+        () => revokeAgent(f.db, actor, base),
+        () =>
+          updateWikiSettings(f.db, actor, {
+            ...base,
+            destructiveBudget24h: 5000,
+          }),
+        () =>
+          setGuideDocument(f.db, actor, {
+            ...base,
+            documentId: row.guideDocumentId!,
+          }),
+        () => reviewGuide(f.db, actor, f.id),
+        () =>
+          approveGuide(f.db, actor, {
+            ...base,
+            expectedDigest: row.approvedGuideDigest!,
+          }),
+        () => listGuideSuggestions(f.db, actor, f.id),
+        () =>
+          resolveGuideSuggestion(f.db, actor, {
+            projectId: f.id,
+            suggestionId: randomUUID(),
+          }),
+      ];
+      for (const call of calls)
+        await expect(call()).rejects.toMatchObject({ code: "FORBIDDEN" });
+    }
+    expect(await f.settings()).toMatchObject({ revision, enabled: true });
+  });
+
+  it("is compare-and-set on the revision for every write", async () => {
+    const f = await project();
+    await expect(f.enable(1)).rejects.toMatchObject({ code: "CONFLICT" });
+    await f.enable();
+    const actor = f.ctx(f.owner);
+    const stale = { projectId: f.id, expectedRevision: 99 };
+    const guideId = (await f.settings()).guideDocumentId!;
+    await expect(disableWiki(f.db, actor, stale)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    await expect(revokeAgent(f.db, actor, stale)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    await expect(
+      updateWikiSettings(f.db, actor, { ...stale, destructiveBudget24h: 5000 }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    await expect(
+      setGuideDocument(f.db, actor, { ...stale, documentId: guideId }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const review = await reviewGuide(f.db, actor, f.id);
+    await expect(
+      approveGuide(f.db, actor, { ...stale, expectedDigest: review.digest }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await f.settings()).revision).toBe(1);
+
+    const updated = await updateWikiSettings(f.db, actor, {
+      projectId: f.id,
+      expectedRevision: 1,
+      destructiveBudget24h: 50_000,
+      spendAlertCentsPerDay: 300,
+    });
+    expect(updated).toMatchObject({
+      revision: 2,
+      destructiveBudget24h: 50_000,
+      spendAlertCentsPerDay: 300,
+    });
+    await expect(
+      updateWikiSettings(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: 2,
+        destructiveBudget24h: 10,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+
+  it("disables keeping everything, re-enables the same agent, and revokes to a new one", async () => {
+    const f = await project();
+    await f.enable();
+    const first = (await getLiveWikiAgent(f.db, f.id))!;
+    const row = await f.settings();
+    const actor = f.ctx(f.owner);
+    const context = createWikiAgentSecurityContext({
+      agentId: first.id,
+      projectId: f.id,
+    });
+    await resolveProjectAccess(f.db, f.id, context);
+
+    const off = await disableWiki(f.db, actor, {
+      projectId: f.id,
+      expectedRevision: row.revision,
+    });
+    expect(off).toMatchObject({ enabled: false, guide: { approved: true } });
+    expect(await f.db.document.count({ where: { projectId: f.id } })).toBe(2);
+    await expect(
+      resolveProjectAccess(f.db, f.id, context),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const on = await f.enable(off.revision);
+    expect(on.enabled).toBe(true);
+    expect((await getLiveWikiAgent(f.db, f.id))!.id).toBe(first.id);
+    await resolveProjectAccess(f.db, f.id, context);
+    expect(await f.db.document.count({ where: { projectId: f.id } })).toBe(2);
+
+    const revoked = await revokeAgent(f.db, actor, {
+      projectId: f.id,
+      expectedRevision: on.revision,
+    });
+    expect(revoked.enabled).toBe(false);
+    expect(await getLiveWikiAgent(f.db, f.id)).toBeNull();
+    await expect(
+      resolveProjectAccess(f.db, f.id, context),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    // Old commits still resolve to the agent.
+    const history = await getHistory(
+      f.db,
+      {
+        projectId: f.id,
+        documentId: row.guideDocumentId!,
+        offset: 0,
+        limit: 5,
+      },
+      actor,
+    );
+    expect(history.entries[0]).toMatchObject({
+      machineEditor: { kind: "wikiAgent", id: first.id, name: "Wiki agent" },
+    });
+
+    const again = await f.enable(revoked.revision);
+    const second = (await getLiveWikiAgent(f.db, f.id))!;
+    expect(second.id).not.toBe(first.id);
+    expect(again.agent).toMatchObject({ id: second.id, live: true });
+    const newContext = createWikiAgentSecurityContext({
+      agentId: second.id,
+      projectId: f.id,
+    });
+    await resolveProjectAccess(f.db, f.id, newContext);
+    await expect(
+      resolveProjectAccess(f.db, f.id, context),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("requires the feature enabled and the agent to equal agentId for agent access", async () => {
+    const f = await project();
+    await f.enable();
+    const row = await f.settings();
+    const other = await makeProject("OtherAgent");
+    const stranger = await createWikiAgent(f.db, other.id);
+    await bindWikiSettings(other.id, stranger.id);
+    await f.db.projectWikiSettings.update({
+      where: { projectId: f.id },
+      data: { agentId: null },
+    });
+    await expect(
+      resolveProjectAccess(
+        f.db,
+        f.id,
+        createWikiAgentSecurityContext({
+          agentId: row.agentId!,
+          projectId: f.id,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("normalizes the guide before the digest and approves exactly what the reviewer saw", async () => {
+    const f = await project();
+    await f.enable();
+    const actor = f.ctx(f.maintainer);
+    await editGuide(
+      f,
+      "Keep pages short.\n\nHidden‮​­⁠﻿\u{e0041}️ text\n\nSee the style page at https://example.com/rules",
+    );
+    const review = await reviewGuide(f.db, actor, f.id);
+    expect(review.text).toContain("Hidden text");
+    expect(review.text).not.toMatch(/[­​-‏‪-‮⁠-⁩﻿︀-️]|\u{e0041}/u);
+    expect(review.removed.reduce((n, r) => n + r.count, 0)).toBe(7);
+    expect(review.matchesApproved).toBe(false);
+    expect(review.digest).toBe(normalizeGuideText(review.text).digest);
+    expect(review.diff.some((l) => l.type === "add")).toBe(true);
+    expect(review.diff.some((l) => l.type === "del")).toBe(true);
+    expect(review.flags.map((fl) => fl.reason)).toContain(
+      "Mentions an external address",
+    );
+
+    const revision = review.revision;
+    await expect(
+      approveGuide(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: revision,
+        expectedDigest: "0".repeat(64),
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      details: { reason: "GUIDE_CHANGED" },
+    });
+    expect((await f.settings()).approvedGuideDigest).not.toBe(review.digest);
+
+    // The reviewed text changes after review: refused, never approved blind.
+    await editGuide(f, "Something else entirely.");
+    await expect(
+      approveGuide(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: revision,
+        expectedDigest: review.digest,
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const fresh = await reviewGuide(f.db, actor, f.id);
+    const approved = await approveGuide(f.db, actor, {
+      projectId: f.id,
+      expectedRevision: revision,
+      expectedDigest: fresh.digest,
+    });
+    expect(approved.guide.approved).toBe(true);
+    const row = await f.settings();
+    expect(row.approvedGuideBody).toBe(fresh.text);
+    expect(row.approvedGuideDigest).toBe(fresh.digest);
+    expect(row.approvedGuideBody).toContain("Something else entirely.");
+    expect((await reviewGuide(f.db, actor, f.id)).matchesApproved).toBe(true);
+  });
+
+  it("refuses a guide over 16,000 bytes and never truncates", async () => {
+    const f = await project();
+    await f.enable();
+    const actor = f.ctx(f.owner);
+    const before = await f.settings();
+    await editGuide(
+      f,
+      `${"A line of guide text that is long enough.\n\n".repeat(400)}`,
+    );
+    const review = await reviewGuide(f.db, actor, f.id);
+    expect(review).toMatchObject({ tooLarge: true, text: "" });
+    expect(review.bytes).toBeGreaterThan(16_000);
+    await expect(
+      approveGuide(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: before.revision,
+        expectedDigest: review.digest,
+      }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      details: { reason: "GUIDE_TOO_LARGE" },
+    });
+    expect(await f.settings()).toMatchObject({
+      approvedGuideDigest: before.approvedGuideDigest,
+      approvedGuideBody: before.approvedGuideBody,
+    });
+  });
+
+  it("clears approval when the guide is re-pointed and refuses unsuitable targets", async () => {
+    const f = await project();
+    await f.enable();
+    const actor = f.ctx(f.owner);
+    const owner = callerFor(f.owner);
+    const page = await owner.document.create({
+      projectId: f.id,
+      folderPath: [],
+      title: "Alt guide",
+      contentJson: parseDocumentBody("Alternative guide."),
+    });
+    const revision = (await f.settings()).revision;
+
+    const other = await makeProject("Elsewhere");
+    await addMembership(other.id, f.owner.id, "Owner");
+    const foreign = await owner.document.create({
+      projectId: other.id,
+      folderPath: [],
+      title: "Foreign",
+      contentJson: parseDocumentBody("Foreign"),
+    });
+    await expect(
+      setGuideDocument(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: revision,
+        documentId: foreign.id,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    const python = await withProjectRepo(f.id, (repo) =>
+      writeDocumentInRepo(
+        f.db,
+        repo,
+        f.id,
+        {
+          kind: "create",
+          id: randomUUID(),
+          folderPath: [],
+          title: "Script",
+          content: { kind: "python", text: "print(1)\n" },
+          createdAt: new Date().toISOString(),
+        },
+        { ...f.ctx(f.owner), name: null, email: f.owner.email },
+        { operation: "create" },
+      ),
+    );
+    await expect(
+      setGuideDocument(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: revision,
+        documentId: python.id,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    const doomed = await owner.document.create({
+      projectId: f.id,
+      folderPath: [],
+      title: "Doomed",
+      contentJson: parseDocumentBody("Soon gone"),
+    });
+    await owner.document.delete({ projectId: f.id, documentId: doomed.id });
+    await expect(
+      setGuideDocument(f.db, actor, {
+        projectId: f.id,
+        expectedRevision: revision,
+        documentId: doomed.id,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect((await f.settings()).approvedGuideDigest).not.toBeNull();
+
+    const moved = await setGuideDocument(f.db, actor, {
+      projectId: f.id,
+      expectedRevision: revision,
+      documentId: page.id,
+    });
+    expect(moved).toMatchObject({
+      revision: revision + 1,
+      guide: { documentId: page.id, approved: false, approvedAt: null },
+    });
+    expect(await f.settings()).toMatchObject({
+      approvedGuideBody: null,
+      approvedGuideDigest: null,
+      approvedGuideCommitSha: null,
+    });
+    const review = await reviewGuide(f.db, actor, f.id);
+    expect(review).toMatchObject({
+      matchesApproved: false,
+      title: "Alt guide",
+    });
+    expect(review.diff).toEqual([]);
+  });
+
+  it("keeps the guide and source folders unwritable through applyWikiOperation with the real guards", async () => {
+    const f = await project();
+    await f.enable();
+    const row = await f.settings();
+    const agent = (await getLiveWikiAgent(f.db, f.id))!;
+    const guards = await wikiWriteGuardsFor(f.db, f.id);
+    expect(guards).toEqual({
+      guideDocumentId: row.guideDocumentId,
+      sourceFolderPaths: ["wiki/sources"],
+    });
+    const runId = randomUUID();
+    const run: WikiWriteFence = {
+      agentId: agent.id,
+      projectId: f.id,
+      runId,
+      assertLive: async () => {},
+    };
+    let n = 0;
+    const apply = (operation: WikiOperation) =>
+      applyWikiOperation(f.db, {
+        run,
+        guards: () => wikiWriteGuardsFor(f.db, f.id),
+        operation,
+        operationId: `wiki-run:${runId}:${String(++n).padStart(4, "0")}`,
+      });
+    const guide = await f.db.document.findUniqueOrThrow({
+      where: { id: row.guideDocumentId! },
+    });
+    await expect(
+      apply({
+        kind: "document.patch",
+        projectId: f.id,
+        documentId: guide.id,
+        baseCommitSha: guide.headCommitSha,
+        actions: [{ action: "append", text: "Take over." }],
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      apply({
+        kind: "document.create",
+        projectId: f.id,
+        folderPath: ["wiki", "sources"],
+        title: "Sneaky",
+        markdown: "x",
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      apply({
+        kind: "document.create",
+        projectId: f.id,
+        folderPath: ["wiki"],
+        title: "Fine",
+        markdown: "x",
+      }),
+    ).resolves.toMatchObject({ recovered: false });
+
+    // Re-pointing the guide moves the protection with it.
+    const alt = await callerFor(f.owner).document.create({
+      projectId: f.id,
+      folderPath: [],
+      title: "Alt",
+      contentJson: parseDocumentBody("Alt"),
+    });
+    await setGuideDocument(f.db, f.ctx(f.owner), {
+      projectId: f.id,
+      expectedRevision: row.revision,
+      documentId: alt.id,
+    });
+    await expect(
+      apply({
+        kind: "document.patch",
+        projectId: f.id,
+        documentId: alt.id,
+        baseCommitSha: alt.headCommitSha,
+        actions: [{ action: "append", text: "Nope." }],
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // The old guide, no longer the guide, is an ordinary page.
+    await expect(
+      apply({
+        kind: "document.patch",
+        projectId: f.id,
+        documentId: guide.id,
+        baseCommitSha: guide.headCommitSha,
+        actions: [{ action: "append", text: "Ordinary now." }],
+      }),
+    ).resolves.toMatchObject({ recovered: false });
+  });
+
+  it("lists and dismisses guide suggestions for Maintainers", async () => {
+    const f = await project();
+    await f.enable();
+    const suggestion = await f.db.wikiGuideSuggestion.create({
+      data: {
+        projectId: f.id,
+        runId: randomUUID(),
+        text: "Prefer short titles.",
+      },
+    });
+    expect(
+      await listGuideSuggestions(f.db, f.ctx(f.maintainer), f.id),
+    ).toMatchObject([{ id: suggestion.id, text: "Prefer short titles." }]);
+    expect(
+      (await getWikiSettings(f.db, f.ctx(f.owner), f.id)).openSuggestions,
+    ).toBe(1);
+    await expect(
+      resolveGuideSuggestion(f.db, f.ctx(f.editor), {
+        projectId: f.id,
+        suggestionId: suggestion.id,
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await resolveGuideSuggestion(f.db, f.ctx(f.maintainer), {
+      projectId: f.id,
+      suggestionId: suggestion.id,
+    });
+    expect(await listGuideSuggestions(f.db, f.ctx(f.owner), f.id)).toEqual([]);
+    await expect(
+      resolveGuideSuggestion(f.db, f.ctx(f.maintainer), {
+        projectId: f.id,
+        suggestionId: suggestion.id,
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("reports route readiness from the wiki route and serves the router for sessions", async () => {
+    const f = await project();
+    const caller = callerFor(f.owner);
+    expect(await caller.wiki.settings({ projectId: f.id })).toMatchObject({
+      enabled: false,
+      revision: 0,
+      routeReady: false,
+    });
+    const { admin } = await seedTestLlmRouting();
+    const model = await f.db.llmModel.findFirstOrThrow({
+      where: { providerModelId: "test-extraction" },
+    });
+    await setLlmRoute(f.db, securityContextFor(admin), {
+      purpose: "wiki",
+      modelId: model.id,
+    });
+    const enabled = await caller.wiki.enable({
+      projectId: f.id,
+      expectedRevision: 0,
+    });
+    expect(enabled).toMatchObject({ enabled: true, routeReady: true });
+    await expect(
+      callerFor(f.editor).wiki.settings({ projectId: f.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      callerFor(f.admin).wiki.settings({ projectId: f.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

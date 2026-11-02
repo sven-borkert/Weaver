@@ -14,6 +14,7 @@ export const DIAGNOSTIC_CATEGORIES = [
   "diagnostics",
   "content",
   "exam",
+  "wiki",
 ] as const;
 export type DiagnosticCategory = (typeof DIAGNOSTIC_CATEGORIES)[number];
 
@@ -28,6 +29,9 @@ export const DIAGNOSTIC_CATEGORY_OF = {
   "exam.attempt.expired": "exam",
   "exam.attempt.graded": "exam",
   "exam.attempt.released": "exam",
+
+  "wiki.settings.changed": "wiki",
+  "wiki.guide.approved": "wiki",
 
   "external.call.prepared": "mcp",
   "external.call.dispatched": "mcp",

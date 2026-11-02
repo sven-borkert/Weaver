@@ -1515,6 +1515,37 @@ describe("machine commit authors", () => {
     });
   });
 
+  it("lets only a wiki-bootstrap operation id omit the run id, and forbids it there", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const bootstrap = {
+        operationId: `wiki-bootstrap:${randomUUID()}:0001`,
+        wikiRequestHash: "c".repeat(64),
+      };
+      await repo.writeFileAtomic("b.md", "body\n");
+      await expect(
+        repo.commitAll("b", agent, { ...bootstrap, runId: "r1" }),
+      ).rejects.toThrow(/wiki/i);
+      await expect(
+        repo.commitAll("b", agent, {
+          ...bootstrap,
+          operationId: "wiki-input:xyz",
+        }),
+      ).rejects.toThrow(/wiki/i);
+      const sha = await repo.commitAll("b", agent, bootstrap);
+      const raw = await simpleGit(repo.dir).raw(["log", "-1", "--format=%B"]);
+      expect(raw).not.toContain("Weaver-Run-Id");
+      expect(raw).toContain(`Weaver-Operation-Id: ${bootstrap.operationId}`);
+      const [entry] = await repo.logForPath("b.md", { skip: 0, limit: 1 });
+      expect(entry).toMatchObject({
+        sha,
+        trustedAuthor: true,
+        wikiAgentId: agentId,
+        runId: null,
+      });
+    });
+  });
+
   it("reports forged agent trailers as untrusted", async () => {
     const { withProjectRepo } = await import("./gitStore");
     await withProjectRepo(randomUUID(), async (repo) => {
