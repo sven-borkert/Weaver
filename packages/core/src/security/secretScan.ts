@@ -202,13 +202,13 @@ const RULES: Rule[] = [
   },
   {
     kind: "iban",
-    pattern: /(?<![A-Za-z0-9])[A-Z]{2}\d{2}(?:[ \t -]?[A-Z0-9]){11,30}/gi,
+    pattern: /(?<![A-Za-z0-9])[A-Z]{2}\d{2}(?:[ \t\u00a0-]?[A-Z0-9]){11,30}/gi,
     accept: (match) => ibanPrefixValid(match[0]),
     retryInside: true,
   },
   {
     kind: "card_number",
-    pattern: /(?<![0-9])[0-9](?:[ \t -]?[0-9]){12,63}/g,
+    pattern: /(?<![0-9])[0-9](?:[ \t\u00a0-]?[0-9]){12,63}/g,
     accept: (match) => cardInRun(match[0]),
   },
 ];
