@@ -1,4 +1,5 @@
 import { constants } from "node:fs";
+import { WIKI_UNPROTECTING_ITEM_STATUSES } from "../wiki/states";
 import { open } from "node:fs/promises";
 import { parseServerEnv } from "@weaver/config/server";
 import { createHash } from "node:crypto";
@@ -63,6 +64,28 @@ export type ArtifactUploadFile = {
 };
 
 const notFound = () => new CoreError("NOT_FOUND", "not found");
+
+/** A live wiki input pins its original; failed and removed items lift this. */
+async function assertNotWikiSources(
+  db: Db,
+  projectId: string,
+  artifactIds: readonly string[],
+): Promise<void> {
+  if (artifactIds.length === 0) return;
+  const protectedCount = await db.wikiInputItem.count({
+    where: {
+      projectId,
+      artifactId: { in: [...artifactIds] },
+      status: { notIn: [...WIKI_UNPROTECTING_ITEM_STATUSES] },
+    },
+  });
+  if (protectedCount > 0)
+    throw new CoreError(
+      "CONFLICT",
+      "This file is a wiki input. Remove it from the wiki input before replacing or deleting it.",
+      { reason: "SOURCE_PROTECTED" },
+    );
+}
 
 async function projectIdFor(
   db: Db,
@@ -285,6 +308,11 @@ export async function finalizeArtifactUpload(
           "a file with this name already exists",
           { conflicts },
         );
+      await assertNotWikiSources(
+        tx,
+        projectId,
+        existing.map((row) => row.id),
+      );
       const retained = await retainedBytes(
         tx,
         projectId,
@@ -535,6 +563,7 @@ export async function deleteArtifact(
         select: { id: true, contentDigest: true },
       });
       if (!artifact) throw notFound();
+      await assertNotWikiSources(tx, projectId, [artifact.id]);
       await tx.artifact.delete({ where: { id: artifact.id } });
       return {
         projectId,

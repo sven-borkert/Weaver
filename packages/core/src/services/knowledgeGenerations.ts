@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isAiExempt } from "../knowledge/aiExempt";
 import { carryForwardGraph } from "./knowledgeCarryForward";
 import { knowledgeTransaction } from "./knowledgeTargets";
 import { refreshEntityDescriptions } from "./knowledgeEntityDescriptions";
@@ -101,6 +102,7 @@ type LiveDocument = {
   id: string;
   path: string;
   headCommitSha: string;
+  wikiSourceItemId?: string | null;
 };
 type GenerationCounts = { total: number; ready: number; failed: number };
 
@@ -284,10 +286,21 @@ export async function resumeGenerationBuild(
       },
       orderBy: { id: "asc" },
       take: GENERATION_BATCH_SIZE + 1,
-      select: { id: true, path: true, headCommitSha: true },
+      select: {
+        id: true,
+        path: true,
+        headCommitSha: true,
+        wikiSourceItemId: true,
+      },
     });
     const hasMore = page.length > GENERATION_BATCH_SIZE;
-    const documents = page.slice(0, GENERATION_BATCH_SIZE);
+    const pageDocuments = page.slice(0, GENERATION_BATCH_SIZE);
+    await markExemptDocumentsReady(
+      tx,
+      generation,
+      pageDocuments.filter(isAiExempt),
+    );
+    const documents = pageDocuments.filter((document) => !isAiExempt(document));
     const existingStates = await tx.knowledgeGenerationDocument.findMany({
       where: {
         generationId: generation.id,
@@ -335,12 +348,12 @@ export async function resumeGenerationBuild(
       jobs,
       keywordJobs,
       continuation:
-        hasMore && documents.length > 0
+        hasMore && pageDocuments.length > 0
           ? {
               projectId: payload.projectId,
               generationId: generation.id,
               configFingerprint: generation.configFingerprint,
-              cursor: documents.at(-1)!.id,
+              cursor: pageDocuments.at(-1)!.id,
             }
           : null,
     };
@@ -365,7 +378,7 @@ export async function recordDocumentChangeForGenerations(
   db: PrismaClient,
   payload: KnowledgeJobPayloads["document.search-sync"],
 ): Promise<number> {
-  void context;
+  let exemptGenerations: string[] = [];
   const jobs = await knowledgeTransaction(db, async (tx) => {
     if (!(await lockLiveProject(tx, payload.projectId))) return [];
     const generations = await lockCurrentProjectGenerations(
@@ -373,7 +386,7 @@ export async function recordDocumentChangeForGenerations(
       payload.projectId,
     );
     const [document] = await tx.$queryRaw<LiveDocument[]>(Prisma.sql`
-      SELECT "id", "path", "headCommitSha"
+      SELECT "id", "path", "headCommitSha", "wikiSourceItemId"
       FROM "Document"
       WHERE "id" = ${payload.documentId}::uuid
         AND "projectId" = ${payload.projectId}::uuid
@@ -383,6 +396,12 @@ export async function recordDocumentChangeForGenerations(
       document?.headCommitSha !== payload.sourceCommitSha ||
       document.path !== payload.pathAtSha
     ) {
+      return [];
+    }
+    if (isAiExempt({ wikiSourceItemId: document.wikiSourceItemId ?? null })) {
+      for (const generation of generations)
+        await markExemptDocumentsReady(tx, generation, [document]);
+      exemptGenerations = generations.map((generation) => generation.id);
       return [];
     }
     const pendingJobs: GenerationDocumentPayload[] = [];
@@ -415,7 +434,214 @@ export async function recordDocumentChangeForGenerations(
     }
     return pendingJobs;
   });
+  for (const generationId of exemptGenerations)
+    await activateCompletedGeneration(context, db, {
+      projectId: payload.projectId,
+      generationId,
+    });
   return enqueueGenerationJobs(jobs);
+}
+
+/** A terminal ready row at the head commit, its counters refreshed; never a provider call. */
+async function markExemptDocumentsReady(
+  tx: Prisma.TransactionClient,
+  generation: Pick<
+    KnowledgeGeneration,
+    "id" | "projectId" | "configFingerprint"
+  >,
+  documents: ReadonlyArray<Pick<LiveDocument, "id" | "headCommitSha">>,
+): Promise<void> {
+  if (documents.length === 0) return;
+  for (const document of documents)
+    await purgeDocumentAiState(tx, generation.projectId, document.id);
+  const values = documents.map(
+    (document) => Prisma.sql`
+    (
+      ${generation.id}::uuid,
+      ${document.id}::uuid,
+      ${generation.projectId}::uuid,
+      ${document.headCommitSha},
+      ${document.headCommitSha},
+      ${document.headCommitSha},
+      ${generation.configFingerprint},
+      'ready'::"KnowledgeDocumentStatus",
+      ${UTC_NOW},
+      ${UTC_NOW},
+      ${UTC_NOW}
+    )
+  `,
+  );
+  await tx.$executeRaw(Prisma.sql`
+    INSERT INTO "KnowledgeGenerationDocument" (
+      "generationId",
+      "documentId",
+      "projectId",
+      "targetSha",
+      "semanticIndexedSha",
+      "graphIndexedSha",
+      "configFingerprint",
+      "status",
+      "completedAt",
+      "createdAt",
+      "updatedAt"
+    )
+    VALUES ${Prisma.join(values)}
+    ON CONFLICT ("generationId", "documentId") DO UPDATE SET
+      "targetSha" = EXCLUDED."targetSha",
+      "semanticIndexedSha" = EXCLUDED."semanticIndexedSha",
+      "graphIndexedSha" = EXCLUDED."graphIndexedSha",
+      "configFingerprint" = EXCLUDED."configFingerprint",
+      "status" = 'ready',
+      "processingClaimToken" = NULL,
+      "processingJobId" = NULL,
+      "processingRetryCount" = NULL,
+      "failureKind" = NULL,
+      "failureSummary" = NULL,
+      "completedAt" = EXCLUDED."completedAt",
+      "updatedAt" = EXCLUDED."updatedAt"
+  `);
+  await refreshGenerationCounters(tx, generation.id, generation.projectId);
+}
+
+/** Vectors deleted, mentions and evidence invalidated; safe to repeat. */
+async function purgeDocumentAiState(
+  tx: Prisma.TransactionClient,
+  projectId: string,
+  documentId: string,
+): Promise<void> {
+  const invalidatedAt = new Date();
+  const mentions = await tx.entityMention.updateMany({
+    where: { projectId, documentId, invalidatedAt: null },
+    data: { invalidatedAt },
+  });
+  if (mentions.count > 0)
+    await refreshEntityDescriptions(tx, { projectId, documentId });
+  await tx.relationEvidence.updateMany({
+    where: { projectId, documentId, invalidatedAt: null },
+    data: { invalidatedAt },
+  });
+  await tx.$executeRaw(Prisma.sql`
+    DELETE FROM "KnowledgeEmbedding" AS embedding
+    USING "DocumentSearchChunk" AS chunk
+    WHERE embedding."projectId" = ${projectId}::uuid
+      AND embedding."ownerType" = 'document_chunk'
+      AND chunk."id" = embedding."ownerId"
+      AND chunk."projectId" = embedding."projectId"
+      AND chunk."documentId" = ${documentId}::uuid
+  `);
+}
+
+/** An exempt document's delivery or block ends here; returns false for an ordinary one. */
+async function finishIfExempt(
+  context: KnowledgeSystemContext,
+  db: PrismaClient,
+  input: { projectId: string; documentId: string; generationId: string },
+): Promise<boolean> {
+  const exempt = await knowledgeTransaction(db, async (tx) => {
+    if (!(await lockLiveProject(tx, input.projectId))) return false;
+    const [document] = await tx.$queryRaw<LiveDocument[]>(Prisma.sql`
+      SELECT "id", "path", "headCommitSha", "wikiSourceItemId"
+      FROM "Document"
+      WHERE "id" = ${input.documentId}::uuid
+        AND "projectId" = ${input.projectId}::uuid
+      FOR UPDATE
+    `);
+    if (
+      !document ||
+      !isAiExempt({ wikiSourceItemId: document.wikiSourceItemId ?? null })
+    )
+      return false;
+    const generation = await lockGeneration(tx, input.generationId);
+    if (
+      generation?.projectId === input.projectId &&
+      ["active", "building"].includes(generation.status)
+    )
+      await markExemptDocumentsReady(tx, generation, [document]);
+    return true;
+  });
+  if (exempt) await activateCompletedGeneration(context, db, input);
+  return exempt;
+}
+
+/**
+ * A change of Document.wikiSourceItemId. To exempt: vectors and graph evidence go and the row
+ * becomes terminal ready. Back: the row resets to pending and enrichment is enqueued, because
+ * reconcile would otherwise see a complete row and never index the page.
+ */
+export async function flipDocumentAiExempt(
+  context: KnowledgeSystemContext,
+  db: PrismaClient,
+  input: { projectId: string; documentId: string },
+): Promise<void> {
+  const flipped = await knowledgeTransaction(db, async (tx) => {
+    if (!(await lockLiveProject(tx, input.projectId))) return null;
+    const generations = await lockCurrentProjectGenerations(
+      tx,
+      input.projectId,
+    );
+    const [document] = await tx.$queryRaw<LiveDocument[]>(Prisma.sql`
+      SELECT "id", "path", "headCommitSha", "wikiSourceItemId"
+      FROM "Document"
+      WHERE "id" = ${input.documentId}::uuid
+        AND "projectId" = ${input.projectId}::uuid
+      FOR UPDATE
+    `);
+    if (!document) return null;
+    const exempt = isAiExempt({
+      wikiSourceItemId: document.wikiSourceItemId ?? null,
+    });
+    const jobs: GenerationDocumentPayload[] = [];
+    for (const generation of generations) {
+      if (exempt) {
+        await markExemptDocumentsReady(tx, generation, [document]);
+        continue;
+      }
+      await tx.knowledgeGenerationDocument.upsert({
+        where: {
+          generationId_documentId: {
+            generationId: generation.id,
+            documentId: document.id,
+          },
+        },
+        create: {
+          generationId: generation.id,
+          documentId: document.id,
+          projectId: generation.projectId,
+          targetSha: document.headCommitSha,
+          configFingerprint: generation.configFingerprint,
+          status: "pending",
+          attempts: 0,
+        },
+        update: {
+          targetSha: document.headCommitSha,
+          semanticIndexedSha: null,
+          graphIndexedSha: null,
+          configFingerprint: generation.configFingerprint,
+          status: "pending",
+          attempts: 0,
+          processingClaimToken: null,
+          processingJobId: null,
+          processingRetryCount: null,
+          failureKind: null,
+          failureSummary: null,
+          completedAt: null,
+        },
+      });
+      await refreshGenerationCounters(tx, generation.id, input.projectId);
+      jobs.push(generationJob(generation, document));
+    }
+    return {
+      jobs,
+      generationIds: exempt ? generations.map((row) => row.id) : [],
+    };
+  });
+  if (!flipped) return;
+  for (const generationId of flipped.generationIds)
+    await activateCompletedGeneration(context, db, {
+      projectId: input.projectId,
+      generationId,
+    });
+  await enqueueGenerationJobs(flipped.jobs);
 }
 
 // Best effort: a failed repair must never fail a document that is already ready.
@@ -508,6 +734,7 @@ export async function processGenerationDocument(
   },
 ): Promise<{ outcome: "ready" | "failed" | "stale" }> {
   throwIfAborted(options?.signal);
+  if (await finishIfExempt(context, db, input)) return { outcome: "ready" };
   // A job cancellation stays a cancellation; only the deadline becomes a retryable failure.
   const deadline = AbortSignal.timeout(
     options?.deadlineMs ?? KNOWLEDGE_ENRICHMENT_DEADLINE_MS,
@@ -782,6 +1009,7 @@ export async function blockGenerationDocumentForConfiguration(
   input: GenerationDocumentPayload,
   delivery?: ProcessingDelivery,
 ): Promise<void> {
+  if (await finishIfExempt(context, db, input)) return;
   const prepared = await prepareGenerationDocument(
     context,
     db,
@@ -851,11 +1079,25 @@ export async function blockGenerationBuildForConfiguration(
       },
       orderBy: { id: "asc" },
       take: GENERATION_BATCH_SIZE + 1,
-      select: { id: true, path: true, headCommitSha: true },
+      select: {
+        id: true,
+        path: true,
+        headCommitSha: true,
+        wikiSourceItemId: true,
+      },
     });
     const hasMore = page.length > GENERATION_BATCH_SIZE;
     const documents = page.slice(0, GENERATION_BATCH_SIZE);
-    await bulkBlockGenerationDocuments(tx, generation, documents);
+    await markExemptDocumentsReady(
+      tx,
+      generation,
+      documents.filter(isAiExempt),
+    );
+    await bulkBlockGenerationDocuments(
+      tx,
+      generation,
+      documents.filter((document) => !isAiExempt(document)),
+    );
     if (!hasMore) {
       await refreshGenerationCounters(tx, generation.id, payload.projectId);
       await tx.knowledgeGeneration.updateMany({

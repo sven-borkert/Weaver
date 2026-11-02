@@ -2,6 +2,8 @@ import {
   withAppearanceAssetsInRepo,
   type AppearanceAsset,
 } from "./appearanceAssets";
+import { createKnowledgeSystemContextForRuntime } from "../jobs/systemContext";
+import { flipDocumentAiExempt } from "./knowledgeGenerations";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
 import { presentWikiProperties } from "./wikiProperties";
 import {
@@ -779,6 +781,7 @@ async function persistDocumentProjection(
   projection: Projection,
 ): Promise<void> {
   const committedAt = await repo.commitDate(projection.sha);
+  let linkChanged = false;
   await db.$transaction(async (tx) => {
     const [metadata] = await documentMetadataColumns(tx, [projection.meta]);
     const wikiSourceItemId =
@@ -815,6 +818,11 @@ async function persistDocumentProjection(
         data: { keywordIndexedSha: null, status: "pending", completedAt: null },
       });
     } else {
+      const previous = await tx.document.findUnique({
+        where: { id: projection.id },
+        select: { wikiSourceItemId: true },
+      });
+      linkChanged = (previous?.wikiSourceItemId ?? null) !== wikiSourceItemId;
       await tx.document.update({
         where: { id: projection.id, projectId: projection.projectId },
         data,
@@ -828,6 +836,11 @@ async function persistDocumentProjection(
       projection.meta.review,
     );
   });
+  if (linkChanged)
+    await flipDocumentAiExempt(createKnowledgeSystemContextForRuntime(), db, {
+      projectId: projection.projectId,
+      documentId: projection.id,
+    });
 }
 
 function reportProjectionFailure(input: {
@@ -1967,6 +1980,7 @@ export async function rebuildIndex(
   skipped: Array<{ path: string; reason: string }>;
 }> {
   await assertProjectRole(db, input.projectId, actor, "Maintainer");
+  let flips: string[] = [];
   const report = await withExistingProjectRepoReader(
     input.projectId,
     async (repo) => {
@@ -2084,6 +2098,22 @@ export async function rebuildIndex(
         input.projectId,
         rows.map((row) => row.id),
       );
+      const linkBefore = new Map(
+        (
+          await db.document.findMany({
+            where: { id: { in: rows.map((row) => row.id) } },
+            select: { id: true, wikiSourceItemId: true },
+          })
+        ).map((row) => [row.id, row.wikiSourceItemId]),
+      );
+      flips = rows
+        .filter(
+          (row) =>
+            linkBefore.has(row.id) &&
+            (linkBefore.get(row.id) ?? null) !==
+              (sourceItems.get(row.id) ?? null),
+        )
+        .map((row) => row.id);
 
       await db.$transaction(async (tx) => {
         await tx.document.deleteMany({
@@ -2165,6 +2195,11 @@ export async function rebuildIndex(
     indexed: 0,
     skipped: [{ path: "", reason: "project repository not found" }],
   };
+  for (const documentId of flips)
+    await flipDocumentAiExempt(createKnowledgeSystemContextForRuntime(), db, {
+      projectId: input.projectId,
+      documentId,
+    });
   await enqueueProjectReconcile(input.projectId);
   return result;
 }

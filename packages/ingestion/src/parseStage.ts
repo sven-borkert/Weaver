@@ -292,12 +292,15 @@ export function createIngestionParseRunner(
       return;
     }
     if (!committed) return;
-    const queuedNext = await publishStage("ingestion.analyze", {
-      fileId: file.id,
-      projectId: file.projectId,
-      contentDigest: file.contentDigest,
-      baseAttemptCount: file.attemptCount,
-    });
+    // A wiki file stops at ready; only the wiki tick accepts it.
+    const queuedNext =
+      file.origin === "wiki" ||
+      (await publishStage("ingestion.analyze", {
+        fileId: file.id,
+        projectId: file.projectId,
+        contentDigest: file.contentDigest,
+        baseAttemptCount: file.attemptCount,
+      }));
     emitDiagnostic({
       event: "ingestion.parse.completed",
       ...(queuedNext ? {} : { severity: "warn" as const }),

@@ -1698,6 +1698,7 @@ describe("knowledge job queue", () => {
     );
     expect(queue.schedules).toEqual([
       { name: "project.git-sync", cron: "* * * * *" },
+      { name: "wiki.tick", cron: "* * * * *" },
       { name: "system.reconcile", cron: "0 3 * * *" },
       { name: "assistant.reconcile", cron: "*/2 * * * *" },
       { name: "task.tick", cron: "* * * * *" },

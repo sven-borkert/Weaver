@@ -111,7 +111,11 @@ export function BatchTable({
                     </button>
                   </TableCell>
                   <TableCell className="text-text-2">
-                    {batch.origin === "upload" ? "Upload" : "External"}
+                    {batch.origin === "upload"
+                      ? "Upload"
+                      : batch.origin === "wiki"
+                        ? "Wiki"
+                        : "External"}
                   </TableCell>
                   <TableCell className="text-text-2">
                     {batch.fileCount}

@@ -3,6 +3,12 @@ name: weaver-knowledge-graph
 description: Use when working on Weaver knowledge indexing, hybrid search, entity/relation extraction, temporal provenance, graph APIs, pgvector queries, pg-boss knowledge jobs, or the graph/search UI.
 ---
 
+Source pages (`Document.wikiSourceItemId` set) are keyword-only. `knowledge/aiExempt.ts` is the one predicate, in TypeScript and SQL,
+tested together. Change recording, `resumeGenerationBuild`, carry-forward, `processGenerationDocument` and the route-block paths give
+such a document a terminal `ready` row with both indexed shas at head and never a provider call. `flipDocumentAiExempt` handles a changed
+link: to exempt it deletes vectors and invalidates mentions and evidence; back it resets the row to pending and enqueues enrichment,
+because reconcile would see a complete row.
+
 # Weaver Knowledge Index and Graph
 
 Git Markdown is document truth. PostgreSQL keyword, vector, graph, state, and

@@ -186,6 +186,16 @@ is the agent's only write path.
   revision bump, which clears `sourceFoldersUnresolved`. It never writes into an ambiguous folder.
 - A recovered commit whose page no longer exists fails the item `SOURCE_DELETED`; the id cannot be reused.
 
+## File inputs
+
+- `addFileInputs` takes only the caller's uploads in the v1 types, checked by sniffed content. `processInputs` runs inside the
+  lifecycle lock and bridges each file item (`bridgeFileItems`): a live source skips it and never gets a second `IngestionFile`, a failed
+  parse resets, a retired (`rejected`) file is replaced.
+- `wikiPrepare.prepareFile` waits for `ready`, scans file name, draft and every cell, holds on a hit with the draft parked, then claims
+  `accepting`, writes, and finalizes with the draft cleared. Parse failures fail the item with the parser's reason; warnings go to
+  `outcomeNote`; failure, Remove and the 75-minute limit retire the file so retention applies.
+- The hold digest covers the file name and draft. Confirm binds to it.
+
 ## Secrets in titles
 
 A title is authored text that Viewers see, so `safeInputTitle` scans the whole candidate (a secret past the cut-off cannot leave

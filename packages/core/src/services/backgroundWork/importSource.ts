@@ -39,7 +39,8 @@ export function importSourceSql(access: WorkQueryAccess): Prisma.Sql {
         coalesce(greatest(f."parseEndedAt", f."analyzeEndedAt", f."linkEndedAt"), CASE WHEN f.status = 'failed' THEN f."updatedAt" END) AS "finishedAt",
         coalesce(greatest(f."parseEndedAt", f."analyzeEndedAt", f."linkEndedAt"), CASE WHEN f.status = 'failed' THEN f."updatedAt" END, f."createdAt") AS "resultAt"
     ) normalized
-    WHERE ${access.audience === "mine" ? Prisma.sql`b."createdById" = ${access.actor.userId}::uuid` : Prisma.sql`p."canMaintain"`}
+    WHERE b."origin" <> 'wiki'
+      AND ${access.audience === "mine" ? Prisma.sql`b."createdById" = ${access.actor.userId}::uuid` : Prisma.sql`p."canMaintain"`}
       AND (normalized.state IN ('queued', 'running') OR normalized."resultAt" >= ${windowStart})
       ${access.projectId ? Prisma.sql`AND p.id = ${access.projectId}::uuid` : Prisma.empty}
   `;

@@ -6,6 +6,7 @@ import {
 } from "@weaver/db/client";
 
 import { documentIndexLights } from "../documents/indexLight";
+import { isAiExempt } from "../knowledge/aiExempt";
 import { generationEmbedding } from "../knowledge/generationEmbedding";
 import { projectRoleAtLeast } from "../roles";
 import { cachedKnowledgeRouting } from "./llmRoutes";
@@ -28,7 +29,7 @@ export async function getDocumentKnowledge(
   const includeModels = projectRoleAtLeast(access.effectiveRole, "Maintainer");
   const document = await db.document.findFirst({
     where: { id: input.documentId, projectId },
-    select: { id: true, headCommitSha: true },
+    select: { id: true, headCommitSha: true, wikiSourceItemId: true },
   });
   if (!document) throw new CoreError("NOT_FOUND");
   const head = document.headCommitSha;
@@ -97,7 +98,10 @@ export async function getDocumentKnowledge(
       generationFailureSummary: lightState?.failureSummary ?? null,
     },
     lightGeneration,
-    { coveredByBuild: active !== null && building !== null },
+    {
+      coveredByBuild: active !== null && building !== null,
+      aiExempt: isAiExempt(document),
+    },
   );
 
   return {

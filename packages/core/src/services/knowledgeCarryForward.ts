@@ -1,5 +1,6 @@
 import { Prisma } from "@weaver/db/client";
 
+import { aiExemptSql } from "../knowledge/aiExempt";
 import { UTC_NOW } from "./sql";
 
 export type CarryForwardInput = {
@@ -101,9 +102,11 @@ export async function carryForwardGraph(
        "graphIndexedSha", "configFingerprint", "extractionFingerprint",
        "extractionModel", "status", "attempts", "createdAt", "updatedAt")
     SELECT ${target}::uuid, state."documentId", state."projectId", state."graphIndexedSha",
-           NULL, state."graphIndexedSha", ${input.configFingerprint},
+           CASE WHEN ${aiExemptSql("document")} THEN state."graphIndexedSha" END,
+           state."graphIndexedSha", ${input.configFingerprint},
            state."extractionFingerprint", state."extractionModel",
-           'pending'::"KnowledgeDocumentStatus", 0, ${UTC_NOW}, ${UTC_NOW}
+           (CASE WHEN ${aiExemptSql("document")} THEN 'ready' ELSE 'pending' END)::"KnowledgeDocumentStatus",
+           0, ${UTC_NOW}, ${UTC_NOW}
     FROM "KnowledgeGenerationDocument" state
     JOIN "Document" document
       ON document."id" = state."documentId"

@@ -120,6 +120,82 @@ const STAGE_RESET_DATA: Record<
 
 const notFound = () => new CoreError("NOT_FOUND", "ingestion record not found");
 
+/** Files only the wiki bridge may create; no user-facing path reaches this. */
+export async function createWikiIngestionFile(
+  tx: Prisma.TransactionClient,
+  input: {
+    batchId: string;
+    projectId: string;
+    fileName: string;
+    mimeType: string;
+    byteSize: number;
+    contentDigest: string;
+  },
+): Promise<{ id: string; attemptCount: number }> {
+  return tx.ingestionFile.create({
+    data: {
+      batchId: input.batchId,
+      projectId: input.projectId,
+      fileName: input.fileName.slice(0, 255),
+      mimeType: validateFileMetadata(input),
+      byteSize: input.byteSize,
+      contentDigest: input.contentDigest,
+    },
+    select: { id: true, attemptCount: true },
+  });
+}
+
+/** A failed parse goes back to pending for the wiki's Retry; the Imports retry refuses this origin. */
+export async function resetWikiIngestionFile(
+  tx: Prisma.TransactionClient,
+  fileId: string,
+): Promise<{ attemptCount: number } | null> {
+  const reset = await tx.ingestionFile.updateManyAndReturn({
+    where: {
+      id: fileId,
+      status: { in: ["failed", "blocked_configuration"] },
+      batch: { origin: "wiki" },
+    },
+    data: {
+      ...STAGE_RESET_DATA.parse,
+      failureKind: null,
+      failureMessage: null,
+      stageClaimJobId: null,
+      stageClaimRetryCount: null,
+    },
+    select: { attemptCount: true },
+  });
+  return reset[0] ?? null;
+}
+
+/** Terminal, draft cleared, so retention applies; rejecting also fences a parser still running. */
+export async function retireWikiIngestionFile(
+  tx: Prisma.TransactionClient,
+  fileId: string,
+): Promise<void> {
+  const retired = await tx.ingestionFile.updateMany({
+    where: {
+      id: fileId,
+      status: { not: "accepted" },
+      batch: { origin: "wiki" },
+    },
+    data: {
+      status: "rejected",
+      stageClaimJobId: null,
+      stageClaimRetryCount: null,
+    },
+  });
+  if (retired.count === 1)
+    await tx.ingestionDraft.updateMany({
+      where: { fileId },
+      data: {
+        markdown: null,
+        tableRows: Prisma.DbNull,
+        tableSchema: Prisma.DbNull,
+      },
+    });
+}
+
 function badRequest(field: string, message: string): CoreError {
   return new CoreError("BAD_REQUEST", message, { field });
 }
@@ -470,7 +546,11 @@ export async function withProjectIngestionLifecycleLock<T>(
 async function loadBatch(db: Db, actor: UserSecurityContext, batchId: string) {
   if (!UUID_RE.test(batchId)) throw notFound();
   const batch = await db.ingestionBatch.findFirst({
-    where: { id: batchId, project: { ...notDeleted } },
+    where: {
+      id: batchId,
+      origin: { not: "wiki" },
+      project: { ...notDeleted },
+    },
     include: {
       createdBy: { select: { id: true, name: true, email: true } },
       files: {
@@ -808,6 +888,7 @@ export async function listBatches(
   const filters: Prisma.IngestionBatchWhereInput[] = [
     {
       projectId: input.projectId,
+      origin: { not: "wiki" },
       project: { ...notDeleted },
     },
   ];
@@ -868,8 +949,13 @@ export async function loadIngestionFile(
   withDraft = true,
 ) {
   if (!UUID_RE.test(fileId)) throw notFound();
+  // Wiki files belong to the wiki tick; the Imports API cannot see or drive them.
   const file = await db.ingestionFile.findFirst({
-    where: { id: fileId, project: { ...notDeleted } },
+    where: {
+      id: fileId,
+      project: { ...notDeleted },
+      batch: { origin: { not: "wiki" } },
+    },
     include: { draft: withDraft },
   });
   if (!file) throw notFound();
@@ -1117,6 +1203,7 @@ export async function deleteBatch(
 
 export type ClaimedFile = {
   id: string;
+  origin: IngestionOrigin;
   byteSize: number;
   projectId: string;
   fileName: string;
@@ -1250,20 +1337,23 @@ export async function claimFileForParsing(
       },
     });
     if (claimed.count === 0) return null;
-    return tx.ingestionFile.findFirstOrThrow({
-      where: { id: fileId, project: { ...notDeleted } },
-      select: {
-        id: true,
-        projectId: true,
-        fileName: true,
-        mimeType: true,
-        byteSize: true,
-        contentDigest: true,
-        parserAdapterId: true,
-        parserVersion: true,
-        attemptCount: true,
-      },
-    });
+    return tx.ingestionFile
+      .findFirstOrThrow({
+        where: { id: fileId, project: { ...notDeleted } },
+        select: {
+          id: true,
+          projectId: true,
+          fileName: true,
+          mimeType: true,
+          byteSize: true,
+          contentDigest: true,
+          parserAdapterId: true,
+          parserVersion: true,
+          attemptCount: true,
+          batch: { select: { origin: true } },
+        },
+      })
+      .then(({ batch, ...file }) => ({ ...file, origin: batch.origin }));
   });
 }
 
@@ -1341,6 +1431,10 @@ export async function completeParse(
           tableRows: input.draft.rows as Prisma.InputJsonValue,
         };
   return db.$transaction(async (tx) => {
+    const batch = await tx.ingestionBatch.findFirst({
+      where: { files: { some: { id: input.fileId } } },
+      select: { origin: true },
+    });
     const transitioned = await tx.ingestionFile.updateMany({
       where: {
         id: input.fileId,
@@ -1351,7 +1445,8 @@ export async function completeParse(
           : { attemptCount: input.attemptCount }),
       },
       data: {
-        status: "extracting",
+        // A wiki file skips analyze and link: the wiki tick accepts it.
+        status: batch?.origin === "wiki" ? "ready" : "extracting",
         parseEndedAt: new Date(),
         analyzeStartedAt: null,
         analyzeEndedAt: null,

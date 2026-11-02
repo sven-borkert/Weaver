@@ -17,6 +17,14 @@ import {
   WIKI_UNPROTECTING_ITEM_STATUSES,
   type WikiInputStatusName,
 } from "../wiki/states";
+import { requestKnowledgeJob } from "../jobs/queue";
+import type { KnowledgeJobPayloads } from "../jobs/types";
+import {
+  createWikiIngestionFile,
+  resetWikiIngestionFile,
+  retireWikiIngestionFile,
+  withProjectIngestionLifecycleLock,
+} from "./ingestion";
 import { assertProjectRole, notDeleted } from "./projectAccess";
 import { getLiveWikiAgent } from "./wikiAgents";
 
@@ -430,6 +438,93 @@ export async function listInputs(
   };
 }
 
+type WikiParseJob = KnowledgeJobPayloads["ingestion.parse"];
+
+/**
+ * Selected file items parse through Imports' stages. An item with a live source skips this and
+ * never gets a second file; a failed parse is reset; a retired file is replaced.
+ */
+async function bridgeFileItems(
+  tx: Tx,
+  input: { projectId: string; runId: string; createdById: string },
+): Promise<WikiParseJob[]> {
+  const items = await tx.wikiInputItem.findMany({
+    where: { runId: input.runId, kind: "file", status: "preparing" },
+    include: { artifact: true, ingestionFile: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const jobs: WikiParseJob[] = [];
+  let batchId: string | null = null;
+  for (const item of items) {
+    const documentLive =
+      item.sourceDocumentId !== null &&
+      (await tx.document.count({
+        where: { id: item.sourceDocumentId, projectId: input.projectId },
+      })) > 0;
+    const tableLive =
+      item.sourceTableId !== null &&
+      (await tx.dataTable.count({
+        where: { id: item.sourceTableId, projectId: input.projectId },
+      })) > 0;
+    if (documentLive || tableLive) continue;
+    const { artifact, ingestionFile } = item;
+    if (!artifact || artifact.contentDigest !== item.artifactDigest) {
+      await tx.wikiInputItem.update({
+        where: { id: item.id },
+        data: {
+          status: "failed",
+          errorCode: "ARTIFACT_CHANGED",
+          errorMessage:
+            "The original file is gone or changed. Remove this input and add the file again.",
+          revision: { increment: 1 },
+        },
+      });
+      continue;
+    }
+    if (ingestionFile && ingestionFile.status !== "rejected") {
+      const reset = await resetWikiIngestionFile(tx, ingestionFile.id);
+      if (reset)
+        jobs.push({
+          fileId: ingestionFile.id,
+          projectId: input.projectId,
+          contentDigest: ingestionFile.contentDigest,
+          baseAttemptCount: reset.attemptCount,
+        });
+      continue;
+    }
+    if (batchId === null) {
+      const batch = await tx.ingestionBatch.create({
+        data: {
+          projectId: input.projectId,
+          createdById: input.createdById,
+          origin: "wiki",
+        },
+        select: { id: true },
+      });
+      batchId = batch.id;
+    }
+    const created = await createWikiIngestionFile(tx, {
+      batchId,
+      projectId: input.projectId,
+      fileName: artifact.filename,
+      mimeType: artifact.contentType,
+      byteSize: artifact.byteSize,
+      contentDigest: artifact.contentDigest,
+    });
+    await tx.wikiInputItem.update({
+      where: { id: item.id },
+      data: { ingestionFileId: created.id },
+    });
+    jobs.push({
+      fileId: created.id,
+      projectId: input.projectId,
+      contentDigest: artifact.contentDigest,
+      baseAttemptCount: created.attemptCount,
+    });
+  }
+  return jobs;
+}
+
 function runActive(): CoreError {
   return new CoreError("CONFLICT", "A wiki run is already active", {
     reason: "RUN_ACTIVE",
@@ -453,75 +548,89 @@ export async function processInputs(
 ): Promise<{ runId: string; selected: number; remaining: number }> {
   await assertEditor(db, actor, input.projectId);
   let result: { runId: string; selected: number; remaining: number };
+  let parseJobs: WikiParseJob[] = [];
   try {
-    result = await db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${input.projectId}::uuid FOR SHARE`;
-      await assertEditor(tx, actor, input.projectId);
-      await lockEnabledSettings(tx, input.projectId);
-      const agent = await getLiveWikiAgent(tx, input.projectId);
-      if (!agent)
-        throw new CoreError("CONFLICT", "The wiki agent has been revoked", {
-          reason: "WIKI_DISABLED",
+    // The lifecycle lock orders new file rows against blob and artifact changes.
+    result = await withProjectIngestionLifecycleLock(
+      db,
+      input.projectId,
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Project" WHERE id = ${input.projectId}::uuid FOR SHARE`;
+        await assertEditor(tx, actor, input.projectId);
+        await lockEnabledSettings(tx, input.projectId);
+        const agent = await getLiveWikiAgent(tx, input.projectId);
+        if (!agent)
+          throw new CoreError("CONFLICT", "The wiki agent has been revoked", {
+            reason: "WIKI_DISABLED",
+          });
+        // The settings lock orders concurrent calls, so the loser reports the run, not an empty queue.
+        const active = await tx.wikiRun.count({
+          where: {
+            projectId: input.projectId,
+            status: { in: [...WIKI_ACTIVE_RUN_STATUSES] },
+          },
         });
-      // The settings lock orders concurrent calls, so the loser reports the run, not an empty queue.
-      const active = await tx.wikiRun.count({
-        where: {
+        if (active > 0) throw runActive();
+        const where: Prisma.WikiInputItemWhereInput = {
           projectId: input.projectId,
-          status: { in: [...WIKI_ACTIVE_RUN_STATUSES] },
-        },
-      });
-      if (active > 0) throw runActive();
-      const where: Prisma.WikiInputItemWhereInput = {
-        projectId: input.projectId,
-        status: "queued",
-        ...(input.itemIds === "all" ? {} : { id: { in: input.itemIds } }),
-      };
-      const selected = await tx.wikiInputItem.findMany({
-        where,
-        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-        take: WIKI_INGEST_MAX_ITEMS,
-        select: { id: true },
-      });
-      if (selected.length === 0)
-        throw new CoreError("PRECONDITION_FAILED", "Nothing is queued", {
-          reason: "NOTHING_QUEUED",
-        });
-      const run = await tx.wikiRun.create({
-        data: {
-          projectId: input.projectId,
-          agentId: agent.id,
-          kind: "ingest",
-          trigger: "manual",
-          startedById: actor.userId,
-          status: "preparing",
-        },
-        select: { id: true },
-      });
-      const claimed = await tx.wikiInputItem.updateMany({
-        where: {
-          id: { in: selected.map((item) => item.id) },
           status: "queued",
-        },
-        data: {
-          status: "preparing",
+          ...(input.itemIds === "all" ? {} : { id: { in: input.itemIds } }),
+        };
+        const selected = await tx.wikiInputItem.findMany({
+          where,
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          take: WIKI_INGEST_MAX_ITEMS,
+          select: { id: true },
+        });
+        if (selected.length === 0)
+          throw new CoreError("PRECONDITION_FAILED", "Nothing is queued", {
+            reason: "NOTHING_QUEUED",
+          });
+        const run = await tx.wikiRun.create({
+          data: {
+            projectId: input.projectId,
+            agentId: agent.id,
+            kind: "ingest",
+            trigger: "manual",
+            startedById: actor.userId,
+            status: "preparing",
+          },
+          select: { id: true },
+        });
+        const claimed = await tx.wikiInputItem.updateMany({
+          where: {
+            id: { in: selected.map((item) => item.id) },
+            status: "queued",
+          },
+          data: {
+            status: "preparing",
+            runId: run.id,
+            processStartedById: actor.userId,
+            attempts: { increment: 1 },
+            outcomeNote: null,
+            errorCode: null,
+            errorMessage: null,
+            revision: { increment: 1 },
+          },
+        });
+        parseJobs = await bridgeFileItems(tx, {
+          projectId: input.projectId,
           runId: run.id,
-          processStartedById: actor.userId,
-          attempts: { increment: 1 },
-          outcomeNote: null,
-          errorCode: null,
-          errorMessage: null,
-          revision: { increment: 1 },
-        },
-      });
-      const remaining = await tx.wikiInputItem.count({
-        where: { projectId: input.projectId, status: "queued" },
-      });
-      return { runId: run.id, selected: claimed.count, remaining };
-    });
+          createdById: actor.userId,
+        });
+        const remaining = await tx.wikiInputItem.count({
+          where: { projectId: input.projectId, status: "queued" },
+        });
+        return { runId: run.id, selected: claimed.count, remaining };
+      },
+    );
   } catch (error) {
     if (isUniqueViolation(error)) throw runActive();
     throw error;
   }
+  // A lost publication is republished by ingestion reconciliation, inside the 75-minute limit.
+  for (const job of parseJobs)
+    await requestKnowledgeJob("ingestion.parse", job).catch(() => null);
   emitDiagnostic({
     event: "wiki.run.started",
     message: "wiki ingest run started",
@@ -547,6 +656,37 @@ async function loadItem(
   });
   if (!item) throw new CoreError("NOT_FOUND", "Wiki input not found");
   return item;
+}
+
+/** Owner-only legal erasure path: lifts SOURCE_PROTECTED without touching the source page. */
+export async function unlinkInputArtifact(
+  db: PrismaClient,
+  actor: Actor,
+  input: { projectId: string; itemId: string },
+): Promise<void> {
+  await assertProjectRole(db, input.projectId, actor, "Owner", {
+    capability: "content:write",
+  });
+  await loadItem(db, input.projectId, input.itemId);
+  const { count } = await db.wikiInputItem.updateMany({
+    where: {
+      id: input.itemId,
+      projectId: input.projectId,
+      kind: "file",
+      status: { notIn: ["preparing", "processing"] },
+    },
+    data: {
+      artifactId: null,
+      artifactDigest: null,
+      revision: { increment: 1 },
+    },
+  });
+  if (count === 0)
+    throw new CoreError(
+      "CONFLICT",
+      "This input is being processed. Try again when the run has finished.",
+      { reason: "ITEM_BUSY" },
+    );
 }
 
 export async function retryInput(
@@ -620,44 +760,50 @@ export async function removeInput(
   input: { projectId: string; itemId: string },
 ): Promise<void> {
   await assertEditor(db, actor, input.projectId);
-  await loadItem(db, input.projectId, input.itemId);
-  const { count } = await db.wikiInputItem.updateMany({
-    where: {
-      id: input.itemId,
-      projectId: input.projectId,
-      status: {
-        in: [
-          "queued",
-          "preparing",
-          "ready",
-          "skipped",
-          "held",
-          "failed",
-          "reverted",
-        ],
+  const existing = await loadItem(db, input.projectId, input.itemId);
+  const count = await db.$transaction(async (tx) => {
+    const { count: removed } = await tx.wikiInputItem.updateMany({
+      where: {
+        id: input.itemId,
+        projectId: input.projectId,
+        status: {
+          in: [
+            "queued",
+            "preparing",
+            "ready",
+            "skipped",
+            "held",
+            "failed",
+            "reverted",
+          ],
+        },
       },
-    },
-    // sourceDocumentId and sourceTableId stay: a committed source page keeps its guard.
-    data: {
-      status: "removed",
-      title: REMOVED_TITLE,
-      runId: null,
-      text: null,
-      textDigest: null,
-      artifactId: null,
-      artifactDigest: null,
-      byteSize: 0,
-      heldHits: Prisma.DbNull,
-      heldDigest: null,
-      confirmedById: null,
-      confirmedDigest: null,
-      createdById: null,
-      processStartedById: null,
-      outcomeNote: null,
-      errorCode: null,
-      errorMessage: null,
-      revision: { increment: 1 },
-    },
+      // sourceDocumentId and sourceTableId stay: a committed source page keeps its guard.
+      data: {
+        status: "removed",
+        title: REMOVED_TITLE,
+        runId: null,
+        text: null,
+        textDigest: null,
+        artifactId: null,
+        artifactDigest: null,
+        byteSize: 0,
+        heldHits: Prisma.DbNull,
+        heldDigest: null,
+        confirmedById: null,
+        confirmedDigest: null,
+        createdById: null,
+        processStartedById: null,
+        outcomeNote: null,
+        errorCode: null,
+        errorMessage: null,
+        revision: { increment: 1 },
+      },
+    });
+    // A parked or running parse ends with the item; its draft leaves with it.
+    if (removed === 1 && existing.ingestionFileId)
+      await retireWikiIngestionFile(tx, existing.ingestionFileId);
+    return removed;
   });
   if (count === 0)
     throw new CoreError(

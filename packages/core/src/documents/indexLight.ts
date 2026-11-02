@@ -1,4 +1,7 @@
-export type IndexLight = "ready" | "failed" | "pending" | "unavailable";
+export type IndexLight =
+  "ready" | "failed" | "pending" | "unavailable" | "skipped";
+
+export const AI_INDEXING_SKIPPED_SUMMARY = "AI indexing skipped (source page)";
 
 export type DocumentIndexLights = {
   keyword: IndexLight;
@@ -68,10 +71,20 @@ function aiLight(
 export function documentIndexLights(
   row: IndexStateRow,
   generation: { configFingerprint: string } | null,
-  options: { coveredByBuild?: boolean } = {},
+  options: { coveredByBuild?: boolean; aiExempt?: boolean } = {},
 ): DocumentIndexLights {
   const coveredByBuild = options.coveredByBuild === true;
   const keyword = keywordLight(row);
+  if (options.aiExempt)
+    return {
+      keyword,
+      semantic: "skipped",
+      graph: "skipped",
+      summary:
+        keyword === "failed"
+          ? (row.keywordFailureSummary ?? null)
+          : AI_INDEXING_SKIPPED_SUMMARY,
+    };
   const semantic = aiLight(
     row,
     generation,
@@ -89,7 +102,8 @@ export function documentIndexLights(
 }
 
 export function indexLightLabel(light: IndexLight): string {
-  return light === "unavailable" ? "not configured" : light;
+  if (light === "unavailable") return "not configured";
+  return light;
 }
 
 export function indexLightsDescription(lights: DocumentIndexLights): string {

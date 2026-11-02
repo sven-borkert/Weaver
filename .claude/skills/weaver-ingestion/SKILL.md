@@ -143,6 +143,13 @@ inside one transaction so acceptance and editing serialize. Batch listing uses
 a bounded, opaque cursor tied to the project plus the `(createdAt, id)` sort
 boundary; clients must never construct or reuse it across projects.
 
+## Wiki origin
+
+`IngestionOrigin.wiki` batches belong to the wiki (`weaver-wiki`). `createWikiIngestionFile`, `resetWikiIngestionFile` and
+`retireWikiIngestionFile` are the only writers. `completeParse` sets `ready` for this origin and the parse runner publishes no
+analyze job (`ClaimedFile.origin`); the wiki tick, not a worker, accepts through the source writer. `listBatches`, `loadBatch` and
+`loadIngestionFile` hide the origin, so every Imports action is `NOT_FOUND`, and the import work feed filters it. Stage recovery works as usual.
+
 ## Reviewed acceptance
 
 A reviewer may only save or accept the draft version they saw.

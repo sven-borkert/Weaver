@@ -411,6 +411,7 @@ export async function getTree(
   const rows = await db.$queryRaw<
     Array<
       IndexStateRow & {
+        wikiSourceItemId: string | null;
         appearance: Prisma.JsonValue | null;
         id: string;
         title: string;
@@ -437,7 +438,7 @@ export async function getTree(
       }
     >
   >(Prisma.sql`
-    SELECT d."appearance", d."wikiType", d."wikiSummary", d."id", d."title", d."slug", d."path", d."kind", d."headCommitSha",
+    SELECT d."wikiSourceItemId", d."appearance", d."wikiType", d."wikiSummary", d."id", d."title", d."slug", d."path", d."kind", d."headCommitSha",
       d."reviewDueAt", d."lastReviewedAt",
       d."lastEditedByMachineKind", d."lastEditedByMachineId", d."lastEditedByName",
       d."createdAt", d."createdById", d."createdByName",
@@ -490,7 +491,10 @@ export async function getTree(
         : { name: row.updaterName, email: row.updaterEmail },
     ),
     machineEditor: machineEditorFromRow(row),
-    index: documentIndexLights(row, generation, { coveredByBuild }),
+    index: documentIndexLights(row, generation, {
+      coveredByBuild,
+      aiExempt: row.wikiSourceItemId !== null,
+    }),
   }));
   if (!repo)
     return {

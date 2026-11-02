@@ -6,6 +6,7 @@ import {
   WIKI_NO_WORKER_LIMIT_MS,
   WIKI_PREPARING_LIMIT_MS,
 } from "../wiki/states";
+import { retireWikiIngestionFile } from "./ingestion";
 import { prepareRunItems } from "./wikiPrepare";
 import {
   emitRunEnded,
@@ -83,15 +84,21 @@ async function failUnparsedAtLimit(
   now: Date,
 ): Promise<void> {
   if (now.getTime() - run.startedAt.getTime() < WIKI_PREPARING_LIMIT_MS) return;
-  const failed = await db.wikiInputItem.updateManyAndReturn({
-    where: { runId: run.id, status: "preparing" },
-    data: {
-      status: "failed",
-      errorCode: "PREPARE_TIMEOUT",
-      errorMessage: PREPARE_TIMEOUT_MESSAGE,
-      revision: { increment: 1 },
-    },
-    select: { id: true },
+  const failed = await db.$transaction(async (tx) => {
+    const items = await tx.wikiInputItem.updateManyAndReturn({
+      where: { runId: run.id, status: "preparing" },
+      data: {
+        status: "failed",
+        errorCode: "PREPARE_TIMEOUT",
+        errorMessage: PREPARE_TIMEOUT_MESSAGE,
+        revision: { increment: 1 },
+      },
+      select: { id: true, ingestionFileId: true },
+    });
+    for (const item of items)
+      if (item.ingestionFileId)
+        await retireWikiIngestionFile(tx, item.ingestionFileId);
+    return items;
   });
   for (const item of failed)
     emitDiagnostic({

@@ -16,6 +16,8 @@ import { stripIgnorable } from "../wiki/guideText";
 import { wikiAgentContentAuthor } from "./contentAuthor";
 import {
   createdResourceId,
+  fillColumn,
+  fillRow,
   recoverPriorOperation,
   type ContentOperation,
   type RecoveryIdentity,
@@ -187,7 +189,7 @@ async function resolveSourceFolder(
   return created.segments;
 }
 
-type SourceBody =
+export type SourceBody =
   | { kind: "document"; markdown: string }
   | {
       kind: "table";
@@ -323,8 +325,8 @@ async function writeSource(
         id: resourceId,
         folderPath,
         title,
-        columns: body.columns as never,
-        rows: body.rows as never,
+        columns: body.columns.map(fillColumn),
+        rows: body.rows.map(fillRow),
         createdAt: now,
       },
       author,

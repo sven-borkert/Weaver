@@ -18,6 +18,7 @@ const DOT_CLASS: Record<IndexLight, string> = {
   failed: "bg-danger border-danger",
   pending: "bg-transparent border-line-strong",
   unavailable: "bg-transparent border-line",
+  skipped: "bg-transparent border-line",
 };
 
 function Dot({ light }: { light: IndexLight }) {

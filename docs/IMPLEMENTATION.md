@@ -555,6 +555,10 @@ on every worker, because a deployment with no `wiki` worker has no tick either. 
 each item (scan with [`security/secretScan.ts`](../packages/core/src/security/secretScan.ts), then write) and
 [`wikiSourceWriter.ts`](../packages/core/src/services/wikiSourceWriter.ts) commits source pages as the agent under the
 preparing-phase fence; `Document.wikiSourceItemId` is re-derived from `WikiInputItem` wherever a projection row is recreated.
+File items parse through Imports with `IngestionOrigin.wiki` (hidden from `listBatches`, `loadBatch`, `loadIngestionFile` and the import
+work feed): `completeParse` stops at `ready`, the parse runner skips analyze, and the tick accepts. `knowledge/aiExempt.ts` holds the
+`isAiExempt` TypeScript and SQL forms; `knowledgeGenerations.ts` keeps such documents terminal `ready` in change recording, builds,
+carry-forward, delivery and the route-block paths, and `flipDocumentAiExempt` handles a changed link in both directions.
 
 Optional external login uses request-scoped provider loading in
 [`packages/auth/src/oidc.ts`](../packages/auth/src/oidc.ts) and guarded token/JWKS

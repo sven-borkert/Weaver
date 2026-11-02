@@ -3,6 +3,9 @@ name: weaver-artifacts
 description: Use when changing Weaver artifacts/Files, blob storage and upload/download routes, artifact tools, pure Word/Excel/PDF/JSON/text/Markdown/CSV/YAML readers, or OneNote cache and background preparation.
 ---
 
+An artifact referenced by a live `WikiInputItem` (any status except `failed` and `removed`) refuses replace and delete with
+`CONFLICT SOURCE_PROTECTED`, checked under the lifecycle lock in `finalizeArtifactUpload` and `deleteArtifact`. Rename stays allowed.
+
 # Weaver Artifacts (Files)
 
 Slice 1 of the project artifact store: every project has a Files page for

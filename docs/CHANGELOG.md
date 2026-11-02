@@ -4,6 +4,12 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Added
+
+- Wiki inputs become durable source pages and source tables. Notes are written directly; PDF, Word (docx), Excel (xlsx), CSV, Markdown and text files parse through the Imports pipeline without appearing in Imports. Spreadsheets become source tables under `tables/wiki-sources/`. Source pages enter keyword search and skip AI indexing; their index lights say "AI indexing skipped (source page)".
+- A new scanner checks notes, file names, parsed drafts and every table cell for secrets. A hit holds the input under Needs attention until an Editor confirms that exact content, and reports only what it found and where.
+- A file referenced by a live wiki input cannot be replaced or deleted (`SOURCE_PROTECTED`); it can still be renamed. Removing the input, or an Owner unlinking it, lifts the protection.
+
 ### Changed
 
 - Workers gain a `wiki` role (`wiki.tick`, `wiki.run`), on by default and assigned to `agent-worker` in the Compose files. **Before upgrading:** operators who pinned `WEAVER_ENABLED_WORKER_ROLES` must add `wiki`, or a worker assigned that role refuses to start. Without a worker consuming the role, a queued wiki run cancels itself after 10 minutes with "no worker is consuming wiki runs".

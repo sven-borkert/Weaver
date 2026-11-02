@@ -28,6 +28,7 @@ const LIGHT_CLASS: Record<IndexLight, string> = {
   failed: "border-danger-border bg-danger-bg text-danger",
   pending: "border-info-border bg-info-bg text-info",
   unavailable: "border-line text-text-3",
+  skipped: "border-line text-text-3",
 };
 
 export function DocumentIndexPanel({
@@ -116,6 +117,9 @@ function DocumentIndexDetails({
         />
       </IndexSection>
 
+      {index.lights.semantic === "skipped" ? (
+        <p className="text-text-2 m-0 text-[13px]">{index.lights.summary}</p>
+      ) : null}
       {primary ? (
         <>
           <IndexSection
