@@ -35,3 +35,31 @@ export function wikiSourceSql(access: WorkQueryAccess): Prisma.Sql {
       ${access.projectId ? Prisma.sql`AND p.id = ${access.projectId}::uuid` : Prisma.empty}
   `;
 }
+
+const PAUSE_MESSAGE =
+  "Wiki runs are paused: changes in the last 24 hours exceed the project's budget. It clears by itself once the sum falls, or an Owner can raise the budget.";
+const SPEND_MESSAGE =
+  "The wiki agent's spend in the last 24 hours passed the alert you set. Runs continue.";
+
+/** Owners are told through the bell; a new incident has a new revision and is unseen again. */
+export function wikiAlertSourceSql(access: WorkQueryAccess): Prisma.Sql {
+  return Prisma.sql`
+    SELECT 'wiki'::text AS kind, s.id::uuid AS id,
+      CASE WHEN s."destructivePausedAt" IS NOT NULL THEN 'Wiki runs paused' ELSE 'Wiki spend alert' END AS title,
+      p.id AS "projectId", p.name AS "projectName", 'failed'::text AS state,
+      'failed'::text AS "sourceStatus", alert.at AS "createdAt", NULL::timestamp AS "startedAt",
+      alert.at AS "finishedAt", alert.at AS "sortAt",
+      NULL::jsonb AS progress, 'WIKI_FAILED'::text AS "errorCode",
+      CASE WHEN s."destructivePausedAt" IS NOT NULL THEN ${PAUSE_MESSAGE} ELSE ${SPEND_MESSAGE} END AS "errorMessage",
+      jsonb_build_object('kind', 'wiki', 'projectId', p.id) AS destination,
+      md5(jsonb_build_array('wiki-alert', s.id, s."destructivePausedAt", s."spendAlertedAt")::text) AS revision,
+      true AS "isPersonal"
+    FROM "ProjectWikiSettings" s
+    JOIN visible_projects p ON p.id = s."projectId"
+    CROSS JOIN LATERAL (SELECT coalesce(s."destructivePausedAt", s."spendAlertedAt") AS at) alert
+    WHERE p."isOwner"
+      AND (s."destructivePausedAt" IS NOT NULL
+        OR s."spendAlertedAt" >= ${UTC_NOW} - interval '1 day')
+      ${access.projectId ? Prisma.sql`AND p.id = ${access.projectId}::uuid` : Prisma.empty}
+  `;
+}

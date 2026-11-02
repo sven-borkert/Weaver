@@ -237,6 +237,25 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   the patched body (`assertNewLinkTargetsExist`), because a fragment can only form a link once it meets the surrounding text.
 - A refusal's wording reaches the model (`teachingError`); `toolErrorFromUnknown` would flatten it to "not permitted".
 
+## Runner
+
+- `packages/ai/src/wikiRunner.ts` (`createWikiRunner`, injected in `apps/agent-worker`) uses `streamText` with `prepareStep`: live-run check, notes, elision, fit check, in that order. Without
+  the injection `wiki.run` still fails `RUNNER_UNAVAILABLE`. Revert needs no model and runs either way.
+- `wikiPrompt.ts`: fixed rules, a protocol per run kind, counts-only index head, then the guide in a labelled block. No other authored string enters the system prompt. Notes return as a
+  user-role message labelled as the agent's own; the restart briefing holds ledger fields only. Lint adds a protocol entry in the next slice.
+- `wikiElision.ts`: oldest tool results become stubs until the array fits `maxInputBytes` minus 16 KB per parallel call of the last step. A written page's call input goes with its result, and
+  fully stubbed turns are dropped when stubs alone no longer fit. Exempt: the current input's `read_input` and its latest source window, together at most 25 % of `maxInputBytes`.
+- Budget at the minimum route (100,000 window, 8,192 output, 16,000 B guide): fixed prompt 2,815 B, tools 13,896 B, schema reserve 12,500 B, leaving 45,573 B of input, so the exempt share holds an
+  8,000-character window. Pinned in `wikiRunner.test.ts`.
+- Failures: `ROUTE_UNSUITABLE`, `GUIDE_UNAVAILABLE`, `CONTEXT_LIMIT`. A closed fence ends the run `cancelled` only if this attempt still holds the lease; a worker shutdown leaves it for restart.
+- One `AiUsage` row per attempt (deterministic id), upserted after every step, with provider bodies suppressed.
+
+## Restart and pauses
+
+- `expireWikiRunLeases` (in `reapWikiRuns`, so it runs from `system.reconcile` too) requeues a lost run at most twice. An input live through two lost leases (`lostLeases`, not `attempts`, which counts Process presses) fails `QUARANTINED`.
+- `reconcileReservedOperations` runs before each attempt: only a trusted commit with this agent's trailer and the reserved hash counts as committed; anything else under the id is failed and reported.
+- `destructivePausedAt` refuses Process, stops a new run at lease and clears in the tick once the sum falls. Pause and spend alert reach Owners through `wikiAlertSourceSql`, a personal bell row whose revision changes per incident.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

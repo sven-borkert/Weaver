@@ -27,7 +27,8 @@ export function visibleProjectsSql(access: WorkQueryAccess): Prisma.Sql {
   const allowed = access.actor.allowedProjectIds;
   return Prisma.sql`
     SELECT p.id, p.name,
-      m.role IN (${toOrganizationRole("Owner")}, ${toOrganizationRole("Maintainer")}) AS "canMaintain"
+      m.role IN (${toOrganizationRole("Owner")}, ${toOrganizationRole("Maintainer")}) AS "canMaintain",
+      m.role = ${toOrganizationRole("Owner")} AS "isOwner"
     FROM "Project" p
     JOIN "Member" m ON m."organizationId" = p."organizationId"
     WHERE p."deletedAt" IS NULL AND m."userId" = ${access.actor.userId}::uuid

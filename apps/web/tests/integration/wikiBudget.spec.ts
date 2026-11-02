@@ -30,7 +30,9 @@ import {
   rollingDestructiveChars,
   WikiRunSession,
 } from "@weaver/core/services/wikiRunSession";
-import { addTextInput } from "@weaver/core/services/wikiInputs";
+import { addTextInput, processInputs } from "@weaver/core/services/wikiInputs";
+import { reapWikiRuns } from "@weaver/core/services/wikiTick";
+import { listBackgroundWork } from "@weaver/core/services/backgroundWork";
 import { WIKI_AGENT_DISPATCH } from "@weaver/assistant-tools/wikiAgentRegistry";
 import { z } from "zod";
 import {
@@ -888,6 +890,152 @@ describe("wiki agent writes", () => {
   }, 30_000);
 
   describe("rolling 24-hour budget", () => {
+    const hoursAgo = (hours: number) =>
+      new Date(Date.now() - hours * 60 * 60_000);
+
+    async function withCommittedChars(chars: number, committedAt: Date) {
+      const r = await started();
+      await r.db.wikiRunOperation.create({
+        data: {
+          runId: r.lease.id,
+          n: 1,
+          toolName: "wiki_patch_page",
+          requestHash: "0".repeat(64),
+          operationId: `wiki-run:${r.lease.id}:0001`,
+          status: "committed",
+          charsAdded: chars,
+          committedAt,
+        },
+      });
+      return r;
+    }
+
+    it("clears the pause in the tick once the sum falls, and only then", async () => {
+      const r = await withCommittedChars(200_000, hoursAgo(1));
+      await r.db.projectWikiSettings.update({
+        where: { projectId: r.projectId },
+        data: { destructivePausedAt: hoursAgo(1) },
+      });
+      await reapWikiRuns(r.db);
+      const paused = await r.db.projectWikiSettings.findUniqueOrThrow({
+        where: { projectId: r.projectId },
+      });
+      expect(paused.destructivePausedAt).not.toBeNull();
+      await r.db.wikiRunOperation.update({
+        where: { runId_n: { runId: r.lease.id, n: 1 } },
+        data: { committedAt: hoursAgo(25) },
+      });
+      await reapWikiRuns(r.db);
+      const cleared = await r.db.projectWikiSettings.findUniqueOrThrow({
+        where: { projectId: r.projectId },
+      });
+      expect(cleared.destructivePausedAt).toBeNull();
+    }, 40_000);
+
+    it("refuses Process while paused and tells Owners through the bell", async () => {
+      const r = await started();
+      const editor = await makeUser("User", "budget-editor");
+      await addMembership(r.projectId, editor.id, "Editor");
+      await r.db.projectWikiSettings.update({
+        where: { projectId: r.projectId },
+        data: { destructivePausedAt: new Date() },
+      });
+      await r.db.wikiRun.update({
+        where: { id: r.lease.id },
+        data: { status: "stopped", leaseToken: null, endedAt: new Date() },
+      });
+      await addTextInput(r.db, r.security, {
+        projectId: r.projectId,
+        text: "Another",
+      });
+      await expect(
+        processInputs(r.db, r.security, {
+          projectId: r.projectId,
+          itemIds: "all",
+        }),
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        details: { reason: "DESTRUCTIVE_PAUSED" },
+      });
+      const owners = await listBackgroundWork(r.db, r.security, {
+        audience: "mine",
+      });
+      const alert = owners.items.find(
+        (item) => item.title === "Wiki runs paused",
+      );
+      expect(alert).toMatchObject({ kind: "wiki", state: "failed" });
+      const editors = await listBackgroundWork(
+        r.db,
+        securityContextFor(editor),
+        { audience: "mine" },
+      );
+      expect(
+        editors.items.find((item) => item.title === "Wiki runs paused"),
+      ).toBeUndefined();
+    }, 40_000);
+
+    it("the spend alert notifies once a day and never stops a run", async () => {
+      const r = await started();
+      await r.db.projectWikiSettings.update({
+        where: { projectId: r.projectId },
+        data: { spendAlertCentsPerDay: 1 },
+      });
+      await r.db.aiUsage.create({
+        data: {
+          projectId: r.projectId,
+          operation: "wiki.run",
+          runId: r.lease.id,
+          provider: "test",
+          model: "test",
+          configFingerprint: "f",
+          durationMs: 1,
+          outcome: "success",
+          costMicros: 20_000n,
+        },
+      });
+      await reapWikiRuns(r.db);
+      const alerted = await r.db.projectWikiSettings.findUniqueOrThrow({
+        where: { projectId: r.projectId },
+      });
+      expect(alerted.spendAlertedAt).not.toBeNull();
+      expect(alerted.enabled).toBe(true);
+      expect(alerted.destructivePausedAt).toBeNull();
+      expect(
+        (await r.db.wikiRun.findUniqueOrThrow({ where: { id: r.lease.id } }))
+          .status,
+      ).toBe("running");
+      const owners = await listBackgroundWork(r.db, r.security, {
+        audience: "mine",
+      });
+      expect(
+        owners.items.find((item) => item.title === "Wiki spend alert"),
+      ).toBeTruthy();
+      await reapWikiRuns(r.db);
+      expect(
+        (
+          await r.db.projectWikiSettings.findUniqueOrThrow({
+            where: { projectId: r.projectId },
+          })
+        ).spendAlertedAt,
+      ).toEqual(alerted.spendAlertedAt);
+    }, 40_000);
+
+    it("prunes operations of ended runs after 90 days", async () => {
+      const r = await withCommittedChars(1, hoursAgo(1));
+      await r.db.wikiRunOperation.update({
+        where: { runId_n: { runId: r.lease.id, n: 1 } },
+        data: { createdAt: hoursAgo(91 * 24) },
+      });
+      await reapWikiRuns(r.db);
+      expect(await r.db.wikiRunOperation.count()).toBe(1);
+      await r.db.wikiRun.update({
+        where: { id: r.lease.id },
+        data: { status: "stopped", leaseToken: null },
+      });
+      await reapWikiRuns(r.db);
+      expect(await r.db.wikiRunOperation.count()).toBe(0);
+    }, 40_000);
+
     it("pauses once exceeded, ignores old and revert operations, and is idempotent", async () => {
       const r = await started();
       await r.db.projectWikiSettings.update({
