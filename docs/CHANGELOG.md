@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.231] - 2026-11-02
+
 ### Added
 
 - Project wiki agent, first step: an Owner can enable a project's wiki through the new `wiki` settings API. Enabling creates the wiki agent identity, a `wiki/` folder with a `wiki/sources/` folder, a wiki guide page from Weaver's template (approved as it is) and an overview page. Maintainers review the exact guide text (hidden and bidirectional characters removed, changes since the last approval and lines that hand rules to somewhere else flagged) and approve it by digest; guides over 16,000 bytes are refused. Disabling keeps everything; revoking the agent disables the feature until it is enabled again with a new identity.
