@@ -14,6 +14,7 @@ import {
   type DocumentReview,
 } from "../documents/review";
 import { hasCapability } from "../security/context";
+import { withoutReviewExempt } from "../wiki/properties";
 import type { Prisma, PrismaClient } from "@weaver/db/client";
 import {
   author,
@@ -153,8 +154,13 @@ async function writeReview(
     const now = new Date().toISOString();
     const current =
       meta.review ?? (await defaultReviewFor(db, input.projectId, now));
+    const properties = withoutReviewExempt(meta.properties);
     const file = composeDocumentFile(
-      { ...meta, review: change(current, now) },
+      {
+        ...meta,
+        review: change(current, now),
+        ...(properties ? { properties } : { properties: undefined }),
+      },
       body,
       documentKindOfPath(row.path),
     );

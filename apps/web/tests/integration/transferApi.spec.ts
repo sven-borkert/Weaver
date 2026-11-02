@@ -259,6 +259,59 @@ describe("transfer API", () => {
     ).toHaveLength(1);
   });
 
+  it("accepts type, summary and tags and refuses reviewExempt, sources and the source type", async () => {
+    const { db, editor, project, token, r } = await fixture("props");
+    const who = await r.whoami(call("whoami", token));
+    expect(
+      ((await who.json()) as { capabilities: Record<string, number> })
+        .capabilities.documentProperties,
+    ).toBe(1);
+    const payload = {
+      projectId: project.id,
+      folderPath: [],
+      markdown: "Text.",
+      assetsSlug: "plan",
+      images: [],
+    };
+    const ok = await r.documents(
+      call("documents", token, {
+        ...payload,
+        title: "Typed",
+        properties: { type: "entity", summary: "S", tags: ["a"] },
+      }),
+    );
+    expect(ok.status).toBe(201);
+    const created = (await ok.json()) as { id: string };
+    const row = await db.document.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    expect(row).toMatchObject({
+      wikiType: "entity",
+      wikiSummary: "S",
+      wikiTags: ["a"],
+      reviewExempt: false,
+    });
+    expect(row.reviewDueAt).not.toBeNull();
+    for (const [i, properties] of [
+      { reviewExempt: true },
+      { sources: [{ kind: "url", url: "https://example.test" }] },
+      { type: "Source" },
+    ].entries()) {
+      const bad = await r.documents(
+        call("documents", token, {
+          ...payload,
+          title: `Bad ${i}`,
+          properties,
+        }),
+      );
+      expect(bad.status).toBe(400);
+    }
+    expect(await db.document.count({ where: { projectId: project.id } })).toBe(
+      1,
+    );
+    void editor;
+  }, 30_000);
+
   it("creates the document when a linked image is not in the payload", async () => {
     const { db, editor, project, token, r } = await fixture("noimage");
     const response = await r.documents(

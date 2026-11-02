@@ -32,6 +32,17 @@ export type ExplorerColumn<I extends ExplorerItem> = {
   /** Cell of a folder row; a dash when absent. */
   folderCell?: (folder: FolderEntry) => ReactNode;
   className?: string;
+  /** Shown only while this returns true for the tree's items; always shown when absent. */
+  visible?: (items: I[]) => boolean;
+};
+
+/** A select that narrows the list to items sharing one value, searched like the title box. */
+export type ExplorerFilter<I extends ExplorerItem> = {
+  id: string;
+  label: string;
+  allLabel: string;
+  /** The item's value; null items only match "all". Compared case-insensitively. */
+  value: (item: I) => string | null | undefined;
 };
 
 export type ExplorerAdapter<I extends ExplorerItem> = {
@@ -63,6 +74,8 @@ export type ExplorerAdapter<I extends ExplorerItem> = {
   itemBadge?: (item: I) => ReactNode;
   /** Extra list columns between Name and Last edited. */
   columns?: ExplorerColumn<I>[];
+  /** Optional value filter shown beside Sort; hidden while no item has a value. */
+  filter?: ExplorerFilter<I>;
   /** Headers of the edited date and editor columns; "Last edited" / "By" by default. */
   editedHeaders?: { at: string; by: string };
   /** Tile subtitle in icons view; defaults to the last-edited date. */

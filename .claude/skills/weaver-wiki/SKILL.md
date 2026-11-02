@@ -7,7 +7,7 @@ description: Use when changing Weaver's wiki-agent foundations: page `properties
 
 This skill records what has shipped; later slices extend it.
 
-## Page properties (reader only so far)
+## Page properties
 
 - Optional header line `properties: <canonical JSON>` after `appearance`, Markdown and
   Python alike (`packages/core/src/documents/frontmatter.ts`). `wiki/properties.ts`
@@ -17,14 +17,42 @@ This skill records what has shipped; later slices extend it.
   system state (`wikiSourceItemId`, later slices) marks a source page.
 - Every header rewrite must carry `meta.properties` through (`...meta` spreads, moves,
   review commits, version restore, deleted-item recovery via the create `properties`
-  field). There is no writer tool or UI yet.
+  field).
 - Projection: `Document.wikiType/wikiSummary/wikiTags/wikiSources/reviewExempt`, filled by
   `documentMetadataColumns`; `wikiSourceItemId` (Document and DataTable) is system-set
   and has no FK until `WikiInputItem` exists.
 - `reviewExempt` pages get no review block on create defaults, header-upgrade backfill
   (including its pending-set queries) or deleted-item recovery; `reviewDueAt` stays null.
 - Rollout: an older instance cannot parse a file with the line; upgrade every instance
-  before the first property write.
+  before the first property write (release notes say so).
+
+## Property writers
+
+- Public input is only `wikiPagePropertiesInputSchema` (`wiki/properties.ts`): `type`, `summary`, `tags`,
+  `sources`, strict (no `reviewExempt`), `null` clears, omitted stays. `isReservedWikiType` folds NFKC, case,
+  ignorable characters and whitespace, so `Source`, `SOURCE` and fullwidth forms are refused.
+  Errors are `BAD_REQUEST` with `field: "properties"`. `applyPagePropertiesInput(existing, input)` is the merge;
+  reserved fields on the page (`reviewExempt`, a `source` type) survive user writes and changing a `source` type is refused.
+  Properties never travel through `metadata` or the `Weaver-Metadata-Override` trailer.
+- `writeDocumentInRepo` requests: `propertiesInput` (public, merged) on create and update; `properties` on create is
+  the internal system path (source writer, agent page creates, bootstrap) and is not in any tRPC, MCP or proposal
+  schema. `assertPatchHasWork` counts `properties`. `applyWikiOperation`'s narrow schema is unchanged.
+- `documentReview.writeReview` strips `reviewExempt` (§7.6: a human who sets review settings or marks reviewed ends the exemption).
+- Surfaces: tRPC `document.create`/`update` (`properties`), `document.setProperties` (header-only write, Editor,
+  head guard), MCP/assistant `create_document`/`patch_document` and `propose_document_create`/`propose_document_patch`
+  take the tool subset `wikiPagePropertiesToolSchema` (no `sources`, to save bytes); `update_document` and
+  `propose_document_edit` omit the field. Proposal previews list `Property <name>: …` lines and validate at proposal time.
+- Reads: `getDocument` returns `properties` with `sources` resolved only inside the page's project
+  (`wikiProperties.presentWikiProperties`; unresolved ids are `available: false` with no title; urls are plain text).
+  `list_documents`/`document.list` take `type` (case-insensitive) and `tag`; `includeSummary` adds `summary`
+  (`type` appears when set). Index view: `document.pageIndex` (`listPageIndex`, keyset cursor over untyped-last type,
+  title, id; source pages excluded) and the route `documents/index-view` (`PageIndexScreen`).
+- Import (`documents/importProperties.ts`): YAML `type`/`tags`/`summary`/`aliases` or a Weaver header's type/summary/tags;
+  per-field validation drops bad values, never `source`, `reviewExempt` or `sources`. Replace sends them as a patch so the
+  target keeps its own. Transfer: `TransferProperties` (type, summary, tags; receiver parses strictly), preflight via
+  `whoami.capabilities.documentProperties`; an older receiver gets the page without them.
+- UI: `PropertiesDialog` (type, summary, tags; sources read-only), explorer `ExplorerColumn.visible` and
+  `ExplorerAdapter.filter` (Type filter, hidden while no page has a type).
 
 ## Reads and MCP toolset
 
@@ -126,8 +154,8 @@ is the agent's only write path.
   fixed rules say to read it before writing wiki pages and that guide text cannot request tool calls.
 - UI: Project settings › Wiki agent card (Maintainer+; Owner controls) and the Review guide dialog show
   the server's `reviewGuide` result verbatim (`InlineDiff` reused from the document diff).
-- Budget: with the four tools the assistant registry is 43 tools, 70,026 B of definitions, 3,894 B of
-  instructions and needs an 88,100-token window (83,600 before); pinned in `prompt.test.ts`.
+- Budget: the assistant registry is 43 tools, 71,075 B of definitions, 3,894 B of instructions and needs an
+  89,300-token window (88,100 before the property writers); pinned in `prompt.test.ts`.
 
 ## Commit text
 

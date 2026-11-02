@@ -27,6 +27,7 @@ import {
   toFileDetail,
   type FileDetail,
 } from "./ingestion";
+import type { WikiPagePropertiesInput } from "../wiki/properties";
 import { notDeleted } from "./projectAccess";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
@@ -61,6 +62,7 @@ function fieldError(field: string, message: string): CoreError {
 export function buildAcceptOperation(
   projectId: string,
   draft: AcceptableDraft,
+  properties?: WikiPagePropertiesInput,
 ): ContentOperation {
   const folderPath =
     draft.proposedFolderPath === "" ? [] : draft.proposedFolderPath.split("/");
@@ -82,6 +84,7 @@ export function buildAcceptOperation(
       folderPath,
       title: draft.proposedTitle,
       markdown,
+      ...(properties && { properties }),
     };
   } else {
     if (!draft.columns || !draft.rows)

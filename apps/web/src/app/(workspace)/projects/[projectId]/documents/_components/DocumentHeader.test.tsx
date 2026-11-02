@@ -24,6 +24,7 @@ const document = {
   updatedBy: { id: "u1", name: "Ada Lovelace" },
   appearance: null,
   review: null,
+  properties: null,
 };
 
 describe("DocumentHeader", () => {

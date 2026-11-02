@@ -9,6 +9,7 @@ import {
   applyMcpOperation,
   IDEMPOTENCY_KEY_RE,
 } from "@weaver/core/services/mcpOperations";
+import { wikiPagePropertiesToolSchema } from "@weaver/core/wiki/properties";
 import { z } from "zod";
 import {
   defineTool,
@@ -81,9 +82,16 @@ function optionFor<K extends ContentOperation["kind"]>(
   >;
 }
 
-const docCreate = optionFor("document.create").omit({ kind: true });
-const docEdit = optionFor("document.edit").omit({ kind: true });
-const docPatch = optionFor("document.patch").omit({ kind: true });
+const docCreate = optionFor("document.create")
+  .omit({ kind: true })
+  .extend({ properties: wikiPagePropertiesToolSchema.optional() });
+const docEdit = optionFor("document.edit").omit({
+  kind: true,
+  properties: true,
+});
+const docPatch = optionFor("document.patch")
+  .omit({ kind: true })
+  .extend({ properties: wikiPagePropertiesToolSchema.optional() });
 const tableCreate = optionFor("table.create").omit({ kind: true });
 const tableChange = optionFor("table.change").omit({ kind: true });
 const contentRestore = optionFor("content.restore").omit({ kind: true });

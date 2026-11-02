@@ -126,6 +126,8 @@ Shared repository readers, advisory locks, recovery and transport primitives use
   (`wiki/properties.ts` `normalizeProperties`, tolerant on read; columns
   `Document.wiki*`/`reviewExempt`). Every header rewrite must pass `meta.properties`
   through; `reviewExempt` pages get no review block; `type: source` grants nothing.
+  Writers (`properties` on create/update/patch, `document.setProperties`, importers, transfer) merge through
+  `applyPagePropertiesInput`; see `weaver-wiki` for the rules (reserved fields, import mapping, Index view).
   Non-root folders now carry an optional canonical UUID `id`; newly created
   folders always receive one. Preserve it through metadata/stamp/review/appearance
   updates and moves. `projectApi/folderIdentity.ts` assigns legacy IDs only when
@@ -349,8 +351,7 @@ created`; an author is `{ userId }` of a current project member (named from
   `review.listDue` and `review.listRecent` after review writes. For a document without a block the settings dialog
   is prefilled from the project defaults and saves both fields; changing the
   reviewers drops entries no longer in the project (the dialog says so). The
-  documents explorer has no "Review due" column (no optional-column mechanism);
-  instead `folder.tree` documents carry `reviewDueAt`/`lastReviewedAt` and the
+  documents explorer has no "Review due" column; instead `folder.tree` documents carry `reviewDueAt`/`lastReviewedAt` and the
   adapter's `itemBadge` renders `ReviewStatusIcon` beside the index lights:
   check (reviewed, not due within 30 days), amber clock (due within 30 days or
   never reviewed), red alert (overdue), from `documentReviewStatus` in
@@ -1153,6 +1154,8 @@ Remote documents/tables accept optional appearance and base64 `iconAssets`, vali
 hash/type/2 MiB bounds before creation, and include icons in existing transfer caps.
 Image sends require `whoami.capabilities.contentAppearance=1` before content POST;
 text-only legacy transfers remain valid. Errors contain no icon bytes.
+Document sends carry `properties` (type, summary, tags only) when `whoami.capabilities.documentProperties=1`;
+otherwise the field is dropped and the page still arrives.
 
 Project machine writes use a separate content author (`services/contentAuthor.ts`); they never gain membership. Preserve the machine editor pair (`lastEditedByMachineKind`/`Id`, dual-writing `lastEditedByProjectKeyId` this release) and captured name when rebuilding, and clear the prior machine stamp on human edits/moves. Machine publishing flows through `projectApi/operations.ts` with operation→project locks and revision/idempotency guards. Operation locking has its own `WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX` (1–128, default 2) so single-connection repository/application pools remain safe.
 

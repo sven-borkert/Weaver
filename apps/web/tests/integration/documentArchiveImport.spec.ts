@@ -1150,3 +1150,187 @@ it.each(["create", "archive"] as const)(
     }
   },
 );
+
+describe("imported page properties", () => {
+  const header = (properties: unknown) =>
+    [
+      "<!-- weaver",
+      "id: 22222222-2222-4222-8222-222222222222",
+      "created: 2026-01-01T00:00:00.000Z",
+      "updated: 2026-01-01T00:00:00.000Z",
+      `properties: ${JSON.stringify(properties)}`,
+      "-->",
+      "",
+      "# Props",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+  const entry = (
+    projectId: string,
+    text: string,
+    target: Parameters<typeof importDocumentArchiveEntry>[1]["target"],
+    fileName = "props.md",
+  ) => ({
+    projectId,
+    folderPath: [],
+    folderNames: {},
+    kind: "markdown" as const,
+    fileName,
+    text,
+    images: [],
+    target,
+  });
+  const propsOf = async (projectId: string, path: string) =>
+    parseDocumentFile((await committed(projectId, path)).toString(), "markdown")
+      .meta;
+
+  it("maps YAML type, tags, summary and aliases and ignores the source type", async () => {
+    const { project, actor } = await fixture("yaml-props");
+    const yaml = (type: string) =>
+      [
+        "---",
+        "title: Yaml Page",
+        `type: ${type}`,
+        'summary: "A short summary"',
+        "tags: [alpha, beta]",
+        "aliases:",
+        "  - gamma",
+        "  - alpha",
+        "source: ignored",
+        "---",
+        "",
+        "Body.",
+        "",
+      ].join("\n");
+    const ok = await importDocumentArchiveEntry(
+      getPrisma(),
+      entry(project.id, yaml("entity"), { mode: "create" }),
+      actor,
+    );
+    expect((await propsOf(project.id, ok.path)).properties).toEqual({
+      type: "entity",
+      summary: "A short summary",
+      tags: ["alpha", "beta", "gamma"],
+    });
+    const src = await importDocumentFile(
+      getPrisma(),
+      {
+        projectId: project.id,
+        folderPath: [],
+        fileName: "second.md",
+        text: yaml("Source").replace("Yaml Page", "Second"),
+      },
+      actor,
+    );
+    const meta = (await propsOf(project.id, src.path)).properties;
+    expect(meta?.type).toBeUndefined();
+    expect(meta?.summary).toBe("A short summary");
+  }, 30_000);
+
+  it("ignores reviewExempt and sources from a Weaver header and gives a normal review block", async () => {
+    const { project, actor } = await fixture("hdr-props");
+    const text = header({
+      type: "concept",
+      tags: ["t"],
+      reviewExempt: true,
+      sources: [{ kind: "url", url: "https://example.test/a" }],
+    });
+    const viaZip = await importDocumentArchiveEntry(
+      getPrisma(),
+      entry(project.id, text, { mode: "create" }),
+      actor,
+    );
+    const viaFile = await importDocumentFile(
+      getPrisma(),
+      { projectId: project.id, folderPath: [], fileName: "p2.md", text },
+      actor,
+    );
+    for (const doc of [viaZip, viaFile]) {
+      const meta = await propsOf(project.id, doc.path);
+      expect(meta.properties).toEqual({ type: "concept", tags: ["t"] });
+      expect(meta.review).not.toBeNull();
+      expect(
+        await getPrisma().document.findUniqueOrThrow({
+          where: { id: doc.id },
+        }),
+      ).toMatchObject({ reviewExempt: false });
+    }
+  }, 30_000);
+
+  it("keeps the target's own properties on replace unless the import names mappable ones", async () => {
+    const { project, actor } = await fixture("replace-props");
+    const db = getPrisma();
+    const first = await importDocumentArchiveEntry(
+      db,
+      entry(
+        project.id,
+        header({ type: "entity", summary: "keep me", tags: ["x"] }),
+        { mode: "create" },
+      ),
+      actor,
+    );
+    const plain = await importDocumentArchiveEntry(
+      db,
+      entry(project.id, "# Props\n\nNew body.\n", {
+        mode: "replace",
+        documentId: first.id,
+        expectedHeadCommitSha: first.headCommitSha,
+      }),
+      actor,
+    );
+    expect((await propsOf(project.id, plain.path)).properties).toEqual({
+      type: "entity",
+      summary: "keep me",
+      tags: ["x"],
+    });
+    const named = await importDocumentArchiveEntry(
+      db,
+      entry(
+        project.id,
+        header({ summary: "new summary", reviewExempt: true }),
+        {
+          mode: "replace",
+          documentId: first.id,
+          expectedHeadCommitSha: plain.headCommitSha,
+        },
+      ),
+      actor,
+    );
+    const meta = await propsOf(project.id, named.path);
+    expect(meta.properties).toEqual({
+      type: "entity",
+      summary: "new summary",
+      tags: ["x"],
+    });
+  }, 30_000);
+
+  it("exports the stored properties line in the downloaded archive", async () => {
+    const { project, actor } = await fixture("export-props");
+    const created = await createDocument(
+      getPrisma(),
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Exported",
+        content: { kind: "markdown", contentJson: BODY("x") },
+        properties: { type: "topic", tags: ["e"] },
+      },
+      actor,
+    );
+    const { stream } = await createDocumentArchive(
+      getPrisma(),
+      { projectId: project.id, documentId: created.id },
+      actor,
+    );
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) chunks.push(chunk as Buffer);
+    const zip = await JSZip.loadAsync(Buffer.concat(chunks));
+    const md = Object.keys(zip.files).find((name) => name.endsWith(".md"))!;
+    const text = await zip.files[md]!.async("string");
+    expect(parseDocumentFile(text, "markdown").meta.properties).toEqual({
+      type: "topic",
+      tags: ["e"],
+    });
+  }, 30_000);
+});

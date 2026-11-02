@@ -1,6 +1,7 @@
 import { readAppearanceAsset } from "../appearanceAssets";
 import type { Appearance } from "../../appearance/metadata";
-import type { TransferAppearance } from "./types";
+import { isReservedWikiType } from "../../wiki/properties";
+import type { TransferAppearance, TransferProperties } from "./types";
 import type { PrismaClient } from "@weaver/db/client";
 import { summarizeError } from "../../diagnostics/errorSummary";
 import { emitDiagnostic } from "../../diagnostics/writer";
@@ -54,7 +55,8 @@ export async function buildDocumentTransferPayload(
     markdown: string;
     assetsSlug: string;
     images: Array<{ name: string; contentType: string; bytes: string }>;
-  } & TransferAppearance
+  } & TransferAppearance &
+    TransferProperties
 > {
   const document = await getDocumentAtSnapshot(
     db,
@@ -133,6 +135,7 @@ export async function buildDocumentTransferPayload(
   }
   return {
     ...portable,
+    ...portableProperties(document.properties),
     title: document.title,
     markdown: serializeDocumentBody(json),
     assetsSlug,
@@ -168,6 +171,18 @@ export async function buildTableTransferPayload(
       table.snapshotCommitSha,
     )),
   };
+}
+
+function portableProperties(
+  properties: { type?: string; summary?: string; tags?: string[] } | null,
+): TransferProperties {
+  if (!properties) return {};
+  const out: { type?: string; summary?: string; tags?: string[] } = {};
+  if (properties.type !== undefined && !isReservedWikiType(properties.type))
+    out.type = properties.type;
+  if (properties.summary !== undefined) out.summary = properties.summary;
+  if (properties.tags !== undefined) out.tags = properties.tags;
+  return Object.keys(out).length > 0 ? { properties: out } : {};
 }
 
 async function transferAppearance(
@@ -431,7 +446,7 @@ async function post(
   kind: "documents" | "tables",
   payload: unknown,
 ): Promise<SendResult> {
-  const body = transferRequestBody(payload);
+  const initialBody = transferRequestBody(payload);
   return withRemote(
     deps,
     actor,
@@ -443,7 +458,11 @@ async function post(
     },
     async (token, remote, fetchImpl) => {
       const appearance = (payload as TransferAppearance).appearance;
-      if (appearance?.icon?.type === "image") {
+      const hasIcon = appearance?.icon?.type === "image";
+      const hasProperties =
+        (payload as TransferProperties).properties !== undefined;
+      let body = initialBody;
+      if (hasIcon || hasProperties) {
         const who = await remoteJson<unknown>(
           fetchImpl,
           remoteEndpoints(remote.baseUrl).transfer("whoami"),
@@ -451,16 +470,25 @@ async function post(
             headers: { authorization: `Bearer ${token}` },
             maxBytes: LIST_MAX_BYTES,
           },
-        );
-        if (
-          !isRecord(who) ||
-          !isRecord(who.capabilities) ||
-          who.capabilities.contentAppearance !== 1
-        )
+        ).catch((error: unknown) => {
+          if (hasIcon) throw error;
+          return null;
+        });
+        const capabilities =
+          isRecord(who) && isRecord(who.capabilities) ? who.capabilities : {};
+        if (hasIcon && capabilities.contentAppearance !== 1)
           throw new CoreError(
             "PRECONDITION_FAILED",
             "This instance does not support image appearance transfers",
           );
+        // An older receiver still gets the page, without its properties.
+        if (hasProperties && capabilities.documentProperties !== 1) {
+          const { properties: _dropped, ...rest } = payload as Record<
+            string,
+            unknown
+          >;
+          body = transferRequestBody(rest);
+        }
       }
       return remoteJson<unknown>(
         fetchImpl,

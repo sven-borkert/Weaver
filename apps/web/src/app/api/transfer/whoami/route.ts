@@ -7,7 +7,7 @@ export async function GET(req: Request): Promise<Response> {
   try {
     const actor = await resolveTransferActor(req);
     return Response.json({
-      capabilities: { contentAppearance: 1 },
+      capabilities: { contentAppearance: 1, documentProperties: 1 },
       userId: actor.userId,
       name: actor.name,
       email: actor.email,

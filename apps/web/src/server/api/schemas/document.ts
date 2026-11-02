@@ -1,6 +1,7 @@
 import { validateDocumentContent } from "@weaver/core/editor/markdown";
 import { documentTitleSchema } from "@weaver/core/documents/title";
 import { MAX_MARKDOWN_CHARS } from "@weaver/core/documents/limits";
+import { wikiPagePropertiesInputSchema } from "@weaver/core/wiki/properties";
 import { z } from "zod";
 import { isSingleLineChangeSummary } from "~/lib/documents/change-summary";
 import { folderPathSchema } from "./folder";
@@ -48,6 +49,7 @@ export const createDocumentInput = z.object({
   folderPath: folderPathSchema,
   title,
   contentJson,
+  properties: wikiPagePropertiesInputSchema.optional(),
 });
 
 export const updateDocumentInput = z.object({
@@ -63,6 +65,14 @@ export const updateDocumentInput = z.object({
     }),
   ]),
   changeSummary: changeSummary.optional(),
+  properties: wikiPagePropertiesInputSchema.optional(),
+});
+
+export const setPropertiesInput = z.object({
+  projectId: z.uuid(),
+  documentId: z.uuid(),
+  expectedHeadCommitSha: z.string().regex(/^[0-9a-f]{40}$/),
+  properties: wikiPagePropertiesInputSchema,
 });
 
 export const importFileInput = z.object({
@@ -115,10 +125,19 @@ export const listDocumentsInput = z.object({
     .max(200)
     .describe("Case-insensitive document title substring")
     .optional(),
+  type: z.string().trim().min(1).max(40).optional(),
+  tag: z.string().trim().min(1).max(40).optional(),
+  includeSummary: z.boolean().default(false),
   sort: z
     .enum(["title", "lastEditedAt", "createdAt", "updatedAt"])
     .default("lastEditedAt"),
   dir: z.enum(["asc", "desc"]).default("desc"),
+});
+
+export const pageIndexInput = z.object({
+  projectId: z.uuid(),
+  cursor: z.string().max(1000).optional(),
+  limit: z.number().int().min(1).max(50).default(50),
 });
 
 export const documentBacklinksInput = documentIdInput.extend({

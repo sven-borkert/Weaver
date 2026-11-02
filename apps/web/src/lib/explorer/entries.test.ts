@@ -99,6 +99,17 @@ describe("searchFolderEntries", () => {
   });
 });
 
+describe("searchFolderEntries with a predicate", () => {
+  it("lists matching items below the folder even without a text query", () => {
+    expect(
+      searchFolderEntries(tree, ["guides"], "", (d) => d.id === "d3").map(
+        (d) => d.id,
+      ),
+    ).toEqual(["d3"]);
+    expect(searchFolderEntries(tree, [], "", () => false)).toEqual([]);
+  });
+});
+
 describe("sortEntries", () => {
   const { items } = listFolderEntries(tree, ["guides", "setup"]);
   it("sorts by title and by last edited in both directions", () => {

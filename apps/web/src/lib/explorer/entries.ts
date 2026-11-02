@@ -170,15 +170,17 @@ export function searchFolderEntries<I extends ExplorerItem>(
   tree: ExplorerTree<I>,
   folderPath: string[],
   query: string,
+  matches?: (item: I) => boolean,
 ): ItemEntry<I>[] {
   const needle = query.trim().toLocaleLowerCase();
-  if (!needle) return [];
+  if (!needle && !matches) return [];
   const hits = tree.items
     .map(toItemEntry)
     .filter(
       (entry) =>
         startsWithPath(entry.folderPath, folderPath) &&
-        entry.title.toLocaleLowerCase().includes(needle),
+        entry.title.toLocaleLowerCase().includes(needle) &&
+        (matches?.(entry) ?? true),
     );
   return sortEntries(hits, "title", "asc");
 }

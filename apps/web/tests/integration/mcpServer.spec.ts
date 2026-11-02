@@ -4335,6 +4335,77 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
       }
     });
 
+    it("writes page properties through create_document and patch_document and refuses reserved ones", async () => {
+      const { db, project, writeKey } = await readFixture();
+      const client = await connect(writeKey.secret);
+      try {
+        const tools = (await client.listTools()).tools;
+        const schema = (name: string) =>
+          JSON.stringify(tools.find((t) => t.name === name)?.inputSchema ?? {});
+        expect(schema("create_document")).toContain('"summary"');
+        expect(schema("create_document")).not.toContain('"sources"');
+        expect(schema("create_document")).not.toContain("reviewExempt");
+        expect(schema("patch_document")).toContain('"properties"');
+        expect(schema("create_document")).toContain('"properties"');
+        const created = structured<{ resourceId: string; commitSha: string }>(
+          await client.callTool({
+            name: "create_document",
+            arguments: {
+              projectId: project.id,
+              folderPath: [],
+              title: "Typed via MCP",
+              markdown: "body\n",
+              properties: { type: "concept", tags: ["mcp"] },
+              idempotencyKey: "props-create-0001",
+              summary: "Create with properties",
+            },
+          }),
+        );
+        const patched = structured<{ commitSha: string }>(
+          await client.callTool({
+            name: "patch_document",
+            arguments: {
+              projectId: project.id,
+              documentId: created.resourceId,
+              baseCommitSha: created.commitSha,
+              actions: [],
+              properties: { summary: "Said in one line" },
+              idempotencyKey: "props-patch-0001",
+              summary: "Properties only",
+            },
+          }),
+        );
+        expect(patched.commitSha).not.toBe(created.commitSha);
+        expect(
+          await db.document.findUniqueOrThrow({
+            where: { id: created.resourceId },
+          }),
+        ).toMatchObject({
+          wikiType: "concept",
+          wikiSummary: "Said in one line",
+          wikiTags: ["mcp"],
+          reviewExempt: false,
+        });
+        for (const properties of [{ type: "SOURCE" }, { reviewExempt: true }]) {
+          const refused = await client.callTool({
+            name: "create_document",
+            arguments: {
+              projectId: project.id,
+              folderPath: [],
+              title: "Refused",
+              markdown: "body\n",
+              properties,
+              idempotencyKey: `props-bad-${Object.keys(properties)[0]}`,
+              summary: "Reserved",
+            },
+          });
+          expect(refused.isError).toBe(true);
+        }
+      } finally {
+        await client.close();
+      }
+    }, 30_000);
+
     it("lists the wiki reads only when the wiki toolset is requested and runs them in scope", async () => {
       const { db, project, hidden, doc, readKey } = await readFixture();
       const wiki = [

@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { MAX_MARKDOWN_CHARS } from "@weaver/core/documents/limits";
@@ -23,6 +24,7 @@ import {
 } from "~/lib/documents/download";
 import { partitionDroppedFiles } from "~/lib/documents/document-drop";
 import { documentKindIcon } from "~/components/icons/document-kind-icon";
+import { Button } from "~/components/ui/button";
 import { ClientDateTime } from "~/components/ui/client-date";
 import { api } from "~/trpc/react";
 import { useExplorerOperations } from "~/components/explorer/useExplorerOperations";
@@ -238,6 +240,25 @@ export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
   ),
   columns: [
     {
+      key: "type",
+      header: "Type",
+      cell: (item) => item.wikiType ?? "—",
+      className: "text-text-2 max-w-32 truncate",
+      visible: (items) => items.some((item) => item.wikiType),
+    },
+    {
+      key: "summary",
+      header: "Summary",
+      cell: (item) =>
+        item.wikiSummary ? (
+          <span title={item.wikiSummary}>{item.wikiSummary}</span>
+        ) : (
+          "—"
+        ),
+      className: "text-text-2 max-w-64 truncate",
+      visible: (items) => items.some((item) => item.wikiSummary),
+    },
+    {
       key: "created",
       header: "Created",
       cell: (item) => <ClientDateTime value={item.createdAt} />,
@@ -253,10 +274,21 @@ export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
       className: "text-text-2 max-w-48 truncate",
     },
   ],
+  filter: {
+    id: "type",
+    label: "Type",
+    allLabel: "All types",
+    value: (item) => item.wikiType,
+  },
   editedHeaders: { at: "Updated", by: "Updated by" },
   FolderActions: FolderMutations,
   rootActions: ({ projectId }) => (
-    <DocumentRootReviewAction projectId={projectId} />
+    <>
+      <Button asChild variant="outline" size="sm">
+        <Link href={`${documentsBase(projectId)}/index-view`}>Index view</Link>
+      </Button>
+      <DocumentRootReviewAction projectId={projectId} />
+    </>
   ),
   ItemActions: DocumentItemActions,
   CreateFolderDialog,

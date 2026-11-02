@@ -33,6 +33,7 @@ import {
   importTitle,
   splitImportHeader,
 } from "../documents/importMarkdown";
+import { importedProperties } from "../documents/importProperties";
 import { splitPythonImport } from "../documents/importPython";
 import {
   documentKindFromFileName,
@@ -100,7 +101,7 @@ async function importPythonDocument(
   input: FileImportInput,
   actor: EnrichedActor,
 ): Promise<DocumentResult & { warnings?: string[] }> {
-  const { title, body, review, appearance } = splitPythonImport(
+  const { title, body, review, appearance, properties } = splitPythonImport(
     input.text,
     input.fileName,
   );
@@ -113,6 +114,7 @@ async function importPythonDocument(
       title,
       reviewSource: { kind: "import", imported: review },
       appearance,
+      ...(properties && { properties }),
       allowMissingIcon: true,
       content: { kind: "python", text: body },
     },
@@ -136,6 +138,7 @@ async function importMarkdownDocument(
     takenNames: new Set(),
   });
   const appearance = importedAppearance(input.text);
+  const properties = importedProperties(input.text);
   const warnings = await iconWarnings(db, input.projectId, appearance, actor);
   const result = await createDocument(
     db,
@@ -148,6 +151,7 @@ async function importMarkdownDocument(
         imported: importedReview(input.text),
       },
       appearance,
+      ...(properties && { properties }),
       allowMissingIcon: true,
       content: { kind: "markdown", contentJson: images.contentJson },
       assets: images.assets,
@@ -421,6 +425,9 @@ export async function importDocumentArchiveEntry(
   const appearance = source
     ? source.appearance
     : importedAppearance(input.text);
+  const properties = source
+    ? source.properties
+    : importedProperties(input.text);
   validateAppearanceAssets(input.iconAssets ?? []);
   const result = await withProjectRepo(input.projectId, async (repo) => {
     await assertProjectRole(db, input.projectId, actor, "Editor");
@@ -458,6 +465,7 @@ export async function importDocumentArchiveEntry(
             baseCommitSha,
             title,
             changeSummary: `replaced by import of ${input.fileName}`,
+            ...(properties && { propertiesInput: properties }),
           };
           if (source)
             return writeDocumentInRepo(
@@ -490,6 +498,7 @@ export async function importDocumentArchiveEntry(
           title,
           createdAt: new Date().toISOString(),
           appearance,
+          ...(properties && { propertiesInput: properties }),
         };
         if (source) {
           await ensureFolders(repo, { ...input, folderMetadata }, actor);

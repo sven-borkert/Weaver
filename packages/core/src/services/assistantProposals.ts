@@ -19,6 +19,7 @@ import {
   assertAssistantUse,
   requireOwnedConversation,
 } from "./assistantConversations";
+import { applyPagePropertiesInput } from "../wiki/properties";
 import {
   applyOperationInRepo,
   applyTableRowChanges,
@@ -358,6 +359,34 @@ async function metadataPreviewLines(
     .map((text) => ({ type: "add" as const, text }));
 }
 
+/** Lists each named property change; validates against the page's current type. */
+function propertiesPreviewLines(
+  operation: Extract<
+    ProposalOperation,
+    { kind: "document.create" | "document.edit" | "document.patch" }
+  >,
+  current?: { type?: string },
+): Array<{ type: "add"; text: string }> {
+  if (operation.properties === undefined) return [];
+  applyPagePropertiesInput(current, operation.properties);
+  const shown = (value: unknown) =>
+    value === null
+      ? "(cleared)"
+      : Array.isArray(value)
+        ? value
+            .map((v) => (typeof v === "string" ? v : JSON.stringify(v)))
+            .join(", ")
+        : typeof value === "string"
+          ? value
+          : JSON.stringify(value);
+  return Object.entries(operation.properties)
+    .filter(([, value]) => value !== undefined)
+    .map(([key, value]) => ({
+      type: "add" as const,
+      text: `Property ${key}: ${shown(value).slice(0, 300)}`,
+    }));
+}
+
 /** Checks the references with the proposer's access; the bytes are copied at acceptance. */
 async function imagePreviewLines(
   db: PrismaClient,
@@ -393,6 +422,7 @@ async function prepare(
             ...body,
             lines: [
               ...(await metadataPreviewLines(db, operation)),
+              ...propertiesPreviewLines(operation),
               ...(await imagePreviewLines(
                 db,
                 actor,
@@ -434,6 +464,10 @@ async function prepare(
             ...body,
             lines: [
               ...(await metadataPreviewLines(db, operation)),
+              ...propertiesPreviewLines(
+                operation,
+                current.properties ?? undefined,
+              ),
               ...(await imagePreviewLines(
                 db,
                 actor,
@@ -493,6 +527,10 @@ async function prepare(
             lines: [
               ...titleLines,
               ...(await metadataPreviewLines(db, operation)),
+              ...propertiesPreviewLines(
+                operation,
+                current.properties ?? undefined,
+              ),
               ...(await imagePreviewLines(
                 db,
                 actor,

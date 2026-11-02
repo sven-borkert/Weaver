@@ -8,7 +8,8 @@ const mocked = vi.hoisted(
     permissions:
       { canMarkReviewed: boolean; canEditReview: boolean } | undefined;
     remotes: unknown[] | undefined;
-  } => ({ permissions: undefined, remotes: [] }),
+    role: string;
+  } => ({ permissions: undefined, remotes: [], role: "Editor" }),
 );
 
 vi.mock("~/components/ui/dropdown-menu", () => ({
@@ -33,6 +34,7 @@ vi.mock("~/components/ui/dropdown-menu", () => ({
   ),
 }));
 vi.mock("./MarkReviewedDialog", () => ({ MarkReviewedDialog: () => null }));
+vi.mock("./PropertiesDialog", () => ({ PropertiesDialog: () => null }));
 vi.mock("./ReviewSettingsDialog", () => ({
   ReviewSettingsDialog: () => null,
 }));
@@ -44,6 +46,7 @@ vi.mock("~/trpc/react", () => ({
     document: {
       reviewPermissions: { useQuery: () => ({ data: mocked.permissions }) },
     },
+    project: { get: { useQuery: () => ({ data: { myRole: mocked.role } }) } },
     remoteInstance: {
       listForUser: { useQuery: () => ({ data: mocked.remotes }) },
     },
@@ -71,6 +74,7 @@ const disabledItem = (html: string, label: string) =>
 beforeEach(() => {
   mocked.permissions = undefined;
   mocked.remotes = [];
+  mocked.role = "Editor";
 });
 
 describe("DocumentActionsMenu", () => {
@@ -106,6 +110,13 @@ describe("DocumentActionsMenu", () => {
     expect(html).toContain("Exports the saved version");
     expect(html).toContain("Downloads the saved version");
     expect(html).not.toContain("Explore graph");
+  });
+
+  it("offers properties to editors only and disables them while dirty", () => {
+    expect(render()).toContain("Properties…");
+    expect(disabledItem(render(true), "Properties…")).toBe(true);
+    mocked.role = "Viewer";
+    expect(render()).not.toContain("Properties…");
   });
 
   it("offers sending only when a remote instance is registered", () => {

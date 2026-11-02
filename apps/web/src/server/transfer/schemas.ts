@@ -2,6 +2,7 @@ import {
   assertAppearancePatch,
   normalizeAppearance,
 } from "@weaver/core/appearance/metadata";
+import { wikiPagePropertiesToolSchema } from "@weaver/core/wiki/properties";
 import { z } from "zod";
 import { documentTitleSchema } from "@weaver/core/documents/title";
 import {
@@ -42,8 +43,12 @@ const appearanceFields = {
     .optional(),
 };
 
+// Strict: reviewExempt and sources belong to the sender's project and are refused.
+const transferProperties = wikiPagePropertiesToolSchema.optional();
+
 export const transferDocumentInput = z.object({
   ...appearanceFields,
+  properties: transferProperties,
   projectId: z.uuid(),
   folderPath: folderPathSchema,
   title: documentTitleSchema,

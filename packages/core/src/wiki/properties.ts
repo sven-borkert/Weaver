@@ -1,3 +1,6 @@
+import { z } from "zod";
+import { CoreError } from "../errors";
+
 export const WIKI_PAGE_TYPES = [
   "summary",
   "entity",
@@ -114,4 +117,131 @@ export function parsePropertiesLine(raw: string): WikiPageProperties | null {
   } catch {
     return null;
   }
+}
+
+function foldedType(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(/[\p{Default_Ignorable_Code_Point}\p{Cf}]/gu, "")
+    .trim()
+    .toLowerCase();
+}
+
+/** True for any case, width or whitespace variant of the reserved `source` type. */
+export function isReservedWikiType(value: string | undefined): boolean {
+  return value !== undefined && foldedType(value) === "source";
+}
+
+const inputLine = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .refine(
+      (value) => !CONTROL.test(value),
+      "must not contain control characters",
+    );
+
+const sourceInput = z
+  .strictObject({
+    kind: z.enum(WIKI_SOURCE_KINDS),
+    id: inputLine(MAX_ID_CHARS).optional(),
+    url: inputLine(MAX_URL_CHARS).optional(),
+  })
+  .superRefine((source, ctx) => {
+    if (source.kind === "url") {
+      if (source.id !== undefined || httpUrl(source.url) === null)
+        ctx.addIssue({
+          code: "custom",
+          message: "a url source needs an http(s) url and no id",
+        });
+    } else if (source.id === undefined || source.url !== undefined)
+      ctx.addIssue({
+        code: "custom",
+        message: "a document, table or artifact source needs an id and no url",
+      });
+  });
+
+/**
+ * Writable page properties. `null` clears a field, an omitted field stays.
+ * `reviewExempt` and the `source` type are reserved and not accepted.
+ */
+export const wikiPagePropertiesInputSchema = z
+  .strictObject({
+    type: inputLine(MAX_WIKI_TYPE_CHARS)
+      .refine((value) => !isReservedWikiType(value), "type source is reserved")
+      .nullable()
+      .optional(),
+    summary: inputLine(MAX_WIKI_SUMMARY_CHARS).nullable().optional(),
+    tags: z
+      .array(inputLine(MAX_WIKI_TAG_CHARS))
+      .max(MAX_WIKI_TAGS)
+      .nullable()
+      .optional(),
+    sources: z.array(sourceInput).max(MAX_WIKI_SOURCES).nullable().optional(),
+  })
+  .describe(
+    "Page properties: type, summary, tags and sources. A field you omit stays; null clears it.",
+  );
+/** Tool-facing subset: sources stay with the UI and importers to keep schemas small. */
+export const wikiPagePropertiesToolSchema = wikiPagePropertiesInputSchema
+  .omit({ sources: true })
+  .describe("Page properties. An omitted field stays; null clears it.");
+export type WikiPagePropertiesInput = z.infer<
+  typeof wikiPagePropertiesInputSchema
+>;
+
+/** Validates writer input; the error is BAD_REQUEST pinned to `properties`. */
+export function parsePagePropertiesInput(
+  raw: unknown,
+): WikiPagePropertiesInput {
+  const parsed = wikiPagePropertiesInputSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const where = issue?.path.length ? `.${issue.path.join(".")}` : "";
+    throw new CoreError(
+      "BAD_REQUEST",
+      `invalid properties${where}: ${issue?.message ?? "invalid"}`,
+      { field: "properties" },
+    );
+  }
+  return parsed.data;
+}
+
+/** Patch merge: named fields replace, null clears; reserved fields on the page survive. */
+export function applyPagePropertiesInput(
+  existing: WikiPageProperties | undefined,
+  rawInput: unknown,
+): WikiPageProperties | undefined {
+  const input = parsePagePropertiesInput(rawInput);
+  if (
+    input.type !== undefined &&
+    isReservedWikiType(existing?.type) &&
+    input.type !== existing?.type
+  )
+    throw new CoreError(
+      "BAD_REQUEST",
+      "the type of a source page is reserved",
+      {
+        field: "properties",
+      },
+    );
+  const next: Record<string, unknown> = { ...existing };
+  for (const key of ["type", "summary", "tags", "sources"] as const) {
+    const value = input[key];
+    if (value === undefined) continue;
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  return normalizeProperties(next) ?? undefined;
+}
+
+/** Review settings written by a human end the system exemption. */
+export function withoutReviewExempt(
+  properties: WikiPageProperties | undefined,
+): WikiPageProperties | undefined {
+  if (!properties?.reviewExempt) return properties;
+  const { reviewExempt: _drop, ...rest } = properties;
+  return normalizeProperties(rest) ?? undefined;
 }

@@ -1,6 +1,8 @@
 import type { Appearance } from "../appearance/metadata";
 import { FrontmatterError, parseDocumentFile } from "./frontmatter";
 import { documentFileStem } from "./kinds";
+import { importedProperties } from "./importProperties";
+import type { WikiPagePropertiesInput } from "../wiki/properties";
 import type { DocumentReview } from "./review";
 import { normalizeDocumentText } from "./text";
 
@@ -30,6 +32,7 @@ export function splitPythonImport(
   body: string;
   review: DocumentReview | null;
   appearance: Appearance | undefined;
+  properties: WikiPagePropertiesInput | undefined;
 } {
   const normalized = normalizeDocumentText(text);
   try {
@@ -40,6 +43,7 @@ export function splitPythonImport(
       body: parsed.body,
       review: parsed.meta.review,
       appearance: parsed.meta.appearance,
+      properties: importedProperties(normalized, "python"),
     };
   } catch (error) {
     if (!(error instanceof FrontmatterError)) throw error;
@@ -48,6 +52,7 @@ export function splitPythonImport(
       body: normalized,
       review: null,
       appearance: undefined,
+      properties: undefined,
     };
   }
 }

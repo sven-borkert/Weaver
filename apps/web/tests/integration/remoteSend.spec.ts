@@ -215,6 +215,66 @@ describe("sending to a remote instance", () => {
     );
   });
 
+  it("sends only portable properties and drops them for an older peer", async () => {
+    const { db, actor, source, target, remote } = await connected("props");
+    const doc = await createDocument(
+      db,
+      {
+        projectId: source.id,
+        folderPath: [],
+        title: "Typed",
+        content: { kind: "markdown", contentJson: parseDocumentBody("x") },
+        properties: {
+          type: "entity",
+          summary: "S",
+          tags: ["t"],
+          sources: [{ kind: "url", url: "https://example.test/a" }],
+        },
+      },
+      actor,
+    );
+    const payload = await buildDocumentTransferPayload(db, actor, {
+      projectId: source.id,
+      documentId: doc.id,
+    });
+    expect(payload.properties).toEqual({
+      type: "entity",
+      summary: "S",
+      tags: ["t"],
+    });
+    const send = (runtime: RemoteRuntimeDeps, id: string) =>
+      sendDocumentToRemote(runtime, actor, {
+        projectId: source.id,
+        documentId: id,
+        remoteInstanceId: remote.id,
+        targetProjectId: target.id,
+        targetFolderPath: [],
+      });
+    const sent = await send(deps(), doc.id);
+    expect(
+      await db.document.findUniqueOrThrow({ where: { id: sent.id } }),
+    ).toMatchObject({ wikiType: "entity", wikiSummary: "S", wikiTags: ["t"] });
+
+    const old = deps();
+    const original = old.fetchImpl;
+    const bodies: string[] = [];
+    old.fetchImpl = async (url, init) => {
+      const targetUrl = url instanceof Request ? url.url : url.toString();
+      if (targetUrl.endsWith("/transfer/whoami"))
+        return Response.json({ userId: actor.userId });
+      if (init?.method === "POST" && targetUrl.includes("/transfer/"))
+        bodies.push(init.body as string);
+      return original(url, init);
+    };
+    const second = await send(old, doc.id);
+    expect(bodies).toHaveLength(1);
+    expect(JSON.parse(bodies[0]!)).not.toHaveProperty("properties");
+    expect(
+      (await db.document.findUniqueOrThrow({ where: { id: second.id } }))
+        .wikiType,
+    ).toBeNull();
+  }, 30_000);
+
   it("lists targets and sends a document with its image and flattened references", async () => {
     const { db, user, actor, source, target, remote } = await connected("doc");
     const other = await createDocument(

@@ -550,6 +550,42 @@ describe("assistant proposals", () => {
     });
   });
 
+  it("lists property changes in the preview and refuses reserved ones at proposal time", async () => {
+    const { db, project, actor, conversation, run } = await setup("props");
+    const created = await createProposal(db, actor, {
+      conversationId: conversation.id,
+      runId: run.id,
+      summary: "Typed page",
+      operation: {
+        kind: "document.create",
+        projectId: project.id,
+        folderPath: [],
+        title: "Typed",
+        markdown: "body\n",
+        properties: { type: "entity", tags: ["a", "b"] },
+      },
+    });
+    const lines = (created.preview as { lines: Array<{ text: string }> }).lines;
+    expect(lines.map((l) => l.text)).toEqual(
+      expect.arrayContaining(["Property type: entity", "Property tags: a, b"]),
+    );
+    await expect(
+      createProposal(db, actor, {
+        conversationId: conversation.id,
+        runId: run.id,
+        summary: "Reserved",
+        operation: {
+          kind: "document.create",
+          projectId: project.id,
+          folderPath: [],
+          title: "Reserved",
+          markdown: "body\n",
+          properties: { type: " Source " },
+        },
+      }),
+    ).rejects.toThrow();
+  }, 30_000);
+
   it("bounds document previews by lines, not by the event payload budget", async () => {
     const { db, project, actor, conversation, run } = await setup("preview");
     const doc = await createDocument(

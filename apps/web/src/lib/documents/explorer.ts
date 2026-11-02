@@ -31,6 +31,8 @@ export type DocumentItem = {
   title: string;
   path: string;
   documentKind: DocumentKind;
+  wikiType?: string | null;
+  wikiSummary?: string | null;
   appearance?: Appearance | null;
   /** Null when the document has no review schedule. */
   reviewDueAt: Date | null;

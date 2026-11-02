@@ -7,11 +7,13 @@ import {
   MoreHorizontal,
   Send,
   Settings2,
+  Tags,
   Waypoints,
 } from "lucide-react";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { DOCUMENT_KINDS } from "@weaver/core/documents/kinds";
+import { projectRoleAtLeast } from "@weaver/core/roles";
 import { useRuntimeStatus } from "~/app/(workspace)/_components/RuntimeStatusContext";
 import { Button } from "~/components/ui/button";
 import {
@@ -25,11 +27,12 @@ import { withBasePath } from "~/lib/basePath";
 import { api, type RouterOutputs } from "~/trpc/react";
 import { SendToRemoteDialog } from "../../_components/SendToRemoteDialog";
 import { MarkReviewedDialog } from "./MarkReviewedDialog";
+import { PropertiesDialog } from "./PropertiesDialog";
 import { ReviewSettingsDialog } from "./ReviewSettingsDialog";
 
 export const UNSAVED_REVIEW_HINT = "Save or discard your changes first";
 
-type DialogKind = "reviewed" | "settings" | "send";
+type DialogKind = "reviewed" | "settings" | "send" | "properties";
 
 function ItemLabel({ label, hint }: { label: string; hint?: string }) {
   if (!hint) return label;
@@ -62,6 +65,10 @@ export function DocumentActionsMenu({
     projectId,
     documentId: document.id,
   }).data;
+  const myRole = api.project.get.useQuery({ projectId }).data?.myRole;
+  const canEditProperties = myRole
+    ? projectRoleAtLeast(myRole, "Editor")
+    : false;
   const canSend = (api.remoteInstance.listForUser.useQuery().data ?? []).length;
   const pdfUnavailable = useRuntimeStatus().pdf.status !== "ok";
   const reviewHint = dirty ? UNSAVED_REVIEW_HINT : undefined;
@@ -110,6 +117,15 @@ export function DocumentActionsMenu({
             >
               <Settings2 />
               <ItemLabel label="Review settings…" hint={reviewHint} />
+            </DropdownMenuItem>
+          ) : null}
+          {canEditProperties ? (
+            <DropdownMenuItem
+              disabled={dirty}
+              onSelect={() => setDialog("properties")}
+            >
+              <Tags />
+              <ItemLabel label="Properties…" hint={reviewHint} />
             </DropdownMenuItem>
           ) : null}
           <DropdownMenuSeparator />
@@ -193,6 +209,15 @@ export function DocumentActionsMenu({
           baseCommitSha={baseCommitSha}
           triggerRef={triggerRef}
           {...dialogProps("settings")}
+        />
+      ) : null}
+      {canEditProperties ? (
+        <PropertiesDialog
+          projectId={projectId}
+          document={document}
+          baseCommitSha={baseCommitSha}
+          triggerRef={triggerRef}
+          {...dialogProps("properties")}
         />
       ) : null}
       <SendToRemoteDialog

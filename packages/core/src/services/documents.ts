@@ -3,7 +3,12 @@ import {
   type AppearanceAsset,
 } from "./appearanceAssets";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
-import type { WikiPageProperties } from "../wiki/properties";
+import { presentWikiProperties } from "./wikiProperties";
+import {
+  applyPagePropertiesInput,
+  type WikiPageProperties,
+  type WikiPagePropertiesInput,
+} from "../wiki/properties";
 import { randomUUID } from "node:crypto";
 import { parseServerEnv } from "@weaver/config/server";
 import {
@@ -189,8 +194,10 @@ type WriteRequest =
       review?: DocumentReview;
       reviewSource?: { kind: "import"; imported: DocumentReview | null };
       appearance?: Appearance;
-      /** Carried from a recovered header; writer tools arrive later. */
+      /** Internal system path: carried from a recovered header, source writer, bootstrap. */
       properties?: WikiPageProperties;
+      /** Public writer input, validated and merged over `properties`. */
+      propertiesInput?: WikiPagePropertiesInput;
     }
   | {
       kind: "update";
@@ -202,6 +209,8 @@ type WriteRequest =
       metadata?: DocumentMetadataOverride;
       /** Images committed into the document's assets directory with the edit. */
       assets?: DocumentAssetFile[];
+      /** Public writer input, merged over the page's stored properties. */
+      propertiesInput?: WikiPagePropertiesInput;
     };
 
 export type DocumentWriteRequest = WriteRequest;
@@ -1261,9 +1270,13 @@ export async function writeDocumentInRepo(
     if (saved.json) assertImageSourcesContained(saved.json, path);
     const override = request.metadata ?? {};
     const self = documentAuthorForContent(actor);
+    const properties =
+      request.propertiesInput === undefined
+        ? request.properties
+        : applyPagePropertiesInput(request.properties, request.propertiesInput);
     const defaults =
       request.review ??
-      (request.properties?.reviewExempt
+      (properties?.reviewExempt
         ? null
         : await defaultReviewForFolderInRepo(db, repo, {
             projectId,
@@ -1288,7 +1301,7 @@ export async function writeDocumentInRepo(
       updated: override.updated ?? request.createdAt,
       updatedBy: override.updatedBy ?? self,
       ...(request.appearance ? { appearance: request.appearance } : {}),
-      ...(request.properties ? { properties: request.properties } : {}),
+      ...(properties ? { properties } : {}),
       review,
     };
     assertUpdatedNotBeforeCreated(meta);
@@ -1375,6 +1388,13 @@ export async function writeDocumentInRepo(
     }
     if (saved.json) assertImageSourcesContained(saved.json, path);
     const override = request.metadata ?? {};
+    const properties =
+      request.propertiesInput === undefined
+        ? oldFile.meta.properties
+        : applyPagePropertiesInput(
+            oldFile.meta.properties,
+            request.propertiesInput,
+          );
     const meta: DocumentMeta = {
       id: row.id,
       title,
@@ -1386,9 +1406,7 @@ export async function writeDocumentInRepo(
       ...(oldFile.meta.appearance
         ? { appearance: oldFile.meta.appearance }
         : {}),
-      ...(oldFile.meta.properties
-        ? { properties: oldFile.meta.properties }
-        : {}),
+      ...(properties ? { properties } : {}),
     };
     assertUpdatedNotBeforeCreated(meta);
     prepared = {
@@ -1457,6 +1475,7 @@ export async function createDocument(
     review?: DocumentReview;
     reviewSource?: { kind: "import"; imported: DocumentReview | null };
     appearance?: Appearance;
+    properties?: WikiPagePropertiesInput;
     iconAssets?: AppearanceAsset[];
     allowMissingIcon?: boolean;
   },
@@ -1489,6 +1508,7 @@ export async function createDocument(
             ...(input.review && { review: input.review }),
             ...(input.reviewSource && { reviewSource: input.reviewSource }),
             ...(input.appearance && { appearance: input.appearance }),
+            ...(input.properties && { propertiesInput: input.properties }),
           },
           actor,
           { operation: "create", ...provenance },
@@ -1606,6 +1626,11 @@ export async function getDocument(
     machineEditor: machineEditorFromRow(row),
     ...(await presentDocumentMetadata(db, meta)),
     appearance: normalizeAppearance(meta.appearance),
+    properties: await presentWikiProperties(
+      db,
+      input.projectId,
+      meta.properties,
+    ),
     review: await presentDocumentReview(db, input.projectId, meta.review),
   };
 }
@@ -1625,6 +1650,7 @@ export async function getDocumentAtSnapshot(
   kind: DocumentKind;
   markdown: string;
   appearance: Appearance | null;
+  properties: WikiPageProperties | null;
   snapshotCommitSha: string;
   baseCommitSha: string;
   metadata: DocumentMetadataView;
@@ -1665,6 +1691,7 @@ export async function getDocumentAtSnapshot(
             )
           : parsed.body,
       appearance: normalizeAppearance(parsed.meta.appearance),
+      properties: parsed.meta.properties ?? null,
       snapshotCommitSha,
       baseCommitSha: file.baseCommitSha,
       metadata: await presentDocumentMetadata(db, parsed.meta),
@@ -1698,6 +1725,7 @@ export async function saveDocument(
     title?: string;
     content: DocumentContentInput;
     changeSummary: string;
+    properties?: WikiPagePropertiesInput;
   },
   actor: EnrichedActor,
   provenance?: DocumentProvenance,
@@ -1714,6 +1742,7 @@ export async function saveDocument(
       title: input.title,
       content: input.content,
       changeSummary: summary,
+      ...(input.properties && { propertiesInput: input.properties }),
     },
     actor,
     {
@@ -2598,6 +2627,9 @@ export async function listDocuments(
     pageSize: number;
     search?: string;
     folderPath?: string[];
+    type?: string;
+    tag?: string;
+    includeSummary?: boolean;
     sort: "title" | "lastEditedAt" | "createdAt" | "updatedAt";
     dir: "asc" | "desc";
   },
@@ -2613,6 +2645,10 @@ export async function listDocuments(
     ...(input.search
       ? { title: { contains: input.search, mode: "insensitive" as const } }
       : {}),
+    ...(input.type
+      ? { wikiType: { equals: input.type, mode: "insensitive" as const } }
+      : {}),
+    ...(input.tag ? { wikiTags: { array_contains: [input.tag] } } : {}),
   };
   const total = await db.document.count({ where });
   const orderBy: Prisma.DocumentOrderByWithRelationInput[] = [
@@ -2647,6 +2683,8 @@ export async function listDocuments(
       updatedBy: { select: { name: true, email: true } },
       reviewDueAt: true,
       appearance: true,
+      wikiType: true,
+      wikiSummary: input.includeSummary === true,
     },
   });
   const pageSize = input.pageSize > 0 ? input.pageSize : total;

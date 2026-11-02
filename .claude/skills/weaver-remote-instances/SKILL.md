@@ -76,6 +76,9 @@ outbound network policy.
 - Document cross-references flatten for transfer; only the source document's own
   assets travel. Preserve table value conversion and capability preflight for
   image-bearing appearance metadata. Use existing domain converters.
+- Document sends add `properties` (type, summary, tags; never `reviewExempt` or `sources`, which belong to the
+  source project) behind `whoami.capabilities.documentProperties=1`; without it the send strips the field. The
+  receiver's schema is strict, so a peer cannot smuggle reserved fields.
 - Bound the receiver's body while streaming, independent of `Content-Length`.
   `TRANSFER_BODY_MAX_BYTES` is currently 64 MiB. Validate image names,
   duplicates, count, per-image size and sniffed MIME before creating content.

@@ -26,11 +26,14 @@ export const listDocumentsTool = defineSharedReadTool({
   kind: "read",
   capability: "content:read",
   description:
-    "List documents in a project (paged, optional folder and title search) with their created/updated time, author and review due date. Returns ids for read_document, which resolves the current commit revision. If truncated is true, lower pageSize and page through the rest.",
+    "List documents in a project (paged, optional folder, title search, type and tag filters; includeSummary adds each page's summary) with their created/updated time, author and review due date. Returns ids for read_document, which resolves the current commit revision. If truncated is true, lower pageSize and page through the rest.",
   inputSchema: z.object({
     projectId: z.uuid(),
     folderPath: z.array(z.string()).max(10).optional(),
     search: z.string().max(200).optional(),
+    type: z.string().max(40).optional(),
+    tag: z.string().max(40).optional(),
+    includeSummary: z.boolean().optional(),
     page: z.number().int().min(1).default(1),
     pageSize: z.number().int().min(1).max(50).default(25),
   }),
@@ -44,6 +47,9 @@ export const listDocumentsTool = defineSharedReadTool({
         pageSize: input.pageSize,
         search: input.search,
         folderPath: input.folderPath,
+        type: input.type,
+        tag: input.tag,
+        includeSummary: input.includeSummary,
         sort: "lastEditedAt",
         dir: "desc",
       },
@@ -62,6 +68,8 @@ export const listDocumentsTool = defineSharedReadTool({
       updated: row.updatedAt,
       updatedBy: row.updatedBy,
       reviewDueAt: row.reviewDueAt,
+      ...(row.wikiType ? { type: row.wikiType } : {}),
+      ...(input.includeSummary ? { summary: row.wikiSummary ?? null } : {}),
     }));
     const { items: documents, truncated } = boundItems(
       mapped,

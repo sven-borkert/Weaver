@@ -431,10 +431,12 @@ export async function getTree(
         lastEditedByMachineKind: string | null;
         lastEditedByMachineId: string | null;
         lastEditedByName: string | null;
+        wikiType: string | null;
+        wikiSummary: string | null;
       }
     >
   >(Prisma.sql`
-    SELECT d."appearance", d."id", d."title", d."slug", d."path", d."kind", d."headCommitSha",
+    SELECT d."appearance", d."wikiType", d."wikiSummary", d."id", d."title", d."slug", d."path", d."kind", d."headCommitSha",
       d."reviewDueAt", d."lastReviewedAt",
       d."lastEditedByMachineKind", d."lastEditedByMachineId", d."lastEditedByName",
       d."createdAt", d."createdById", d."createdByName",
@@ -465,6 +467,8 @@ export async function getTree(
     path: row.path,
     documentKind: row.kind,
     headCommitSha: row.headCommitSha,
+    wikiType: row.wikiType,
+    wikiSummary: row.wikiSummary,
     reviewDueAt: row.reviewDueAt,
     lastReviewedAt: row.lastReviewedAt,
     createdAt: row.createdAt,

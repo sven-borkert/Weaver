@@ -959,8 +959,20 @@ the version-3 header (Markdown and Python). [`wiki/properties.ts`](../packages/c
 `documentMetadataColumns`, migration `20261102120000_wiki_page_properties`, which also adds the
 system column `wikiSourceItemId` on `Document` and `DataTable`); every header rewrite
 carries it, and `reviewExempt` pages get no review block on create, header-upgrade
-backfill or deleted-item recovery. Slice 1 only reads and carries the line; writers arrive later. An older instance
-cannot parse a file with this line, so upgrade every instance before the first write.
+backfill or deleted-item recovery. An older instance cannot parse a file with this line, so upgrade every
+instance before the first write.
+
+Property writers: `wikiPagePropertiesInputSchema` in `wiki/properties.ts` (type, summary, tags, sources; `null`
+clears, omitted stays; no `reviewExempt`, `source` type refused in any case or width) is the only public input.
+`properties` is a request field on `document.create`/`edit`/`patch` operations
+([`contentOperations.ts`](../packages/core/src/services/contentOperations.ts)), `document.create`/`update` tRPC and the
+header-only `document.setProperties` ([`documentProperties.ts`](../packages/core/src/services/documentProperties.ts));
+`writeDocumentInRepo` merges it over the stored properties (`propertiesInput`), keeping reserved fields, while
+`properties` on a create request stays the internal system path. Reads: `getDocument` returns `properties` with
+`sources` resolved inside the project (`wikiProperties.ts`), `document.list` filters by `type`/`tag`,
+`document.pageIndex` (`wikiReads.listPageIndex`) pages the Index view
+(`documents/index-view`, `PageIndexScreen`), `folder.tree` documents carry `wikiType`/`wikiSummary` for the explorer's
+Type/Summary columns and filter. Importers (`documents/importProperties.ts`) and transfer map only type, summary, tags.
 
 A document file starts with a hidden `<!-- weaver … -->` comment holding
 `id`, `created`, `createdBy`, `updated`, `updatedBy` and the review block

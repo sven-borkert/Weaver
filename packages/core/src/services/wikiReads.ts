@@ -367,3 +367,120 @@ export async function listRecentChanges(
     nextCursor: exhausted ? null : entries[limit]!.sha,
   };
 }
+
+export const PAGE_INDEX_LIMIT = 50;
+
+type IndexRow = {
+  id: string;
+  title: string;
+  path: string;
+  wikiType: string | null;
+  wikiSummary: string | null;
+  untyped: number;
+  typeKey: string;
+  titleKey: string;
+};
+
+type IndexCursor = [number, string, string, string];
+
+function decodeIndexCursor(cursor: string): IndexCursor {
+  try {
+    const value = JSON.parse(
+      Buffer.from(cursor, "base64url").toString("utf8"),
+    ) as unknown;
+    if (
+      Array.isArray(value) &&
+      value.length === 4 &&
+      (value[0] === 0 || value[0] === 1) &&
+      typeof value[1] === "string" &&
+      typeof value[2] === "string" &&
+      typeof value[3] === "string" &&
+      UUID_RE.test(value[3])
+    )
+      return value as IndexCursor;
+  } catch {
+    /* falls through */
+  }
+  throw invalidCursorError();
+}
+
+/** Pages grouped by type (untyped last), then by title; the project's overview page heads the view. */
+export async function listPageIndex(
+  db: PrismaClient,
+  input: { projectId: string; cursor?: string; limit?: number },
+  actor: SecurityContext,
+): Promise<{
+  pages: Array<{
+    id: string;
+    title: string;
+    path: string;
+    type: string | null;
+    summary: string | null;
+  }>;
+  nextCursor: string | null;
+  overview: { id: string; title: string } | null;
+}> {
+  await assertProjectRole(db, input.projectId, actor, "Viewer");
+  const limit = Math.min(input.limit ?? PAGE_INDEX_LIMIT, PAGE_INDEX_LIMIT);
+  if (!Number.isInteger(limit) || limit < 1)
+    throw new CoreError("BAD_REQUEST", "limit must be a positive integer");
+  const after =
+    input.cursor === undefined ? null : decodeIndexCursor(input.cursor);
+  const rows = await db.$queryRaw<IndexRow[]>(Prisma.sql`
+    SELECT d."id", d."title", d."path", d."wikiType", d."wikiSummary",
+      (CASE WHEN d."wikiType" IS NULL THEN 1 ELSE 0 END)::int AS "untyped",
+      (COALESCE(lower(d."wikiType"), '') COLLATE "C") AS "typeKey",
+      (lower(d."title") COLLATE "C") AS "titleKey"
+    FROM "Document" AS d
+    WHERE d."projectId" = ${input.projectId}::uuid
+      AND d."wikiSourceItemId" IS NULL
+      ${
+        after === null
+          ? Prisma.empty
+          : Prisma.sql`AND (
+              (CASE WHEN d."wikiType" IS NULL THEN 1 ELSE 0 END),
+              (COALESCE(lower(d."wikiType"), '') COLLATE "C"),
+              (lower(d."title") COLLATE "C"),
+              d."id"
+            ) > (${after[0]}::int, ${after[1]}, ${after[2]}, ${after[3]}::uuid)`
+      }
+    ORDER BY "untyped" ASC, "typeKey" ASC, "titleKey" ASC, d."id" ASC
+    LIMIT ${limit + 1}
+  `);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  const settings = await db.projectWikiSettings.findUnique({
+    where: { projectId: input.projectId },
+    select: { overviewDocumentId: true },
+  });
+  const overview = settings?.overviewDocumentId
+    ? await db.document.findFirst({
+        where: {
+          id: settings.overviewDocumentId,
+          projectId: input.projectId,
+        },
+        select: { id: true, title: true },
+      })
+    : null;
+  return {
+    pages: page.map((row) => ({
+      id: row.id,
+      title: row.title,
+      path: row.path,
+      type: row.wikiType,
+      summary: row.wikiSummary,
+    })),
+    nextCursor:
+      rows.length > limit && last
+        ? Buffer.from(
+            JSON.stringify([
+              last.untyped,
+              last.typeKey,
+              last.titleKey,
+              last.id,
+            ]),
+          ).toString("base64url")
+        : null,
+    overview,
+  };
+}

@@ -48,7 +48,7 @@ import {
   WorkspaceNotFound,
 } from "~/app/(workspace)/projects/[projectId]/documents/_components/DocumentStates";
 import { DocumentsWorkspace } from "~/app/(workspace)/projects/[projectId]/documents/_components/DocumentsWorkspace";
-import type { ExplorerAdapter } from "./adapter";
+import type { ExplorerAdapter, ExplorerFilter } from "./adapter";
 import { ContentExplorer } from "./ContentExplorer";
 import { toast } from "sonner";
 import { ExplorerBulkActions } from "./ExplorerBulkActions";
@@ -61,6 +61,23 @@ import {
   withinFolder,
 } from "~/lib/explorer/selection";
 import { FolderDownloadButton } from "./FolderDownloadButton";
+
+const ALL_VALUES = "__all__";
+
+function filterValues<I extends ExplorerItem>(
+  filter: ExplorerFilter<I>,
+  items: I[],
+): Array<{ key: string; label: string }> {
+  const seen = new Map<string, string>();
+  for (const item of items) {
+    const value = filter.value(item)?.trim();
+    if (value && !seen.has(value.toLowerCase()))
+      seen.set(value.toLowerCase(), value);
+  }
+  return [...seen]
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
 
 function readStoredView(key: string): ExplorerView {
   try {
@@ -83,6 +100,7 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
   const [view, setView] = useState<ExplorerView>("list");
   const [iconSize, setIconSize] = useState<ExplorerIconSize>("standard");
   const [search, setSearch] = useState("");
+  const [valueFilter, setValueFilter] = useState(ALL_VALUES);
   const [sort, setSort] = useState<ExplorerSort>("title");
   const [dir, setDir] = useState<ExplorerDir>("asc");
   const [dragging, setDragging] = useState(false);
@@ -106,6 +124,7 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
     adapter.kind,
     folderPath,
     search,
+    valueFilter,
     canEdit,
   ]);
   const [selection, setSelection] = useState<{
@@ -169,7 +188,14 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
   const upTarget = itemDragging && canEdit && folderPath.length > 0;
 
   const tree = treeQuery.data;
-  const searchActive = search.trim().length > 0;
+  const filterOptions = useMemo(
+    () =>
+      adapter.filter && tree ? filterValues(adapter.filter, tree.items) : [],
+    [adapter.filter, tree],
+  );
+  const activeFilter =
+    adapter.filter && valueFilter !== ALL_VALUES ? valueFilter : null;
+  const searchActive = search.trim().length > 0 || activeFilter !== null;
   const { folders, items } = useMemo(
     () =>
       tree ? listFolderEntries(tree, folderPath) : { folders: [], items: [] },
@@ -177,14 +203,44 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
   );
   const entries = useMemo(() => {
     if (!tree) return [];
-    if (searchActive)
+    if (searchActive) {
+      const filter = adapter.filter;
+      const matches =
+        filter && activeFilter !== null
+          ? (item: I) => filter.value(item)?.toLowerCase() === activeFilter
+          : undefined;
       return sortEntries(
-        searchFolderEntries(tree, folderPath, search),
+        searchFolderEntries(tree, folderPath, search, matches),
         sort,
         dir,
       );
+    }
     return sortEntries([...folders, ...items], sort, dir);
-  }, [tree, folders, items, searchActive, search, folderPath, sort, dir]);
+  }, [
+    tree,
+    folders,
+    items,
+    searchActive,
+    search,
+    activeFilter,
+    adapter.filter,
+    folderPath,
+    sort,
+    dir,
+  ]);
+
+  const shownAdapter = useMemo(
+    () =>
+      adapter.columns && tree
+        ? {
+            ...adapter,
+            columns: adapter.columns.filter(
+              (column) => !column.visible || column.visible(tree.items),
+            ),
+          }
+        : adapter,
+    [adapter, tree],
+  );
 
   const selectedEntries = entries.filter((entry) =>
     selectedKeys.has(entryKey(entry)),
@@ -438,7 +494,7 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
         folders={tree.folders}
         folderNames={tree.folderNames}
         canEdit={canEdit}
-        adapter={adapter}
+        adapter={shownAdapter}
         onMoveItem={onMoveItem}
         onMoveEntries={onMoveEntries}
         selectedKeys={selectedKeys}
@@ -600,6 +656,34 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
             />
           </div>
           <div className="flex gap-2">
+            {adapter.filter && filterOptions.length > 0 ? (
+              <div className="flex flex-1 flex-col gap-1.5 sm:flex-none">
+                <label
+                  htmlFor={`${sortPrefix}-${adapter.filter.id}`}
+                  className="text-text-2 text-[12px] font-medium"
+                >
+                  {adapter.filter.label}
+                </label>
+                <Select value={valueFilter} onValueChange={setValueFilter}>
+                  <SelectTrigger
+                    id={`${sortPrefix}-${adapter.filter.id}`}
+                    className="w-full sm:w-40"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ALL_VALUES}>
+                      {adapter.filter.allLabel}
+                    </SelectItem>
+                    {filterOptions.map((option) => (
+                      <SelectItem key={option.key} value={option.key}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             <div className="flex flex-1 flex-col gap-1.5 sm:flex-none">
               <label
                 htmlFor={`${sortPrefix}-sort`}

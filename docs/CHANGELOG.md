@@ -4,6 +4,19 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Added
+
+- Documents can now be given a type, summary and tags (and sources through the API and importers). Editors set them in the document menu's Properties dialog; the assistant and MCP `create_document`/`patch_document` tools and their `propose_` counterparts accept `properties` (type, summary, tags). An omitted field stays, `null` clears it, and the type `source` and the `reviewExempt` flag stay reserved for Weaver itself. A human who sets review settings on a page that Weaver exempted from review clears the exemption.
+- The documents explorer shows Type and Summary columns and a Type filter once any page has them, and an Index view (`/projects/<id>/documents/index-view`, linked from the root folder) lists pages grouped by type with their summaries, led by the project's overview page when one is set.
+- `list_documents` and the document list accept `type` and `tag` filters and `includeSummary`.
+- Markdown imports map YAML `type`, `tags`, `summary` and `aliases` (into tags); a Weaver header's type, summary and tags carry over, but never its `reviewExempt` flag or sources. A ZIP Replace keeps the target's own properties unless the import names some. Exports and downloads keep the stored properties line.
+- Sending a document to another Weaver carries its type, summary and tags (receivers advertise `capabilities.documentProperties`; older ones still receive the page without them).
+
+### Changed
+
+- The assistant now needs a model context window of about 89,300 tokens (was 88,100): 71,075 B of tool definitions (was 70,026 B).
+- Rollout: upgrade every Weaver instance that shares documents (pull remotes, transfers, imports of exports) before anyone sets a property. The first property write puts a `properties:` line into the document header, which instances older than 0.1.226 cannot read, so it is a one-way door for downgrades.
+
 ## [0.1.231] - 2026-11-02
 
 ### Added

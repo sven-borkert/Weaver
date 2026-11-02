@@ -8,9 +8,11 @@ import {
   importFileInput,
   listDocumentsInput,
   moveDocumentInput,
+  pageIndexInput,
   rebuildIndexInput,
   resolveRefsInput,
   restoreInput,
+  setPropertiesInput,
   updateDocumentInput,
 } from "~/server/api/schemas/document";
 import { markReviewedInput, setReviewInput } from "~/server/api/schemas/review";
@@ -18,6 +20,8 @@ import { authedProcedure, createTRPCRouter } from "~/server/api/trpc";
 import * as documents from "@weaver/core/services/documents";
 import type { DocumentContentInput } from "@weaver/core/services/documents";
 import { saveDocumentAndQueueSummary } from "@weaver/core/services/documentChangeSummaries";
+import { setDocumentProperties } from "@weaver/core/services/documentProperties";
+import { listPageIndex } from "@weaver/core/services/wikiReads";
 import * as review from "@weaver/core/services/documentReview";
 import { importDocumentFile } from "@weaver/core/services/documentImport";
 import { actorOf } from "~/server/api/actor";
@@ -33,6 +37,9 @@ export const documentRouter = createTRPCRouter({
     .query(({ ctx, input }) =>
       documents.listDocuments(ctx.db, input, actorOf(ctx)),
     ),
+  pageIndex: authedProcedure
+    .input(pageIndexInput)
+    .query(({ ctx, input }) => listPageIndex(ctx.db, input, actorOf(ctx))),
   get: authedProcedure
     .input(documentIdInput)
     .query(({ ctx, input }) =>
@@ -66,6 +73,11 @@ export const documentRouter = createTRPCRouter({
         { ...input, content: input.content as DocumentContentInput },
         actorOf(ctx),
       ),
+    ),
+  setProperties: authedProcedure
+    .input(setPropertiesInput)
+    .mutation(({ ctx, input }) =>
+      setDocumentProperties(ctx.db, input, actorOf(ctx)),
     ),
   markReviewed: authedProcedure
     .input(markReviewedInput)

@@ -1,4 +1,5 @@
 import type { Appearance } from "../../appearance/metadata";
+import type { WikiPagePropertiesInput } from "../../wiki/properties";
 import type { PrismaClient } from "@weaver/db/client";
 import type { EncryptionKeyRing } from "../../security/encryption";
 
@@ -25,6 +26,11 @@ export type RemoteInstanceView = {
   lastCheckedAt: Date | null;
   checkStatus: string | null;
   checkErrorSummary: string | null;
+};
+
+/** Portable page properties; reviewExempt and sources never travel. */
+export type TransferProperties = {
+  properties?: WikiPagePropertiesInput;
 };
 
 export type TransferAppearance = {

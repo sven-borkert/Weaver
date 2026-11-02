@@ -24,6 +24,7 @@ import {
 import { assetsDirForDocPath, hasAssetsSegment } from "../documents/images";
 import { withoutTitleHeading } from "../documents/importMarkdown";
 import { MAX_MARKDOWN_CHARS } from "../documents/limits";
+import { wikiPagePropertiesInputSchema } from "../wiki/properties";
 import { assertSafeSegments } from "../documents/paths";
 import { collectImageReferences } from "../documents/imageReferences";
 import { applyDocumentPatch } from "../documents/patch";
@@ -308,6 +309,7 @@ export const contentOperationSchema = z.discriminatedUnion("kind", [
     title,
     markdown: documentMarkdown,
     metadata: documentMetadataInputSchema.optional(),
+    properties: wikiPagePropertiesInputSchema.optional(),
   }),
   z.object({
     kind: z.literal("document.edit"),
@@ -317,6 +319,7 @@ export const contentOperationSchema = z.discriminatedUnion("kind", [
     title: title.optional(),
     markdown: documentMarkdown,
     metadata: documentMetadataInputSchema.optional(),
+    properties: wikiPagePropertiesInputSchema.optional(),
   }),
   z.object({
     kind: z.literal("document.patch"),
@@ -326,6 +329,7 @@ export const contentOperationSchema = z.discriminatedUnion("kind", [
     title: title.optional(),
     actions: z.array(patchActionSchema).max(50),
     metadata: documentMetadataInputSchema.optional(),
+    properties: wikiPagePropertiesInputSchema.optional(),
   }),
   z.object({
     kind: z.literal("table.create"),
@@ -412,11 +416,12 @@ export function assertPatchHasWork(operation: ContentOperation): void {
     operation.kind === "document.patch" &&
     operation.title === undefined &&
     operation.metadata === undefined &&
+    operation.properties === undefined &&
     operation.actions.length === 0
   )
     throw new CoreError(
       "BAD_REQUEST",
-      "a patch needs a title change, a metadata change or at least one action",
+      "a patch needs a title change, a metadata or properties change or at least one action",
     );
 }
 
@@ -1683,6 +1688,7 @@ export async function applyDocumentCreate(
         operation.projectId,
         operation.metadata,
       ),
+      ...(operation.properties && { propertiesInput: operation.properties }),
     },
     author,
     {
@@ -1749,6 +1755,7 @@ export async function applyDocumentPatchOperation(
         operation.projectId,
         operation.metadata,
       ),
+      ...(operation.properties && { propertiesInput: operation.properties }),
     },
     author,
     {
@@ -1828,6 +1835,9 @@ export async function applyOperationInRepo(
             operation.projectId,
             operation.metadata,
           ),
+          ...(operation.properties && {
+            propertiesInput: operation.properties,
+          }),
         },
         author,
         { operation: "update", message: options.message, ...audit },

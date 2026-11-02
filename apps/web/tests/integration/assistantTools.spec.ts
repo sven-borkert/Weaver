@@ -277,6 +277,38 @@ describe("assistant tools", () => {
     );
   });
 
+  it("filters list_documents by type and tag and returns bounded summaries on request", async () => {
+    const { ctx, project, doc, db } = await fixture();
+    await db.document.update({
+      where: { id: doc.id },
+      data: {
+        wikiType: "entity",
+        wikiSummary: "x".repeat(300),
+        wikiTags: ["red", "blue"],
+      },
+    });
+    const list = toolByName("list_documents")!;
+    const run = async (extra: object) =>
+      (
+        await list.execute(
+          list.inputSchema.parse({ projectId: project.id, ...extra }),
+          ctx,
+        )
+      ).output as {
+        total: number;
+        documents: { id: string; type?: string; summary?: string | null }[];
+      };
+    const plain = await run({ type: "ENTITY" });
+    expect(plain.documents.map((d) => d.id)).toEqual([doc.id]);
+    expect(plain.documents[0]).toMatchObject({ type: "entity" });
+    expect(plain.documents[0]).not.toHaveProperty("summary");
+    expect((await run({ tag: "blue" })).total).toBe(1);
+    expect((await run({ tag: "green" })).total).toBe(0);
+    expect((await run({ type: "concept" })).total).toBe(0);
+    const withSummary = await run({ includeSummary: true, tag: "red" });
+    expect(withSummary.documents[0]!.summary).toHaveLength(300);
+  }, 30_000);
+
   it("continues a document read at the original snapshot after an edit", async () => {
     const { ctx, project, doc, table, actor, db } = await fixture();
     const tool = toolByName("read_document")!;

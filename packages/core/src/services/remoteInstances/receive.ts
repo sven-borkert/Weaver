@@ -3,7 +3,8 @@ import {
   normalizeAppearance,
 } from "../../appearance/metadata";
 import { validateAppearanceAssets } from "../appearanceAssets";
-import type { TransferAppearance } from "./types";
+import { parsePagePropertiesInput } from "../../wiki/properties";
+import type { TransferAppearance, TransferProperties } from "./types";
 import type { PrismaClient } from "@weaver/db/client";
 import { emitDiagnostic } from "../../diagnostics/writer";
 import { parseDocumentBody } from "../../editor/markdown";
@@ -121,7 +122,8 @@ export async function receiveTransferredDocument(
     markdown: string;
     assetsSlug: string;
     images: TransferredImage[];
-  } & TransferAppearance,
+  } & TransferAppearance &
+    TransferProperties,
   limits: { maxImageBytes: number },
 ): Promise<{ id: string; path: string; slug: string }> {
   if (input.markdown.length > MAX_MARKDOWN_CHARS)
@@ -177,6 +179,9 @@ export async function receiveTransferredDocument(
       assets,
       assetsFromSlug: input.assetsSlug,
       ...receivedAppearance(input),
+      ...(input.properties && {
+        properties: parsePagePropertiesInput(input.properties),
+      }),
     },
     actor,
     { operationId: transferOperationId(input.fromClientId) },

@@ -199,6 +199,60 @@ describe("explorer size preference", () => {
   });
 });
 
+describe("adapter value filter and optional columns", () => {
+  type Typed = ExplorerItem & { kind?: string | null };
+  const typed = (kinds: (string | null)[]): ExplorerAdapter<Typed> => ({
+    ...adapter,
+    useTree: () => ({
+      data: {
+        folders: [],
+        items: kinds.map((kind, index) => ({
+          id: `t${index}`,
+          title: `Page ${index}`,
+          path: `page-${index}.md`,
+          lastEditedAt: new Date(),
+          lastEditedBy: null,
+          kind,
+        })),
+      },
+      isLoading: false,
+      error: null,
+      refetch: () => undefined,
+    }),
+    filter: {
+      id: "type",
+      label: "Type",
+      allLabel: "All types",
+      value: (item) => item.kind,
+    },
+    columns: [
+      {
+        key: "kind",
+        header: "Kind",
+        cell: (item) => item.kind ?? "-",
+        visible: (items) => items.some((item) => item.kind),
+      },
+    ],
+  });
+  const html = (a: ExplorerAdapter<Typed>) =>
+    renderToStaticMarkup(
+      <ContentExplorerScreen projectId="p1" folderPath={[]} adapter={a} />,
+    );
+
+  it("lists each distinct value once, case-insensitively, and shows the column", () => {
+    const out = html(typed(["Entity", "entity", "concept", null]));
+    expect(out).toContain("All types");
+    expect(out).toContain("All typesconceptEntity</div>");
+    expect(out).toContain("Kind");
+  });
+
+  it("hides the filter and the column while no item has a value", () => {
+    const out = html(typed([null, null]));
+    expect(out).not.toContain("All types");
+    expect(out).not.toContain(">Kind<");
+  });
+});
+
 describe("adapter root actions", () => {
   it("renders a root action without fabricating a visible root folder", () => {
     const withRootAction = {
