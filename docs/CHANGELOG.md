@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.226] - 2026-11-02
+
 ### Added
 
 - Documents render LaTeX formulas: `$…$` inline and `$$…$$` blocks in the editor, reader, assistant text, exam prompts and PDF export, also in table headers and cells. Click a formula to edit its source, type `$x^2$`, or use Insert › Inline formula / Formula block. Files keep plain LaTeX, and formulas Weaver had already saved with extra escapes (`\\times`, `w\_1`) are repaired when read. Amounts such as `$5 and $10` stay text.
