@@ -1325,14 +1325,19 @@ async function recoverDeletedInRepo(
           : { kind: "python", text: file.body },
       createdAt: file.meta.created,
       ...(file.meta.appearance ? { appearance: file.meta.appearance } : {}),
+      ...(file.meta.properties ? { properties: file.meta.properties } : {}),
       // A review block-less file restarts its review clock at recovery time.
-      review:
-        file.meta.review ??
-        (await defaultReviewForFolderInRepo(db, repo, {
-          projectId: operation.projectId,
-          path: path.split("/").slice(0, -1),
-          now: new Date().toISOString(),
-        })),
+      ...(file.meta.review || !file.meta.properties?.reviewExempt
+        ? {
+            review:
+              file.meta.review ??
+              (await defaultReviewForFolderInRepo(db, repo, {
+                projectId: operation.projectId,
+                path: path.split("/").slice(0, -1),
+                now: new Date().toISOString(),
+              })),
+          }
+        : {}),
       // The writer allocates the slug, so it also rewrites the document's own
       // asset links onto it and commits the blobs in the same commit.
       ...(DOCUMENT_KINDS[kind].supportsImages && {

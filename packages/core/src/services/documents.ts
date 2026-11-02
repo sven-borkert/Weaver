@@ -3,6 +3,7 @@ import {
   type AppearanceAsset,
 } from "./appearanceAssets";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
+import type { WikiPageProperties } from "../wiki/properties";
 import { randomUUID } from "node:crypto";
 import { parseServerEnv } from "@weaver/config/server";
 import {
@@ -179,6 +180,8 @@ type WriteRequest =
       review?: DocumentReview;
       reviewSource?: { kind: "import"; imported: DocumentReview | null };
       appearance?: Appearance;
+      /** Carried from a recovered header; writer tools arrive later. */
+      properties?: WikiPageProperties;
     }
   | {
       kind: "update";
@@ -237,6 +240,11 @@ export async function documentMetadataColumns(
 ): Promise<
   Array<{
     appearance: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    wikiType: string | null;
+    wikiSummary: string | null;
+    wikiTags: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    wikiSources: Prisma.InputJsonValue | typeof Prisma.DbNull;
+    reviewExempt: boolean;
     createdAt: Date;
     createdById: string | null;
     createdByName: string | null;
@@ -277,6 +285,11 @@ export async function documentMetadataColumns(
   const now = new Date();
   return metas.map((meta) => ({
     appearance: normalizeAppearance(meta.appearance) ?? Prisma.DbNull,
+    wikiType: meta.properties?.type ?? null,
+    wikiSummary: meta.properties?.summary ?? null,
+    wikiTags: meta.properties?.tags ?? Prisma.DbNull,
+    wikiSources: meta.properties?.sources ?? Prisma.DbNull,
+    reviewExempt: meta.properties?.reviewExempt === true,
     createdAt: new Date(meta.created),
     createdById: link(meta.createdBy),
     createdByName: meta.createdBy?.name ?? null,
@@ -1198,20 +1211,23 @@ export async function writeDocumentInRepo(
     const self = documentAuthorForContent(actor);
     const defaults =
       request.review ??
-      (await defaultReviewForFolderInRepo(db, repo, {
-        projectId,
-        path: request.folderPath,
-        now: request.createdAt,
-      }));
-    const review = request.reviewSource
-      ? await resolveImportedReview(
-          db,
-          projectId,
-          request.reviewSource.imported,
-          request.createdAt,
-          defaults,
-        )
-      : defaults;
+      (request.properties?.reviewExempt
+        ? null
+        : await defaultReviewForFolderInRepo(db, repo, {
+            projectId,
+            path: request.folderPath,
+            now: request.createdAt,
+          }));
+    const review =
+      request.reviewSource && defaults
+        ? await resolveImportedReview(
+            db,
+            projectId,
+            request.reviewSource.imported,
+            request.createdAt,
+            defaults,
+          )
+        : defaults;
     const meta: DocumentMeta = {
       id: request.id,
       title: request.title,
@@ -1220,6 +1236,7 @@ export async function writeDocumentInRepo(
       updated: override.updated ?? request.createdAt,
       updatedBy: override.updatedBy ?? self,
       ...(request.appearance ? { appearance: request.appearance } : {}),
+      ...(request.properties ? { properties: request.properties } : {}),
       review,
     };
     assertUpdatedNotBeforeCreated(meta);
@@ -1316,6 +1333,9 @@ export async function writeDocumentInRepo(
       review: oldFile.meta.review,
       ...(oldFile.meta.appearance
         ? { appearance: oldFile.meta.appearance }
+        : {}),
+      ...(oldFile.meta.properties
+        ? { properties: oldFile.meta.properties }
         : {}),
     };
     assertUpdatedNotBeforeCreated(meta);

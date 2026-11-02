@@ -926,7 +926,11 @@ Wiki page properties: an optional `properties` JSON line follows `appearance` in
 the version-3 header (Markdown and Python). [`wiki/properties.ts`](../packages/core/src/wiki/properties.ts)
 `normalizeProperties` drops invalid values on read (never fatal) and fixes key order;
 `type: source` and `reviewExempt` are plain data that grant nothing by themselves.
-Slice 1 only reads and carries the line; writers arrive later. An older instance
+`Document.wikiType/wikiSummary/wikiTags/wikiSources/reviewExempt` mirror it (via
+`documentMetadataColumns`, migration `20261102120000_wiki_page_properties`, which also adds the
+system column `wikiSourceItemId` on `Document` and `DataTable`); every header rewrite
+carries it, and `reviewExempt` pages get no review block on create, header-upgrade
+backfill or deleted-item recovery. Slice 1 only reads and carries the line; writers arrive later. An older instance
 cannot parse a file with this line, so upgrade every instance before the first write.
 
 A document file starts with a hidden `<!-- weaver … -->` comment holding

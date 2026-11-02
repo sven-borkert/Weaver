@@ -122,6 +122,10 @@ Shared repository readers, advisory locks, recovery and transport primitives use
   sets `updated*` to the actor (`touchedFolderMetadata`, read from `HEAD` before
   the `git mv`). "Updated" means the folder itself changed, not its content. A
   folder without the file is left without one by a plain move.
+  Document headers may carry a `properties` line after `appearance`
+  (`wiki/properties.ts` `normalizeProperties`, tolerant on read; columns
+  `Document.wiki*`/`reviewExempt`). Every header rewrite must pass `meta.properties`
+  through; `reviewExempt` pages get no review block; `type: source` grants nothing.
   Non-root folders now carry an optional canonical UUID `id`; newly created
   folders always receive one. Preserve it through metadata/stamp/review/appearance
   updates and moves. `projectApi/folderIdentity.ts` assigns legacy IDs only when

@@ -196,6 +196,8 @@ describe("knowledge processing delivery ownership", () => {
           normalizedTitle: _title,
           normalizedTitleHash: _hash,
           appearance: _appearance,
+          wikiTags: _wikiTags,
+          wikiSources: _wikiSources,
           ...data
         } = original;
         await tx.document.create({
@@ -270,6 +272,8 @@ describe("knowledge processing delivery ownership", () => {
       normalizedTitle: _title,
       normalizedTitleHash: _hash,
       appearance: _appearance,
+      wikiTags: _wikiTags,
+      wikiSources: _wikiSources,
       ...data
     } = original;
     const other = await db.document.create({

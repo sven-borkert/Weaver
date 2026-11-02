@@ -11,7 +11,12 @@ export const WIKI_PAGE_TYPES = [
 ] as const;
 export type WikiPageType = (typeof WIKI_PAGE_TYPES)[number];
 
-export const WIKI_SOURCE_KINDS = ["document", "table", "artifact", "url"] as const;
+export const WIKI_SOURCE_KINDS = [
+  "document",
+  "table",
+  "artifact",
+  "url",
+] as const;
 export type WikiSourceRef = {
   kind: (typeof WIKI_SOURCE_KINDS)[number];
   id?: string;

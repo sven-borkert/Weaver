@@ -48,7 +48,11 @@ export async function upgradeDocumentHeaders(
             some: { OR: [{ createdByName: null }, { updatedByName: null }] },
           },
         },
-        { documents: { some: { reviewEveryMonths: null } } },
+        {
+          documents: {
+            some: { reviewEveryMonths: null, reviewExempt: false },
+          },
+        },
       ],
     },
     select: { id: true },
@@ -141,7 +145,9 @@ async function upgradeProject(
       continue;
     }
     const { meta, body, legacy } = parsed;
-    if (!legacy && meta.createdBy && meta.updatedBy && meta.review) continue;
+    const exempt = meta.properties?.reviewExempt === true && !meta.review;
+    if (!legacy && meta.createdBy && meta.updatedBy && (meta.review || exempt))
+      continue;
     let { createdBy, updatedBy } = meta;
     if (!createdBy || !updatedBy) {
       const history = await repo.logForPath(file, {
@@ -155,7 +161,7 @@ async function upgradeProject(
         updatedBy ??= await authorOf(db, newest);
       }
     }
-    const review = meta.review ?? (await projectDefaults());
+    const review = exempt ? null : (meta.review ?? (await projectDefaults()));
     await repo.writeFileAtomic(
       file,
       composeDocumentFile(
@@ -175,7 +181,7 @@ async function upgradeProject(
         OR: [
           { createdByName: null },
           { updatedByName: null },
-          { reviewEveryMonths: null },
+          { reviewEveryMonths: null, reviewExempt: false },
         ],
       },
       select: { id: true, path: true },
@@ -205,7 +211,12 @@ async function upgradeProject(
       data: { updatedById: null, updatedByName: UNKNOWN_AUTHOR },
     });
     const unreviewed = await db.document.findMany({
-      where: { projectId, id: { in: ids }, reviewEveryMonths: null },
+      where: {
+        projectId,
+        id: { in: ids },
+        reviewEveryMonths: null,
+        reviewExempt: false,
+      },
       select: { id: true },
     });
     const drain = unreviewed
