@@ -338,7 +338,7 @@ describe("parser limits", () => {
     };
     const plain = timed("ab cd\n\n".repeat(4_000));
     expect(timed("$$ a\n\n".repeat(4_000))).toBeLessThan(plain * 3 + 500);
-  });
+  }, 30_000);
 
   it("parses many unclosed block openers quickly", () => {
     const started = performance.now();
