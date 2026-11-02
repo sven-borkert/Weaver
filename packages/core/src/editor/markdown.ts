@@ -16,7 +16,7 @@ import {
   literalAngleBrackets,
   withInlineCodeFences,
 } from "./markdownEscapes";
-import { escapeMathInText } from "./math";
+import { escapeMathInText, MAX_MATH_CHARS } from "./math";
 
 let schema: ReturnType<typeof getSchema> | undefined;
 
@@ -79,6 +79,9 @@ function validateContentBounds(json: unknown): void {
         const attrs = object.attrs as Record<string, unknown> | undefined;
         if (typeof attrs?.source !== "string")
           throw new Error("invalid math attributes");
+        // Longer sources would read back from Markdown as plain text.
+        if (attrs.source.length > MAX_MATH_CHARS)
+          throw new Error("formula too long");
       }
       if (object.type === "tableCell" || object.type === "tableHeader") {
         const attrs = object.attrs as Record<string, unknown> | undefined;

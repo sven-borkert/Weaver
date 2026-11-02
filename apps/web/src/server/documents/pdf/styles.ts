@@ -35,6 +35,8 @@ p.meta { color: var(--text-2); font-size: 9pt; margin: 0 0 18pt; }
 .document-prose :where(pre code) { background: transparent; border: 0; padding: 0; }
 .document-prose :where(pre.mermaid) { background: transparent; border: 0; padding: 0; text-align: center; }
 .document-prose :where(pre.mermaid svg) { max-width: 100%; height: auto; }
+.document-prose [data-inline-math] { display: inline-block; position: relative; max-width: 100%; overflow: clip; overflow-clip-margin: 0.25em; }
+.document-prose [data-math-block] { position: relative; overflow: hidden; }
 .document-prose :where(table) { border-collapse: collapse; margin: 1.25em 0; width: 100%; }
 .document-prose :where(th, td) { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: start; vertical-align: top; }
 .document-prose :where(th) { background: var(--surface-2); color: var(--text-2); font-weight: 600; }

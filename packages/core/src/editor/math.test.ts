@@ -245,6 +245,15 @@ describe("validation", () => {
     ).not.toThrow();
   });
 
+  it.each(["inlineMath", "mathBlock"])("rejects an oversized %s", (type) => {
+    const node = { type, attrs: { source: "x".repeat(5_001) } };
+    expect(() =>
+      validateDocumentContent(
+        doc(type === "inlineMath" ? paragraph(node) : node),
+      ),
+    ).toThrow("formula too long");
+  });
+
   it.each(["inlineMath", "mathBlock"])("rejects a %s without text", (type) => {
     const node = { type, attrs: { source: 1 } };
     expect(() =>
@@ -319,6 +328,16 @@ describe("parser limits", () => {
     const started = performance.now();
     parseDocumentBody(`${"$a ".repeat(60_000)}\n`);
     expect(performance.now() - started).toBeLessThan(5_000);
+  });
+
+  it("charges paragraphs of unclosed block openers like plain paragraphs", () => {
+    const timed = (markdown: string) => {
+      const started = performance.now();
+      parseDocumentBody(markdown);
+      return performance.now() - started;
+    };
+    const plain = timed("ab cd\n\n".repeat(4_000));
+    expect(timed("$$ a\n\n".repeat(4_000))).toBeLessThan(plain * 3 + 500);
   });
 
   it("parses many unclosed block openers quickly", () => {

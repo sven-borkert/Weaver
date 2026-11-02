@@ -469,7 +469,9 @@ src>` can become an image without width and unknown attributes are dropped.
   the file is imported again. `escapeMathInText` keeps literal text literal, per text
   node: `$a **b** c$` as marked text reads back as a formula, and a formula followed
   directly by a digit reads back as text. Marks do not apply to the atom, as for
-  crossrefs. Render only through `renderMathHtml`.
+  crossrefs. `validateDocumentContent` caps a source at `MAX_MATH_CHARS`. Render only through
+  `renderMathHtml`, which turns a renderer failure into one error span; `maxSize` caps
+  positive sizes only, so both stylesheets clip formulas to their wrapper.
 
 - PDF export renders the saved revision only: `@tiptap/static-renderer` markup
   with `image` (data URI or "Image unavailable" box), `mermaid` (rendered in

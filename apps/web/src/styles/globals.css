@@ -469,8 +469,18 @@ select:disabled {
 
 /* A wide formula scrolls on its own instead of widening the page. */
 .document-prose [data-math-block] {
+  position: relative;
   overflow-x: auto;
   overflow-y: hidden;
+}
+
+/* Negative sizes are not capped by KaTeX: a formula must not paint over the page. */
+.document-prose [data-inline-math] {
+  display: inline-block;
+  position: relative;
+  max-width: 100%;
+  overflow: clip;
+  overflow-clip-margin: 0.25em;
 }
 
 .document-prose .katex {

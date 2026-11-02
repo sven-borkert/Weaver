@@ -41,6 +41,18 @@ describe("renderMathHtml", () => {
     expect(html).not.toMatch(/style="[^"]*color:red/);
   });
 
+  it.each([
+    ["deep nesting", "{".repeat(200_000) + "x" + "}".repeat(200_000)],
+    ["an oversized source", "<b>" + "x".repeat(6_000)],
+  ])(
+    "shows %s as escaped text instead of failing the page",
+    (_name, source) => {
+      const html = renderMathHtml(source, false);
+      expect(html).toContain("katex-error");
+      expect(html).not.toContain("<b>");
+    },
+  );
+
   it("caps the size of a rule", () => {
     expect(renderMathHtml("\\rule{9999em}{9999em}", false)).not.toMatch(
       /style="[^"]*9999/,

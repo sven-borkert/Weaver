@@ -1,7 +1,7 @@
 import { mergeAttributes, Node, nodeInputRule } from "@tiptap/core";
 
 // Bounds every delimiter scan, so a line of unmatched dollars stays linear.
-const MAX_MATH_CHARS = 5_000;
+export const MAX_MATH_CHARS = 5_000;
 
 const MATH_BLOCK_RE = new RegExp(
   `^ {0,3}\\$\\$((?:(?!\\$\\$|\\n[ \\t]*\\n)[\\s\\S]){1,${MAX_MATH_CHARS}})\\$\\$[ \\t]*(?:\\n|$)`,
@@ -201,10 +201,13 @@ export const MathBlock = Node.create({
   markdownTokenizer: {
     name: "mathBlock",
     level: "block",
+    // Only the paragraph at hand can be interrupted, and a block holds no blank line.
     start: (src) => {
-      for (const match of src.matchAll(MATH_BLOCK_START_RE)) {
+      const blank = src.search(/\n[ \t]*\n/);
+      const paragraph = blank < 0 ? src : src.slice(0, blank);
+      for (const match of paragraph.matchAll(MATH_BLOCK_START_RE)) {
         const index = match.index + (match[1]?.length ?? 0);
-        if (MATH_BLOCK_RE.test(src.slice(index))) return index;
+        if (MATH_BLOCK_RE.test(paragraph.slice(index))) return index;
       }
       return -1;
     },
