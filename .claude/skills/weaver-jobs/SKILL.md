@@ -133,7 +133,7 @@ keep that distinction when expanding job operations.
 Dashboard composition, report shortcuts and pin admission use `weaver-dashboard`; project lifecycle uses `weaver-projects`; low-level repository locking uses `weaver-git-store`. Job claims, consumers and receipts remain here.
 
 The `wiki` role gates `wiki.tick` (minute) and `wiki.run` (concurrency 1, 125-minute expiry, `retryLimit: 0`, short policy keyed by run);
-without an injected `wikiRunner` a delivery ends the run `RUNNER_UNAVAILABLE`. See `weaver-wiki`.
+without an injected `wikiRunner` a delivery ends the run `RUNNER_UNAVAILABLE`, except a `revert` run, which needs no model. `reapWikiRuns` also expires lost leases, restarting a run at most twice, clears the 24-hour pause, checks the spend alert and prunes operations after 90 days. A wiki alert row (`wikiAlertSourceSql`) is personal for Owners only. See `weaver-wiki`.
 
 A wiki row (`wikiSource.ts`, kind `wiki`) is personal for the run's starter and shared with Maintainers; a scheduled run has no starter, so it
 appears only under Project work. `preparing` and `queued` read as queued, `stopped` as needs attention; the revision hashes status and end time.

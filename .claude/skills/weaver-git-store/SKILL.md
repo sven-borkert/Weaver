@@ -74,7 +74,7 @@ pull claims; `weaver-env-deploy` for SSH trust and network policy.
 - `CommitAuthor` is a user or `{ kind: "machine", machineKind, machineId }`
   (`projectApiKey` → `Weaver-Project-Key-Id`, `wikiAgent` → `Weaver-Wiki-Agent-Id`, UUID
   validated). `commitAll` requires a wiki agent commit to carry operation id, run id
-  and `wikiRequestHash`. Adding a log field touches both positional formats
+  and `wikiRequestHash`; a `wiki-revert:` commit carries the hash with a user author and no agent trailer. Adding a log field touches both positional formats
   (`CHANGE_LOG_FORMAT`, `logForPath`) and their field counts.
 - User/machine attribution is trusted only for locally recorded commits in
   `.git/weaver-trusted-commits`. Remote trailers alone do not establish an

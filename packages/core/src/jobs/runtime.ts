@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import { pruneExamOperations } from "../services/examOperations";
 import { runExamTick } from "../exams/tick";
 import { repairDocumentProjectionInRepo } from "../services/documents";
@@ -24,6 +25,7 @@ import { emitDiagnostic } from "../diagnostics/writer";
 import { safeErrorClass } from "../diagnostics/errorClass";
 import { runTaskTick } from "../scheduledTasks/tick";
 import { failRunWithoutRunner } from "../services/wikiRuns";
+import { executeWikiRevert } from "../services/wikiRevert";
 import { reapWikiRuns, runWikiTick } from "../services/wikiTick";
 import {
   createKnowledgeRoutingSource,
@@ -605,6 +607,18 @@ export async function registerKnowledgeJobHandlers(input: {
     await input.queue.work(
       "wiki.run",
       instrumentedJob("wiki.run", async (payload, execution) => {
+        // A revert needs no model, so a worker without the injected runner still performs it.
+        const run = await input.db.wikiRun.findUnique({
+          where: { id: payload.runId },
+          select: { kind: true },
+        });
+        if (run?.kind === "revert") {
+          await executeWikiRevert(input.db, payload.runId, {
+            workerId: `${hostname()}:${process.pid}`,
+            signal: execution.signal,
+          });
+          return;
+        }
         if (!input.wikiRunner) {
           await failRunWithoutRunner(input.db, payload.runId);
           return;
