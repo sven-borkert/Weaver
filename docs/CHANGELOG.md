@@ -12,7 +12,7 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Changed
 
-- MCP: a new opt-in `wiki` toolset (`X-Weaver-Toolsets: wiki`) with `find_page`, `inspect_links` and `list_recent_changes`. The MCP instructions, the assistant and the document write tools now teach the tracked link form `[Title](weaver://document/<id>)`; the resource URI sentence is gone from the instructions.
+- MCP: a new opt-in `wiki` toolset (`X-Weaver-Toolsets: wiki`) with `find_page`, `inspect_links` and `list_recent_changes` (commits Weaver cannot vouch for are reported as `external` without author or message text). The MCP instructions, the assistant and the document write tools now teach the tracked link form `[Title](weaver://document/<id>)`; the resource URI sentence is gone from the instructions.
 - Documents can carry an optional `properties` header line (type, summary, tags, sources). Weaver reads and preserves it through every edit, move, review and restore but does not write it yet. Multi-instance setups: upgrade every instance before any property is written, as older versions cannot read the line.
 - Commit messages can no longer contain lines that look like `Weaver-*` trailers, so change summaries cannot forge provenance.
 - Deployment: `WEAVER_IMAGE_PREFIX` now defaults to `weaver` and `WEAVER_TLS_CERTRESOLVER` to `letsencrypt`. `weaver-upgrade` requires `WEAVER_GITLAB_API` and `WEAVER_GITLAB_PROJECT`, set in `web.env` or the environment.

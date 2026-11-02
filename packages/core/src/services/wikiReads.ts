@@ -280,7 +280,8 @@ export type RecentChange = {
   kind: WikiChangeKind;
   /** Only for ledger-trusted commits; an untrusted header name is never repeated. */
   author: string | null;
-  subject: string;
+  /** Null for untrusted commits: their text never reaches a model. */
+  subject: string | null;
   changes: Array<{
     status: string;
     path: string;
@@ -327,10 +328,15 @@ export async function listRecentChanges(
   });
   if (input.cursor !== undefined && entries[0]?.sha !== input.cursor)
     throw invalidCursorError();
-  const window = entries.slice(0, limit);
-  const kept = input.since
-    ? window.filter((entry) => entry.date >= input.since!)
-    : window;
+  const page = entries.slice(0, limit);
+  const since = input.since;
+  // Dates in untrusted commits are attacker-controlled: only a trusted commit ends the walk.
+  const stop = since
+    ? page.findIndex(
+        (entry) => entry.trustedAuthor === true && entry.date < since,
+      )
+    : -1;
+  const kept = stop === -1 ? page : page.slice(0, stop);
   const paths = new Set(
     kept.flatMap((entry) =>
       entry.changes.slice(0, MAX_CHANGES_PER_COMMIT).map((c) => c.path),
@@ -341,14 +347,15 @@ export async function listRecentChanges(
     select: { id: true, path: true },
   });
   const idByPath = new Map(documents.map((row) => [row.path, row.id]));
-  const exhausted = kept.length < window.length || entries.length <= limit;
+  const exhausted = stop !== -1 || entries.length <= limit;
   return {
     changes: kept.map((entry) => ({
       sha: entry.sha,
       date: entry.date.toISOString(),
       kind: changeKindOf(entry),
       author: entry.trustedAuthor === true ? entry.authorName : null,
-      subject: oneLine(entry.message, 200),
+      subject:
+        entry.trustedAuthor === true ? oneLine(entry.message, 200) : null,
       changes: entry.changes.slice(0, MAX_CHANGES_PER_COMMIT).map((change) => ({
         status: change.status,
         path: change.path,

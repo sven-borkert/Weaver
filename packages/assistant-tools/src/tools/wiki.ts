@@ -86,7 +86,7 @@ export const listRecentChangesTool = defineTool({
   kind: "read",
   capability: "content:read",
   description:
-    "The project's commit feed, newest first. kind says where a change came from (ui, mcp, proposal, task-run, ingestion, project-api, exam, wiki-run, wiki-input, wiki-revert); commits Weaver cannot vouch for are external and carry no author. since is an ISO time. Continue with nextCursor.",
+    "The project's commit feed, newest first. kind says where a change came from (ui, mcp, proposal, task-run, ingestion, project-api, exam, wiki-run, wiki-input, wiki-revert); commits Weaver cannot vouch for are external and carry no author or subject (null). since is an ISO time. Continue with nextCursor.",
   inputSchema: z.object({
     projectId: z.uuid(),
     since: z.iso.datetime().optional(),
