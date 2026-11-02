@@ -121,6 +121,8 @@ describe("knowledge schema", () => {
           sourceCommitSha,
         ],
       );
+      // ALTER TABLE refuses pending deferred FK events from the inserts above.
+      await client.query("SET CONSTRAINTS ALL IMMEDIATE");
       await client.query(
         'ALTER TABLE "Document" ENABLE TRIGGER "Document_refresh_exact_title_insert"',
       );

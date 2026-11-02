@@ -182,7 +182,8 @@ are explicitly removed; cascading the final grant would widen a key.
 `WikiInputItem` and `WikiRun` (`20261103110000_wiki_input_and_run`; `PersonalWorkKind.wiki` and `IngestionOrigin.wiki` are separate `ALTER TYPE` migrations).
 `WikiRun_active_project_key` is a partial unique index on `projectId` for `preparing`, `queued`, `running`. `Document` and `DataTable.wikiSourceItemId`
 have a `DEFERRABLE INITIALLY DEFERRED` no-action FK (`20261103110300`): a linked item cannot be deleted while a page still references it at commit, and a hard
-project delete works in any cascade order, which a dump and restore can change. `wikiSources.spec.ts` pins both. User references on the item and run are `SET NULL`. `sourceDocumentId` and `sourceTableId` are plain uuids.
+project delete works in any cascade order, which a dump and restore can change. `wikiSources.spec.ts` pins both. A transaction, migrations included, that inserts
+a `Document` or `DataTable` row and then alters that table must run `SET CONSTRAINTS ALL IMMEDIATE` first, or PostgreSQL refuses with "pending trigger events". User references on the item and run are `SET NULL`. `sourceDocumentId` and `sourceTableId` are plain uuids.
 
 ## Project machine credentials
 
