@@ -29,6 +29,11 @@ const STOP_REASONS: Record<string, string> = {
   wiki_disabled: "the wiki was disabled",
   user: "cancelled by a person",
   revert_interrupted: "the revert was interrupted",
+  no_candidates: "no page needs a type or summary",
+  no_proposals: "the model proposed nothing usable",
+  plan_rejected: "the plan was rejected",
+  plan_expired: "the plan was not accepted within a day",
+  classify_interrupted: "the classification was interrupted",
 };
 
 const ERROR_LABELS: Record<string, string> = {
@@ -39,6 +44,7 @@ const ERROR_LABELS: Record<string, string> = {
   CONTEXT_LIMIT: "The run outgrew the model's context window.",
   LEASE_LOST: "The worker stopped responding three times.",
   NO_WORKER: "No worker is consuming wiki runs.",
+  PLAN_INVALID: "The stored plan failed validation, so nothing was applied.",
   RUNNER_UNAVAILABLE: "This worker cannot run the wiki agent.",
 };
 

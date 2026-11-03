@@ -389,7 +389,12 @@ export class WikiRunSession {
           status: { in: ["reserved", "committed"] },
         },
       });
-      if (run.writes >= cap || used >= cap) return { capped: true as const };
+      // Classify caps pages, not property writes; a page with a type and a summary counts two writes.
+      const capped =
+        this.lease.kind === "classify"
+          ? used >= cap
+          : run.writes >= cap || used >= cap;
+      if (capped) return { capped: true as const };
       const n = run.operationCounter;
       const operationId = formatWikiOperationId("wiki-run", this.lease.id, n);
       await tx.wikiRunOperation.create({
@@ -540,7 +545,10 @@ export class WikiRunSession {
       where: { id: this.lease.id },
       select: { writes: true },
     });
-    if (run.writes >= WIKI_RUN_CAPS[this.lease.kind].writes)
+    if (
+      this.lease.kind !== "classify" &&
+      run.writes >= WIKI_RUN_CAPS[this.lease.kind].writes
+    )
       this.stopRequested = "write_cap";
     return result;
   }
@@ -727,6 +735,31 @@ export class WikiRunSession {
       unresolvedLinks,
       invalidLinks,
     };
+  }
+
+  /** Classify's only write: a property-only patch from the stored plan, no body actions. */
+  async classifyPage(input: {
+    documentId: string;
+    baseCommitSha: string;
+    properties: WikiPageProps;
+  }): Promise<{ commitSha: string }> {
+    if (this.lease.kind !== "classify")
+      throw new CoreError("FORBIDDEN", "Only a classify run applies a plan");
+    const result = await this.write({
+      toolName: "wiki_patch_page",
+      inputItemId: null,
+      documentId: input.documentId,
+      baseCommitSha: input.baseCommitSha,
+      operation: {
+        kind: "document.patch",
+        projectId: this.projectId,
+        documentId: input.documentId,
+        baseCommitSha: input.baseCommitSha,
+        actions: [],
+        properties: input.properties,
+      },
+    });
+    return { commitSha: result.commitSha };
   }
 
   async createFolder(input: {

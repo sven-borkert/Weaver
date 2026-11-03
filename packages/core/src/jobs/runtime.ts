@@ -25,6 +25,7 @@ import { emitDiagnostic } from "../diagnostics/writer";
 import { safeErrorClass } from "../diagnostics/errorClass";
 import { runTaskTick } from "../scheduledTasks/tick";
 import { failRunWithoutRunner } from "../services/wikiRuns";
+import { executeWikiClassify } from "../services/wikiClassify";
 import { executeWikiRevert } from "../services/wikiRevert";
 import { reapWikiRuns, runWikiTick } from "../services/wikiTick";
 import {
@@ -610,8 +611,16 @@ export async function registerKnowledgeJobHandlers(input: {
         // A revert needs no model, so a worker without the injected runner still performs it.
         const run = await input.db.wikiRun.findUnique({
           where: { id: payload.runId },
-          select: { kind: true },
+          select: { kind: true, status: true },
         });
+        // An accepted classify plan is applied by code, so it needs no runner either.
+        if (run?.kind === "classify" && run.status === "queued") {
+          await executeWikiClassify(input.db, payload.runId, {
+            workerId: `${hostname()}:${process.pid}`,
+            signal: execution.signal,
+          });
+          return;
+        }
         if (run?.kind === "revert") {
           await executeWikiRevert(input.db, payload.runId, {
             workerId: `${hostname()}:${process.pid}`,

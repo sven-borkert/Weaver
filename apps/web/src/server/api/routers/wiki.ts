@@ -2,6 +2,11 @@ import { authedProcedure, createTRPCRouter } from "~/server/api/trpc";
 import * as wiki from "@weaver/core/services/wikiSettings";
 import * as inputs from "@weaver/core/services/wikiInputs";
 import { cancelRun } from "@weaver/core/services/wikiRuns";
+import {
+  acceptClassifyPlan,
+  rejectClassifyPlan,
+  startClassify,
+} from "@weaver/core/services/wikiClassify";
 import { startMaintenance } from "@weaver/core/services/wikiLint";
 import { startRevert } from "@weaver/core/services/wikiRevert";
 import {
@@ -11,6 +16,7 @@ import {
 } from "@weaver/core/services/wikiRunViews";
 import { env } from "~/env";
 import {
+  acceptWikiClassifyInput,
   addWikiFilesInput,
   addWikiTextInput,
   cancelWikiRunInput,
@@ -91,6 +97,19 @@ export const wikiRouter = createTRPCRouter({
     .input(projectInput)
     .mutation(({ ctx, input }) =>
       startMaintenance(ctx.db, ctx.security, input),
+    ),
+  classify: authedProcedure
+    .input(projectInput)
+    .mutation(({ ctx, input }) => startClassify(ctx.db, ctx.security, input)),
+  acceptClassify: authedProcedure
+    .input(acceptWikiClassifyInput)
+    .mutation(({ ctx, input }) =>
+      acceptClassifyPlan(ctx.db, ctx.security, input),
+    ),
+  rejectClassify: authedProcedure
+    .input(cancelWikiRunInput)
+    .mutation(({ ctx, input }) =>
+      rejectClassifyPlan(ctx.db, ctx.security, input),
     ),
   clearLintPause: authedProcedure
     .input(revisionInput)

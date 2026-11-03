@@ -74,21 +74,29 @@ function RunRow({ run, onOpen }: { run: WikiRunRow; onOpen: () => void }) {
   );
 }
 
-function RunDetail({
+export function RunDetail({
   projectId,
   run,
   canEdit,
+  isOwner,
   onRevert,
   onCancel,
+  onAccept,
+  onReject,
   busy,
 }: {
   projectId: string;
   run: WikiRunDetail;
   canEdit: boolean;
+  isOwner: boolean;
   onRevert: () => void;
   onCancel: () => void;
+  onAccept: () => void;
+  onReject: () => void;
   busy: boolean;
 }) {
+  const awaitingPlan =
+    run.kind === "classify" && run.status === "preparing" && run.plan !== null;
   const outcome = wikiRunOutcome(run);
   return (
     <div className="space-y-4 text-[13px]">
@@ -104,6 +112,38 @@ function RunDetail({
             ) : null}
           </h3>
           <p className="text-text-2 whitespace-pre-wrap">{run.summary}</p>
+        </section>
+      ) : null}
+      {run.kind === "classify" && run.status === "preparing" ? (
+        <section>
+          <h3 className="text-text font-semibold">Proposed properties</h3>
+          {run.plan ? (
+            <>
+              <p className="text-text-2 text-[12px]">
+                Proposed by the model from each page&apos;s title and excerpt.
+                Accepting applies exactly this list, and nothing else, to the
+                pages as they are now.
+              </p>
+              <ul className="space-y-1">
+                {run.plan.entries.map((entry) => (
+                  <li key={entry.documentId} className="text-text-2">
+                    <span className="text-text">{entry.title}</span>
+                    <span className="block text-[12px]">
+                      {entry.type ? `type ${entry.type}` : null}
+                      {entry.type && entry.summary ? " · " : null}
+                      {entry.summary ?? null}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p className="text-text-2">
+              {isOwner
+                ? "The model is reading the pages. The proposal appears here."
+                : "Waiting for an Owner to review the proposal."}
+            </p>
+          )}
         </section>
       ) : null}
       {run.inputs.length > 0 ? (
@@ -165,7 +205,7 @@ function RunDetail({
           </ul>
         </section>
       ) : null}
-      {run.report && run.report.skipped.length > 0 ? (
+      {run.kind === "revert" && run.report && run.report.skipped.length > 0 ? (
         <section>
           <h3 className="text-text font-semibold">Not reverted</h3>
           <ul className="space-y-1">
@@ -177,9 +217,19 @@ function RunDetail({
           </ul>
         </section>
       ) : null}
-      {canEdit ? (
+      {awaitingPlan && isOwner ? (
         <DialogFooter>
-          {ACTIVE.has(run.status) ? (
+          <Button variant="secondary" disabled={busy} onClick={onReject}>
+            Reject plan
+          </Button>
+          <Button disabled={busy} onClick={onAccept}>
+            Accept plan
+          </Button>
+        </DialogFooter>
+      ) : null}
+      {canEdit && !(run.kind === "classify" && !isOwner) ? (
+        <DialogFooter>
+          {ACTIVE.has(run.status) && !awaitingPlan ? (
             <Button variant="secondary" disabled={busy} onClick={onCancel}>
               Cancel run
             </Button>
@@ -236,6 +286,31 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
     onSuccess: refresh,
     onError: (error) => toast.error(error.message),
   });
+  const classify = api.wiki.classify.useMutation({
+    onSuccess: async () => {
+      toast.success("Classification started");
+      await refresh();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const accept = api.wiki.acceptClassify.useMutation({
+    onSuccess: async () => {
+      toast.success("Plan accepted");
+      setOpenId(null);
+      await refresh();
+    },
+    onError: async (error) => {
+      toast.error(error.message);
+      await refresh();
+    },
+  });
+  const reject = api.wiki.rejectClassify.useMutation({
+    onSuccess: async () => {
+      setOpenId(null);
+      await refresh();
+    },
+    onError: (error) => toast.error(error.message),
+  });
   const maintenance = api.wiki.runMaintenance.useMutation({
     onSuccess: async () => {
       toast.success("Maintenance started");
@@ -251,6 +326,7 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
       </p>
     );
   const canEdit = projectRoleAtLeast(project?.myRole ?? "Viewer", "Editor");
+  const isOwner = projectRoleAtLeast(project?.myRole ?? "Viewer", "Owner");
 
   return (
     <div className="flex h-full flex-col">
@@ -269,6 +345,15 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
               Checks links, recent changes and stale pages and writes a report.
               Once an hour at most.
             </span>
+            {isOwner ? (
+              <Button
+                variant="outline"
+                disabled={classify.isPending}
+                onClick={() => classify.mutate({ projectId })}
+              >
+                Classify existing pages
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {usage ? (
@@ -310,7 +395,22 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
               projectId={projectId}
               run={detail}
               canEdit={canEdit}
-              busy={revert.isPending || cancel.isPending}
+              isOwner={isOwner}
+              busy={
+                revert.isPending ||
+                cancel.isPending ||
+                accept.isPending ||
+                reject.isPending
+              }
+              onAccept={() =>
+                detail.plan &&
+                accept.mutate({
+                  projectId,
+                  runId: detail.id,
+                  expectedPlanDigest: detail.plan.digest,
+                })
+              }
+              onReject={() => reject.mutate({ projectId, runId: detail.id })}
               onRevert={() => setConfirming(true)}
               onCancel={() => cancel.mutate({ projectId, runId: detail.id })}
             />

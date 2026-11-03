@@ -341,3 +341,7 @@ fields fail OIDC closed while password login and unrelated runtimes remain usabl
 ## Review hardening invariants
 
 Backups stop both running and restarting application writers, then verify no running/restarting/paused writer remains before pg_dump. Only a default-branch pipeline without a Git tag may publish latest runtime or cache aliases.
+
+## Wiki agent runtime
+
+The `wiki` worker role runs `wiki.tick` (minute: prepares sources, claims due lint slots, dispatches queued runs, expires leases, previews classify plans) and `wiki.run`. It needs no new environment variable. The agent's model is the `wiki` route in Administration > AI; the outbound allowlist applies to it like any route. Operators who pinned `WEAVER_ENABLED_WORKER_ROLES` must add `wiki` before upgrading, and a deployment with no `wiki` consumer keeps working: runs end "no worker is consuming wiki runs" (`system.reconcile`) and scheduled lint never starts. A worker built without the injected runner still applies an accepted classify plan and performs Revert (neither needs a model) but cannot preview or lint. Three Compose files list the role; `compose-services.test.mjs` pins them.

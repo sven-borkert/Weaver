@@ -9,6 +9,7 @@ import {
 import { rollingDestructiveChars } from "./wikiRunSession";
 import { retireWikiIngestionFile } from "./ingestion";
 import { claimDueLintRuns } from "./wikiLint";
+import { classifyRunsToDispatch, reapClassifyRuns } from "./wikiClassify";
 import { prepareRunItems } from "./wikiPrepare";
 import {
   emitRunEnded,
@@ -291,8 +292,10 @@ export async function reapWikiRuns(
   await clearDestructivePauses(db, now);
   await checkSpendAlerts(db, now);
   await pruneRunOperations(db, now);
+  await reapClassifyRuns(db, now);
   const overdue = await db.wikiRun.findMany({
     where: {
+      kind: "ingest",
       status: "preparing",
       startedAt: { lte: new Date(now.getTime() - WIKI_PREPARING_LIMIT_MS) },
     },
@@ -350,7 +353,10 @@ async function dispatchQueuedRuns(db: PrismaClient): Promise<number> {
   });
   for (const run of queued)
     await requestKnowledgeJob("wiki.run", { runId: run.id });
-  return queued.length;
+  const previews = await classifyRunsToDispatch(db);
+  for (const runId of previews)
+    await requestKnowledgeJob("wiki.run", { runId });
+  return queued.length + previews.length;
 }
 
 /** One minute delivery; every transition is conditional, so several workers may run it at once. */

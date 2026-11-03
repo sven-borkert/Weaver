@@ -575,6 +575,12 @@ after five. The agent's lint-only reads (`list_missing_entity_pages`, `list_page
 [`wikiReads.ts`](../packages/core/src/services/wikiReads.ts); `list_recent_changes` walks an ancestry range from a trusted first-parent boundary
 (`firstParentTrustedBefore`, `listCommitShas`, `logChangesForShas` in `@weaver/git-store`).
 
+Classify: [`wikiClassify.ts`](../packages/core/src/services/wikiClassify.ts) holds the Owner actions (`startClassify`, `acceptClassifyPlan`
+with `expectedPlanDigest`, `rejectClassifyPlan`), the preview claim and the model-free apply (`executeWikiClassify`, called by the `wiki.run`
+handler for a queued classify run). The preview is one tool-less call in [`wikiClassifyPreview.ts`](../packages/ai/src/wikiClassifyPreview.ts);
+the plan, its prompt and its validation are pure code in [`wiki/classifyPlan.ts`](../packages/core/src/wiki/classifyPlan.ts) (`WikiRun.plan`,
+`planDigest`).
+
 The Input page is [`wiki/_components/WikiInputScreen.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/_components/WikiInputScreen.tsx>) over the
 `wiki.input` router; the sidebar link depends on `project.get`'s `wikiEnabled`. Runs reach the bell and Activity through
 [`backgroundWork/wikiSource.ts`](../packages/core/src/services/backgroundWork/wikiSource.ts) (`PersonalWorkKind.wiki`).

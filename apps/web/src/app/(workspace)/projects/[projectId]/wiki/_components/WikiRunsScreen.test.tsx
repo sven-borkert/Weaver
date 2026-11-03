@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { WikiRunsScreen } from "./WikiRunsScreen";
+import { RunDetail, WikiRunsScreen } from "./WikiRunsScreen";
 import { wikiCost, wikiDuration, wikiRunOutcome } from "./wikiRunPresentation";
 
 type Query = { data: unknown; error: unknown };
@@ -24,6 +24,9 @@ vi.mock("~/trpc/react", () => {
         revertRun: mutation,
         cancelRun: mutation,
         runMaintenance: mutation,
+        classify: mutation,
+        acceptClassify: mutation,
+        rejectClassify: mutation,
       },
     },
   };
@@ -91,8 +94,11 @@ describe("WikiRunsScreen", () => {
     expect(render()).toContain("indexing 0.25 USD");
   });
 
-  it("offers maintenance to an Editor and not to a Viewer", () => {
+  it("offers maintenance to an Editor and not to a Viewer, and classify to an Owner only", () => {
     expect(render()).toContain("Run maintenance now");
+    expect(render()).not.toContain("Classify existing pages");
+    mocked.project = { data: { myRole: "Owner" }, error: null };
+    expect(render()).toContain("Classify existing pages");
     mocked.project = { data: { myRole: "Viewer" }, error: null };
     expect(render()).not.toContain("Run maintenance now");
   });
@@ -142,5 +148,67 @@ describe("wikiRunPresentation", () => {
     expect(wikiDuration(new Date(0), null)).toBe("");
     expect(wikiCost(0n, null)).toBe("0.00");
     expect(wikiCost(1_234n, "USD")).toBe("0.0012 USD");
+  });
+});
+
+describe("RunDetail for a classify run", () => {
+  const detail = {
+    ...run,
+    kind: "classify",
+    status: "preparing",
+    summary: null,
+    summaryByAgent: true,
+    inputs: [],
+    commits: [],
+    report: null,
+    revertible: false,
+    revertedByRunId: null,
+    plan: {
+      digest: "d".repeat(64),
+      entries: [
+        {
+          documentId: "11111111-1111-4111-8111-111111111111",
+          path: "a.md",
+          title: "Vendor notes",
+          headCommitSha: "a".repeat(40),
+          type: "topic",
+          summary: "Vendor contract terms.",
+        },
+      ],
+    },
+  };
+  const html = (
+    isOwner: boolean,
+    plan: typeof detail.plan | null = detail.plan,
+  ) =>
+    renderToStaticMarkup(
+      <RunDetail
+        projectId="22222222-2222-4222-8222-222222222222"
+        run={{ ...detail, plan }}
+        canEdit
+        isOwner={isOwner}
+        busy={false}
+        onRevert={() => undefined}
+        onCancel={() => undefined}
+        onAccept={() => undefined}
+        onReject={() => undefined}
+      />,
+    );
+
+  it("lists the proposal and offers Accept and Reject to an Owner", () => {
+    const owner = html(true);
+    expect(owner).toContain("Proposed properties");
+    expect(owner).toContain("Vendor notes");
+    expect(owner).toContain("type topic");
+    expect(owner).toContain("Vendor contract terms.");
+    expect(owner).toContain("Accept plan");
+    expect(owner).toContain("Reject plan");
+  });
+
+  it("gives a non-Owner no decision buttons and says it waits", () => {
+    const other = html(false, null);
+    expect(other).toContain("Waiting for an Owner");
+    expect(other).not.toContain("Accept plan");
+    expect(other).not.toContain("Cancel run");
   });
 });

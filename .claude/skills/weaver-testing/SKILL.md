@@ -402,3 +402,7 @@ the same operation ID to verify the original payload and ETag are retained.
 ## Exams
 
 Exam coverage: `exams.spec.ts`, `examAttempts.spec.ts`, `examTools.spec.ts`, plus membership, background-work and assistant/MCP specs. Run sequentially against guarded weaver_test. Browser `exams.spec.ts` retains Tier 3 consent.
+
+## Wiki lint, classify and Save as page specs
+
+`wikiLint.spec.ts` (ancestry range, schedule, claims, failure streak, manual start, scripted lint runs, lint reads) and `wikiClassify.spec.ts` share `_wikiScript.ts` (`scripted` tool-call model, `seedWikiRoute`, `deps`). A tool-less call such as the classify preview needs a `doGenerate` mock, not the scripted `doStream` one. Backdated Git commits need both author and committer dates (`GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE`, passed through `execFileSync` with `process.env`), because `git log` orders by committer date. Never run integration specs in two processes, including a command the harness moved to the background: a second run on `weaver_test` makes the first one time out in `resetDb`. Pure Save as page mapping is unit-tested in `lib/assistant/saveAsPage.test.ts`.

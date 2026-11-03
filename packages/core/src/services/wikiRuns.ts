@@ -204,9 +204,14 @@ export async function cancelRun(
   const ended = await db.$transaction(async (tx) => {
     const run = await tx.wikiRun.findFirst({
       where: { id: input.runId, projectId: input.projectId },
-      select: { id: true },
+      select: { id: true, kind: true },
     });
     if (!run) throw new CoreError("NOT_FOUND", "Wiki run not found");
+    // A classify plan is the Owner's decision, so only an Owner may cancel its run.
+    if (run.kind === "classify")
+      await assertProjectRole(tx, input.projectId, actor, "Owner", {
+        capability: "content:write",
+      });
     return endRunInTx(tx, run.id, WIKI_ACTIVE_RUN_STATUSES, {
       status: "cancelled",
       stopReason: "user",
@@ -225,7 +230,8 @@ export async function failRunWithoutRunner(
   db: PrismaClient,
   runId: string,
 ): Promise<boolean> {
-  const ended = await endRun(db, runId, ["queued"], {
+  // A classify preview waits in `preparing`; every other run waits in `queued`.
+  const ended = await endRun(db, runId, ["queued", "preparing"], {
     status: "failed",
     errorCode: WIKI_RUNNER_UNAVAILABLE,
     errorMessage: RUNNER_UNAVAILABLE_MESSAGE,
@@ -329,7 +335,7 @@ export function isClosedFence(error: unknown): boolean {
 }
 
 /** The liveness core both fences share: feature on, agent live and the run's own, project live. */
-async function assertWikiLiveness(
+export async function assertWikiLiveness(
   db: PrismaClient,
   input: { projectId: string; agentId: string },
 ): Promise<void> {

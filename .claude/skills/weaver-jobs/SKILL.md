@@ -365,3 +365,7 @@ merely because its first projection transaction failed.
 ## Review hardening invariants
 
 Materialized background-work sources must filter terminal history before the union while retaining active rows of any age. Scheduled-task free-text errors are owner-only. Exclude knowledge tombstones from live totals and failure counts.
+
+## Wiki lint and classify dispatch
+
+`wiki.tick` also claims due lint slots (`claimDueLintRuns`, runs are created `queued`) and dispatches classify previews: a `preparing` classify run with no plan and no lease gets a `wiki.run` job, and the injected runner previews it (one tool-less model call). An accepted plan moves the run to `queued`; the `wiki.run` handler applies it with `executeWikiClassify` in core, like Revert, so it needs no runner. `reapClassifyRuns` releases a preview claim whose lease lapsed (the third loss fails the run `LEASE_LOST`) and cancels a plan nobody answered within 24 hours. Lint failures are counted in `endRunInTx`.

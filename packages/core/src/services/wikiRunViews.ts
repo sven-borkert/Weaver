@@ -4,6 +4,11 @@ import { projectRoleAtLeast } from "../roles";
 import { CoreError } from "../errors";
 import type { UserSecurityContext } from "../security/context";
 import { assertProjectRole } from "./projectAccess";
+import {
+  classifyPlanDigest,
+  parseStoredClassifyPlan,
+  type ClassifyPlan,
+} from "../wiki/classifyPlan";
 import type { WikiRevertReport } from "./wikiRevert";
 
 const RUNS_PAGE = 25;
@@ -67,6 +72,15 @@ async function canSeeCost(
 ): Promise<boolean> {
   const access = await assertProjectRole(db, projectId, actor, "Viewer");
   return projectRoleAtLeast(access.effectiveRole, "Maintainer");
+}
+
+async function isOwner(
+  db: PrismaClient,
+  actor: UserSecurityContext,
+  projectId: string,
+): Promise<boolean> {
+  const access = await assertProjectRole(db, projectId, actor, "Viewer");
+  return projectRoleAtLeast(access.effectiveRole, "Owner");
 }
 
 /** The cost of indexing a run's commits, joined at read time through the enrichment's own column. */
@@ -188,9 +202,30 @@ export type WikiRunDetail = WikiRunRow & {
     indexingPending: boolean;
   }>;
   report: WikiRevertReport | null;
+  /** A classify run's stored proposal; Owners only, and only while it waits for a decision. */
+  plan: { entries: ClassifyPlan["entries"]; digest: string } | null;
   revertible: boolean;
   revertedByRunId: string | null;
 };
+
+async function reviewablePlan(
+  db: PrismaClient,
+  actor: UserSecurityContext,
+  projectId: string,
+  run: {
+    kind: string;
+    status: string;
+    plan: unknown;
+    planDigest: string | null;
+  },
+): Promise<WikiRunDetail["plan"]> {
+  if (run.kind !== "classify" || run.status !== "preparing" || !run.planDigest)
+    return null;
+  if (!(await isOwner(db, actor, projectId))) return null;
+  const plan = parseStoredClassifyPlan(run.plan);
+  if (!plan || classifyPlanDigest(plan) !== run.planDigest) return null;
+  return { entries: plan.entries, digest: run.planDigest };
+}
 
 export async function getRun(
   db: PrismaClient,
@@ -302,6 +337,7 @@ export async function getRun(
     inputs: run.items,
     commits,
     report: (run.report as WikiRevertReport | null) ?? null,
+    plan: await reviewablePlan(db, actor, input.projectId, run),
     revertible:
       run.kind !== "revert" &&
       TERMINAL.has(run.status) &&

@@ -265,7 +265,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - Ids `wiki-revert:<runId>:<nnnn>` with `Weaver-Wiki-Request-Hash`, the Editor as author, no agent trailer and no `Weaver-Run-Id`; recovery uses the `wikiRevertRequestHash` identity (`trustedAuthor === true`,
   no agent trailer, matching hash). Revert operations do not count toward the 24-hour sum.
 - `wikiRunViews.ts`: `listRuns`, `getRun`, `wikiUsageSummary`. Viewer+ read; `indexingCostMicros` is null below Maintainer. The "Wiki agent" badge needs `verified`: the commit's trust, operation id and agent
-  trailer from Git, never the ledger row alone. Run maintenance now (Editor+) sits above the list.
+  trailer from Git, never the ledger row alone. Run maintenance now (Editor+) and Classify existing pages (Owner) sit above the list; a classify run waiting for its plan shows it in the detail drawer with Accept and Reject for Owners.
 
 ## Lint
 
@@ -287,6 +287,20 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   `list_recent_changes` with `since` walks `<boundary>..HEAD` where the boundary is the newest trusted first-parent commit older than `since`; untrusted dates never end the walk.
 - Measured at this slice: always-active tool definitions 13,995 B (the `load_tools` description lists the new names), loadable 8,638 B, ingest prompt 2,815 B, lint prompt 3,810 B,
   minimum input at the 100,000 window 45,454 B (ingest) and 44,459 B (lint); pinned in `wikiAgentRegistry.test.ts` and `wikiRunner.test.ts`.
+
+## Classify
+
+- `wikiClassify.ts`: Owner session actions `startClassify` (a `classify` run in `preparing`, no plan), `acceptClassifyPlan` (needs the run's `planDigest` as `expectedPlanDigest`;
+  a mismatch is `PLAN_CHANGED` and nothing starts; moves the run to `queued`) and `rejectClassifyPlan` (cancels, `plan_rejected`). `cancelRun` on a classify run is Owner only.
+- Preview (`packages/ai/src/wikiClassifyPreview.ts`, reached from `executeWikiRun` for a `preparing` classify run): claim by conditional update, one `generateText` call with no tools,
+  usage recorded under `wiki.run`. Candidates (`loadClassifyCandidates`) are markdown pages lacking a type or summary, not source pages, not exempt, not the guide, not task outputs, at most 100;
+  the model sees title, path and excerpt, cut and stripped, in a fenced data block. `wiki/classifyPlan.ts` turns the reply into a plan: ids must be candidates, only missing fields are
+  proposed, every value passes the agent's property schema and the type vocabulary (not `guide`), anything else is dropped. The plan lives in `WikiRun.plan` with `planDigest`.
+- Apply (`executeWikiClassify`, called by the `wiki.run` handler for a queued classify run, no model): re-parses the plan (a digest mismatch, reserved type or more than 100 entries is
+  `PLAN_INVALID`), then writes each entry through `WikiRunSession.classifyPage` (ledger, ownership, fence, `applyWikiOperation`). A page that changed since the preview, or is now the guide, a source
+  page, a task output, Python or exempt, is skipped. Property-only patches charge no gross or added characters; the page count (not the per-property write count) is capped at 100, while
+  `WikiRun.writes` still counts one per property changed on a non-owned page. Classify runs are revertible like any run.
+- An unanswered plan expires after 24 hours; a lost preview claim is released and the third loss fails the run.
 
 ## Commit text
 

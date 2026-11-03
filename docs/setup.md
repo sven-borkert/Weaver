@@ -244,6 +244,13 @@ data-processing terms appropriate for that content. Credentials, prompts,
 provider responses, and document/source text are not stored in usage records
 or written to application logs.
 
+### Set up the wiki agent
+
+1. In **Administration › Settings › AI** assign a model to the **Project wiki agent** route (chat and tool use, a context window of at least 100,000 tokens and a maximum output of at least 8,192 tokens). Without it the agent cannot run; a run fails with a plain message.
+2. Keep the `wiki` worker role (on by default) on at least one worker. It prepares sources, previews Classify plans, runs the agent and starts scheduled maintenance. With no `wiki` worker runs end with "no worker is consuming wiki runs", and scheduled maintenance never starts.
+3. An Owner enables the wiki in **Project › Settings › Wiki agent**, which creates the `wiki/` folders, a guide page and an overview page. A Maintainer reviews and approves the guide before any run.
+4. Optional: an Owner sets a maintenance schedule (hourly to monthly, with a timezone) on the same card. Editors can also press **Run maintenance now** on **Wiki › Runs**, at most once an hour per project. Five failed maintenance runs in a row pause the schedule until an Owner resumes it. **Classify existing pages** (Owner, Runs tab) proposes a type and summary for pages that lack them and applies it only after the Owner accepts the plan.
+
 ### Configure import parsing
 
 Route a chat model on **Import parsing** in **Administration › Settings › AI** so

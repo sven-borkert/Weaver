@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import {
   isStepCount,
   streamText,
@@ -50,6 +49,20 @@ import {
 } from "@weaver/core/services/wikiRuns";
 import { WIKI_RUN_CAPS } from "@weaver/core/wiki/caps";
 import { classifyRunError, redactSecrets } from "./errors";
+import { executeClassifyPreview } from "./wikiClassifyPreview";
+import {
+  routeFingerprint,
+  routeUnsuitableReason,
+  usageId,
+  WIKI_MIN_CONTEXT_WINDOW,
+  WIKI_MIN_OUTPUT_TOKENS,
+} from "./wikiRunShared";
+
+export {
+  routeUnsuitableReason,
+  WIKI_MIN_CONTEXT_WINDOW,
+  WIKI_MIN_OUTPUT_TOKENS,
+};
 import { createAssistantLanguageModel } from "./model";
 import { assertPromptFits, promptByteSize } from "./prompt";
 import { toAiToolSet, type ToolCollector } from "./tools";
@@ -62,10 +75,7 @@ import {
   WIKI_NOTES_HEADER,
 } from "./wikiPrompt";
 
-export const WIKI_MIN_CONTEXT_WINDOW = 100_000;
-export const WIKI_MIN_OUTPUT_TOKENS = 8_192;
 const WIKI_SCHEMA_RESERVE_CAP = 32 * 1024;
-const WIKI_PROMPT_VERSION = "wiki-v1";
 const RETURN_NOTE = "This run ended before the input was finished.";
 
 export type WikiRunnerDeps = {
@@ -117,17 +127,6 @@ export function wikiContextBudget(input: {
   return { maxInputBytes, maxOutputTokens, schemaReserve };
 }
 
-export function routeUnsuitableReason(
-  route: LlmModelSnapshot | null,
-): string | null {
-  if (!route) return "no model is routed to the wiki agent";
-  if ((route.contextWindow ?? 0) < WIKI_MIN_CONTEXT_WINDOW)
-    return `the wiki model needs a context window of at least ${WIKI_MIN_CONTEXT_WINDOW}`;
-  if ((route.maxOutputTokens ?? 0) < WIKI_MIN_OUTPUT_TOKENS)
-    return `the wiki model needs a maximum output of at least ${WIKI_MIN_OUTPUT_TOKENS} tokens`;
-  return null;
-}
-
 /** Notes come back as a user-role message each step, one block only, never in the system prompt. */
 export function withNotesMessage(
   messages: readonly ModelMessage[],
@@ -158,26 +157,6 @@ class WikiRunStop extends Error {
     super(message);
     this.name = "WikiRunStop";
   }
-}
-
-function usageId(runId: string, attempt: number): string {
-  const hex = createHash("sha256")
-    .update(`wiki-run-usage:${runId}:${attempt}`)
-    .digest("hex");
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
-}
-
-function routeFingerprint(route: LlmModelSnapshot): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        route.providerType,
-        route.endpoint,
-        route.providerModelId,
-        WIKI_PROMPT_VERSION,
-      ]),
-    )
-    .digest("hex");
 }
 
 async function runAttempt(input: {
@@ -337,6 +316,16 @@ export async function executeWikiRun(
   externalSignal?: AbortSignal,
 ): Promise<void> {
   const { db } = deps;
+  const head = await db.wikiRun.findUnique({
+    where: { id: runId },
+    select: { kind: true, status: true },
+  });
+  // Classify previews wait in `preparing`; the accepted plan is applied by core without a model.
+  if (head?.kind === "classify") {
+    if (head.status === "preparing")
+      await executeClassifyPreview(deps, runId, externalSignal);
+    return;
+  }
   const leaseMs = deps.leaseMs ?? WIKI_RUN_LEASE_MS;
   const lease = await leaseWikiRun(db, {
     runId,

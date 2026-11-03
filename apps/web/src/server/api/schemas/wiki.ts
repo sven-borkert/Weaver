@@ -59,6 +59,9 @@ export const confirmWikiInput = inputItem.extend({
 export const cancelWikiRunInput = wikiProjectInput.extend({
   runId: z.uuid(),
 });
+export const acceptWikiClassifyInput = cancelWikiRunInput.extend({
+  expectedPlanDigest: z.string().regex(/^[0-9a-f]{64}$/),
+});
 export const listWikiRunsInput = wikiProjectInput.extend({
   cursor: z.uuid().optional(),
 });
