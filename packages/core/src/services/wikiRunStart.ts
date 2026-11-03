@@ -232,31 +232,60 @@ export async function lintStartContext(
   projectId: string,
   now: Date = new Date(),
 ): Promise<LintStartContext> {
-  const [previous, settings] = await Promise.all([
-    db.wikiRun.findFirst({
-      where: {
-        projectId,
-        kind: "lint",
-        status: "succeeded",
-        id: { not: runId },
-      },
-      orderBy: [{ startedAt: "desc" }, { id: "desc" }],
-      select: { startedAt: true },
-    }),
-    db.projectWikiSettings.findUnique({
-      where: { projectId },
-      select: { reportDocumentId: true },
-    }),
-  ]);
-  const report = settings?.reportDocumentId
-    ? await db.document.findFirst({
-        where: { id: settings.reportDocumentId, projectId },
-        select: { id: true },
-      })
-    : null;
+  const previous = await db.wikiRun.findFirst({
+    where: {
+      projectId,
+      kind: "lint",
+      status: "succeeded",
+      id: { not: runId },
+    },
+    orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+    select: { startedAt: true },
+  });
   return {
     today: now.toISOString().slice(0, 10),
     previousLintAt: previous?.startedAt.toISOString() ?? null,
-    reportDocumentId: report?.id ?? null,
+    reportDocumentId: (await liveLintReport(db, projectId, runId)).id,
   };
+}
+
+/**
+ * The recorded report page when it still resolves (a dangling id counts as none), else the page this
+ * run committed itself, which covers a crash between the commit and recording the id.
+ */
+export async function liveLintReport(
+  db: PrismaClient,
+  projectId: string,
+  runId: string,
+): Promise<{ id: string | null; recorded: string | null }> {
+  const settings = await db.projectWikiSettings.findUnique({
+    where: { projectId },
+    select: { reportDocumentId: true },
+  });
+  const recorded = settings?.reportDocumentId ?? null;
+  if (recorded) {
+    const live = await db.document.findFirst({
+      where: { id: recorded, projectId },
+      select: { id: true },
+    });
+    if (live) return { id: live.id, recorded };
+  }
+  const own = await db.wikiRunOperation.findMany({
+    where: {
+      runId,
+      toolName: "wiki_create_page",
+      status: "committed",
+      documentId: { not: null },
+    },
+    orderBy: { n: "asc" },
+    select: { documentId: true },
+  });
+  for (const op of own) {
+    const live = await db.document.findFirst({
+      where: { id: op.documentId!, projectId },
+      select: { id: true },
+    });
+    if (live) return { id: live.id, recorded };
+  }
+  return { id: null, recorded };
 }

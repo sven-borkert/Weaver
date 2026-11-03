@@ -293,6 +293,12 @@ export async function claimDueLintRuns(
         projectId: row.projectId,
         details: { runId: result.runId, kind: "lint", trigger: "schedule" },
       });
+      emitDiagnostic({
+        event: "wiki.settings.changed",
+        message: "Wiki settings changed",
+        projectId: row.projectId,
+        details: { change: "lint_started", revision: null },
+      });
     } else {
       outcome.skipped += 1;
       emitDiagnostic({

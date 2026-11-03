@@ -619,7 +619,7 @@ model ProjectWikiSettings {
   lintNextRunAt           DateTime?
   lintConsecutiveFailures Int       @default(0)
   lintPausedAt            DateTime?
-  /// The last scheduled lint slot that did not start, and why (missed, run_active, lint_paused, budget_paused).
+  /// The last scheduled lint slot that did not start, and why (missed, run_active, lint_paused, budget_paused, agent_unavailable).
   lintSkippedAt           DateTime?
   lintSkipReason          String?   @db.VarChar(32)
   destructiveBudget24h    Int       @default(100000)

@@ -20,6 +20,7 @@ import {
   runActive,
 } from "./wikiInputs";
 import { WikiRunSession } from "./wikiRunSession";
+import { reconcileReservedOperations } from "./wikiRunStart";
 import {
   assertLiveWikiRun,
   assertWikiLiveness,
@@ -255,7 +256,8 @@ export async function acceptClassifyPlan(
         status: "preparing",
         planDigest: input.expectedPlanDigest,
       },
-      data: { status: "queued", queuedAt: now },
+      // The apply gets its own lease budget; preview losses must not use it up.
+      data: { status: "queued", queuedAt: now, attempts: 0 },
     });
     if (count !== 1)
       throw new CoreError(
@@ -381,6 +383,7 @@ export async function storeClassifyPlan(
     data: {
       plan,
       planDigest: classifyPlanDigest(plan),
+      queuedAt: new Date(),
       leaseToken: null,
       leaseExpiresAt: null,
     },
@@ -509,6 +512,7 @@ export async function executeWikiClassify(
       });
       return;
     }
+    await reconcileReservedOperations(db, lease);
     const session = new WikiRunSession(db, lease);
     const { applied, skipped } = await applyPlan(
       db,
@@ -589,12 +593,17 @@ export async function reapClassifyRuns(
     });
     outcome.released += count;
   }
+  const expiry = new Date(now.getTime() - WIKI_CLASSIFY_PLAN_TTL_MS);
   const stale = await db.wikiRun.findMany({
     where: {
       kind: "classify",
       status: "preparing",
       leaseToken: null,
-      startedAt: { lte: new Date(now.getTime() - WIKI_CLASSIFY_PLAN_TTL_MS) },
+      // The TTL counts from when the plan was stored; a run never previewed falls back to its start.
+      OR: [
+        { queuedAt: { lte: expiry } },
+        { queuedAt: null, startedAt: { lte: expiry } },
+      ],
     },
     select: { id: true },
   });

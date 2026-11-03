@@ -4,7 +4,8 @@ import { simpleGit } from "simple-git";
 import { randomUUID } from "node:crypto";
 import { executeWikiRun } from "@weaver/ai/wikiRunner";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
-import { endRun } from "@weaver/core/services/wikiRuns";
+import { endRun, leaseWikiRun } from "@weaver/core/services/wikiRuns";
+import { lintStartContext } from "@weaver/core/services/wikiRunStart";
 import {
   claimDueLintRuns,
   startMaintenance,
@@ -15,7 +16,10 @@ import {
   getWikiSettings,
   updateWikiSettings,
 } from "@weaver/core/services/wikiSettings";
-import { runWikiTick } from "@weaver/core/services/wikiTick";
+import {
+  expireWikiRunLeases,
+  runWikiTick,
+} from "@weaver/core/services/wikiTick";
 import {
   listMissingEntityPages,
   listPagesWithNewerSources,
@@ -720,6 +724,167 @@ describe("a scripted lint run", () => {
     expect(JSON.stringify(results[0])).toMatch(/error|owned|section/i);
     expect(JSON.stringify(results[1])).toContain("commitSha");
   }, 120_000);
+
+  it("records a new report when the recorded one is gone, and a parallel create makes only one", async () => {
+    await seedWikiRoute();
+    const p = await wikiProject();
+    const first = await startMaintenance(p.db, p.security, {
+      projectId: p.projectId,
+    });
+    await executeWikiRun(deps(scripted(script()).model), first.runId);
+    const settings = await p.db.projectWikiSettings.findUniqueOrThrow({
+      where: { projectId: p.projectId },
+    });
+    const oldId = settings.reportDocumentId!;
+    // The crash-recovery view: the id is lost but this run's ledger still names the page.
+    await p.db.projectWikiSettings.update({
+      where: { projectId: p.projectId },
+      data: { reportDocumentId: null },
+    });
+    expect(
+      (await lintStartContext(p.db, first.runId, p.projectId)).reportDocumentId,
+    ).toBe(oldId);
+    // A dangling id counts as none.
+    const dangling = randomUUID();
+    await p.db.projectWikiSettings.update({
+      where: { projectId: p.projectId },
+      data: { reportDocumentId: dangling },
+    });
+    expect(
+      (await lintStartContext(p.db, randomUUID(), p.projectId))
+        .reportDocumentId,
+    ).toBeNull();
+    await p.db.document.delete({ where: { id: oldId } });
+
+    const next = await startMaintenance(
+      p.db,
+      p.security,
+      { projectId: p.projectId },
+      new Date(Date.now() + 2 * 60 * 60_000),
+    );
+    const results: unknown[] = [];
+    const model = scripted([
+      () => [
+        ["wiki_create_page", report],
+        ["wiki_create_page", { ...report, title: "Wiki lint report B" }],
+      ],
+      ({ results: seen }) => {
+        results.push(seen.get("wiki_create_page"));
+        return [["finish_run", { summary: "Recreated." }]];
+      },
+    ]);
+    await executeWikiRun(deps(model.model), next.runId);
+    const after = await p.db.projectWikiSettings.findUniqueOrThrow({
+      where: { projectId: p.projectId },
+    });
+    expect(after.reportDocumentId).not.toBe(dangling);
+    expect(after.reportDocumentId).not.toBeNull();
+    expect(
+      await p.db.document.count({
+        where: { projectId: p.projectId, wikiType: "report" },
+      }),
+    ).toBe(1);
+    expect(
+      await p.db.wikiRunOperation.count({
+        where: {
+          runId: next.runId,
+          toolName: "wiki_create_page",
+          status: "committed",
+        },
+      }),
+    ).toBe(1);
+  }, 120_000);
+
+  it("allows small text edits on other pages but not section rewrites or removals", async () => {
+    await seedWikiRoute();
+    const p = await wikiProject();
+    const page = await humanPage(p, "Notes", "Intro text.\n");
+    const { runId } = await startMaintenance(p.db, p.security, {
+      projectId: p.projectId,
+    });
+    const results: unknown[] = [];
+    const patch = (action: Record<string, unknown>) =>
+      [
+        "wiki_patch_page",
+        {
+          documentId: page.id,
+          baseCommitSha: page.headCommitSha,
+          actions: [action],
+        },
+      ] as [string, Record<string, unknown>];
+    const model = scripted([
+      () => [patch({ action: "remove_section", sectionId: "notes" })],
+      ({ results: seen }) => {
+        results.push(seen.get("wiki_patch_page"));
+        return [
+          patch({
+            action: "replace_section_body",
+            sectionId: "notes",
+            text: "x",
+          }),
+        ];
+      },
+      ({ results: seen }) => {
+        results.push(seen.get("wiki_patch_page"));
+        return [
+          patch({ action: "replace_text", find: "Intro", replace: "Start" }),
+        ];
+      },
+      ({ results: seen }) => {
+        results.push(seen.get("wiki_patch_page"));
+        return [["finish_run", { summary: "Done." }]];
+      },
+    ]);
+    await executeWikiRun(deps(model.model), runId);
+    expect(JSON.stringify(results[0])).toMatch(/lint run may not rewrite/);
+    expect(JSON.stringify(results[1])).toMatch(/lint run may not rewrite/);
+    expect(JSON.stringify(results[2])).toContain("commitSha");
+    expect(
+      (await p.db.document.findUniqueOrThrow({ where: { id: page.id } }))
+        .excerpt,
+    ).toContain("Start text.");
+  }, 120_000);
+});
+
+describe("lint lease loss", () => {
+  beforeEach(resetDb, 60_000);
+
+  it("restarts a lost lint run, and at the attempt limit fails it toward the pause", async () => {
+    const p = await wikiProject();
+    const { runId } = await startMaintenance(p.db, p.security, {
+      projectId: p.projectId,
+    });
+    expect(
+      await leaseWikiRun(p.db, { runId, workerId: "dead" }),
+    ).not.toBeNull();
+    const later = new Date(Date.now() + 5 * 60_000);
+    expect(await expireWikiRunLeases(p.db, later)).toMatchObject({
+      restarted: 1,
+      failed: 0,
+    });
+    expect(
+      await p.db.wikiRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).toMatchObject({ status: "queued", stopReason: null, leaseToken: null });
+
+    await p.db.wikiRun.update({ where: { id: runId }, data: { attempts: 3 } });
+    expect(
+      await leaseWikiRun(p.db, { runId, workerId: "dead-2" }),
+    ).not.toBeNull();
+    await p.db.wikiRun.update({ where: { id: runId }, data: { attempts: 3 } });
+    expect(
+      await expireWikiRunLeases(p.db, new Date(Date.now() + 10 * 60_000)),
+    ).toMatchObject({ restarted: 0, failed: 1 });
+    expect(
+      await p.db.wikiRun.findUniqueOrThrow({ where: { id: runId } }),
+    ).toMatchObject({ status: "failed", errorCode: "LEASE_LOST" });
+    expect(
+      (
+        await p.db.projectWikiSettings.findUniqueOrThrow({
+          where: { projectId: p.projectId },
+        })
+      ).lintConsecutiveFailures,
+    ).toBe(1);
+  }, 60_000);
 });
 
 describe("lint reads", () => {
@@ -827,7 +992,10 @@ describe("lint reads", () => {
     await p.db.document.update({
       where: { id: page.id },
       data: {
-        wikiSources: [{ kind: "document", id: source.id }],
+        wikiSources: [
+          { kind: "document", id: source.id },
+          { kind: "document", id: source.id },
+        ],
         lastEditedAt: new Date("2026-01-01T00:00:00Z"),
       },
     });
@@ -844,6 +1012,7 @@ describe("lint reads", () => {
       p.security,
     );
     expect(result.pages.map((x) => x.id)).toEqual([page.id]);
+    expect(result.pages[0]!.sources).toHaveLength(1);
     expect(result.pages[0]!.sources[0]).toMatchObject({
       kind: "document",
       id: source.id,

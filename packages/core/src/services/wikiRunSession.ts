@@ -15,6 +15,7 @@ import {
 } from "../wiki/agentMarkdown";
 import {
   formatWikiOperationId,
+  checkNonOwnedActions,
   WIKI_BUDGET_REFUSALS_STOP_RUN,
   type BudgetDelta,
 } from "../wiki/budget";
@@ -34,7 +35,16 @@ import {
   type LeasedWikiRun,
   wikiRunFence,
 } from "./wikiRuns";
+import { liveLintReport } from "./wikiRunStart";
 import { wikiWriteGuardsFor } from "./wikiSettings";
+
+function reportExists(): CoreError {
+  return new CoreError(
+    "CONFLICT",
+    "The report page already exists; patch it instead of creating another page",
+    { reason: "REPORT_EXISTS" },
+  );
+}
 
 export const WIKI_NOTE_BLOCK_MAX_CHARS = 8_000;
 export const WIKI_SUMMARY_MAX_CHARS = 4_000;
@@ -395,6 +405,17 @@ export class WikiRunSession {
           ? used >= cap
           : run.writes >= cap || used >= cap;
       if (capped) return { capped: true as const };
+      // Under the run-row lock, so parallel report creates cannot both reserve.
+      if (this.lease.kind === "lint" && input.toolName === "wiki_create_page") {
+        const earlier = await tx.wikiRunOperation.count({
+          where: {
+            runId: this.lease.id,
+            toolName: "wiki_create_page",
+            status: { in: ["reserved", "committed"] },
+          },
+        });
+        if (earlier > 0) throw reportExists();
+      }
       const n = run.operationCounter;
       const operationId = formatWikiOperationId("wiki-run", this.lease.id, n);
       await tx.wikiRunOperation.create({
@@ -583,14 +604,7 @@ export class WikiRunSession {
       },
     });
     if (this.lease.kind === "lint" && result.resourceId)
-      await this.db.projectWikiSettings.updateMany({
-        where: {
-          projectId: this.projectId,
-          agentId: this.lease.agentId,
-          reportDocumentId: null,
-        },
-        data: { reportDocumentId: result.resourceId },
-      });
+      await this.recordReport(result.resourceId);
     return {
       documentId: result.resourceId,
       path: result.path,
@@ -603,26 +617,34 @@ export class WikiRunSession {
     };
   }
 
+  /** Records the report id over none or a dangling id; a live recorded report is never replaced. */
+  private async recordReport(documentId: string): Promise<void> {
+    const { id, recorded } = await liveLintReport(
+      this.db,
+      this.projectId,
+      this.lease.id,
+    );
+    if (id !== null && id !== documentId) return;
+    await this.db.projectWikiSettings.updateMany({
+      where: {
+        projectId: this.projectId,
+        agentId: this.lease.agentId,
+        reportDocumentId: recorded,
+      },
+      data: { reportDocumentId: documentId },
+    });
+  }
+
   /** A lint run's only page create is the report, and only while none is recorded. */
   private async assertLintMayCreate(input: {
     properties: WikiPageProps;
   }): Promise<void> {
-    const settings = await this.db.projectWikiSettings.findUnique({
-      where: { projectId: this.projectId },
-      select: { reportDocumentId: true },
-    });
-    const recorded = settings?.reportDocumentId
-      ? await this.db.document.findFirst({
-          where: { id: settings.reportDocumentId, projectId: this.projectId },
-          select: { id: true },
-        })
-      : null;
-    if (recorded)
-      throw new CoreError(
-        "CONFLICT",
-        "The report page already exists; patch it instead of creating another page",
-        { reason: "REPORT_EXISTS" },
-      );
+    const { id } = await liveLintReport(this.db, this.projectId, this.lease.id);
+    if (id) {
+      // A crash after the commit may have lost the id; put it back before refusing.
+      await this.recordReport(id);
+      throw reportExists();
+    }
     if (input.properties.type !== "report")
       throw new CoreError(
         "BAD_REQUEST",
@@ -684,6 +706,7 @@ export class WikiRunSession {
     properties?: WikiPageProps;
   }): Promise<WikiWriteOutcome> {
     const itemId = this.requireWritableContext();
+    if (this.lease.kind === "lint") await this.assertLintPatchAllowed(input);
     const page = await this.db.document.findFirst({
       where: { id: input.documentId, projectId: this.projectId },
       select: { path: true },
@@ -735,6 +758,21 @@ export class WikiRunSession {
       unresolvedLinks,
       invalidLinks,
     };
+  }
+
+  /** Lint patches pages only by small text edits or inserts; section rewrites and removals stay on its report. */
+  private async assertLintPatchAllowed(input: {
+    documentId: string;
+    actions: PatchActions;
+  }): Promise<void> {
+    const { id } = await liveLintReport(this.db, this.projectId, this.lease.id);
+    if (id === input.documentId) return;
+    const shape = checkNonOwnedActions(input.actions);
+    if (!shape.allowed)
+      throw new CoreError(
+        "FORBIDDEN",
+        `A lint run may not rewrite or remove sections of other pages: ${shape.message}`,
+      );
   }
 
   /** Classify's only write: a property-only patch from the stored plan, no body actions. */

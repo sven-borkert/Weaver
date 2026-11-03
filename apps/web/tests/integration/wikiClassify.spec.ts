@@ -12,9 +12,16 @@ import {
   rejectClassifyPlan,
   startClassify,
 } from "@weaver/core/services/wikiClassify";
-import { cancelRun } from "@weaver/core/services/wikiRuns";
+import {
+  cancelRun,
+  failRunWithoutRunner,
+  leaseWikiRun,
+} from "@weaver/core/services/wikiRuns";
 import { getRun } from "@weaver/core/services/wikiRunViews";
-import { runWikiTick } from "@weaver/core/services/wikiTick";
+import {
+  expireWikiRunLeases,
+  runWikiTick,
+} from "@weaver/core/services/wikiTick";
 import { startMaintenance } from "@weaver/core/services/wikiLint";
 import {
   addMembership,
@@ -573,4 +580,92 @@ describe("classify existing pages", () => {
       errorCode: "LEASE_LOST",
     });
   }, 120_000);
+
+  it("counts the plan's 24 hours from when it was stored, not from the start", async () => {
+    await seedWikiRoute();
+    const p = await wikiProject();
+    const page = await humanPage(p, "Page", "text");
+    const { runId } = await planned(p, [
+      { id: page.id, type: "topic", summary: "Summary." },
+    ]);
+    expect((await row(p, runId)).queuedAt).not.toBeNull();
+    await p.db.wikiRun.update({
+      where: { id: runId },
+      data: { startedAt: new Date(Date.now() - 30 * 60 * 60_000) },
+    });
+    await runWikiTick(p.db, { hasActiveRunJob: async () => true });
+    expect((await row(p, runId)).status).toBe("preparing");
+    await runWikiTick(p.db, {
+      hasActiveRunJob: async () => true,
+      now: new Date(Date.now() + 25 * 60 * 60_000),
+    });
+    expect(await row(p, runId)).toMatchObject({
+      status: "cancelled",
+      stopReason: "plan_expired",
+    });
+  }, 180_000);
+
+  it("gives the apply its own attempts, and a lost apply lease restarts instead of stopping", async () => {
+    await seedWikiRoute();
+    const p = await wikiProject();
+    const one = await humanPage(p, "One", "Alpha text");
+    const two = await humanPage(p, "Two", "Beta text");
+    const { runId, digest } = await planned(p, [
+      { id: one.id, type: "topic", summary: "About alpha." },
+      { id: two.id, type: "entity", summary: "About beta." },
+    ]);
+    await p.db.wikiRun.update({ where: { id: runId }, data: { attempts: 2 } });
+    await acceptClassifyPlan(p.db, p.security, {
+      projectId: p.projectId,
+      runId,
+      expectedPlanDigest: digest,
+    });
+    expect((await row(p, runId)).attempts).toBe(0);
+
+    // The worker dies holding the lease; the sweep requeues the run for its code-only apply.
+    expect(
+      await leaseWikiRun(p.db, { runId, workerId: "dead" }),
+    ).not.toBeNull();
+    const later = new Date(Date.now() + 5 * 60_000);
+    expect(await expireWikiRunLeases(p.db, later)).toMatchObject({
+      restarted: 1,
+      failed: 0,
+    });
+    expect(await row(p, runId)).toMatchObject({
+      status: "queued",
+      leaseToken: null,
+    });
+    await executeWikiClassify(p.db, runId, { workerId: "spec" });
+    expect(await row(p, runId)).toMatchObject({ status: "succeeded" });
+    expect((await pageProps(p, two.id)).wikiType).toBe("entity");
+
+    // Changed pages are skipped on a restart, so a re-run never writes twice.
+    const again = await p.db.wikiRun.findUniqueOrThrow({
+      where: { id: runId },
+    });
+    expect(again.writes).toBe(4);
+  }, 180_000);
+
+  it("a runner-less delivery ends only a waiting preview, never a plan awaiting its Owner", async () => {
+    await seedWikiRoute();
+    const p = await wikiProject();
+    const page = await humanPage(p, "Page", "text");
+    const { runId } = await planned(p, [
+      { id: page.id, type: "topic", summary: "Summary." },
+    ]);
+    expect(await failRunWithoutRunner(p.db, runId)).toBe(false);
+    expect((await row(p, runId)).status).toBe("preparing");
+    await rejectClassifyPlan(p.db, p.security, {
+      projectId: p.projectId,
+      runId,
+    });
+    const fresh = await startClassify(p.db, p.security, {
+      projectId: p.projectId,
+    });
+    expect(await failRunWithoutRunner(p.db, fresh.runId)).toBe(true);
+    expect(await row(p, fresh.runId)).toMatchObject({
+      status: "failed",
+      errorCode: "RUNNER_UNAVAILABLE",
+    });
+  }, 180_000);
 });

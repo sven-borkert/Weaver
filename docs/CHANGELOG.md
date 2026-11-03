@@ -13,6 +13,9 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Fixed
 
+- Wiki maintenance and Classify no longer end as "stopped" when the worker dies mid-run: a lost lease restarts the run (twice at most) and only then fails it. A classify plan's 24 hours now count from when the preview finished, and preview retries no longer use up the apply's restarts.
+- A lint run keeps exactly one report page: it recreates and records the report if the old page was deleted, refuses a second create in the same step, and finds its own report again after a crash. On pages other than its report a lint run can now only make small text edits and inserts, not rewrite or remove sections.
+- Save as page keeps what you typed while the target folder and sources load, and shows a folder error next to the folder field.
 - The recent-changes feed (assistant, MCP and wiki agent) no longer drops a backdated commit that arrived through a merged branch when a `since` time is given, and shows the file changes of merge commits.
 
 ## [0.1.235] - 2026-11-03

@@ -198,13 +198,13 @@ async function preview(
       },
     });
   } catch (error) {
+    const failed = usageFromError(error, Date.now() - started);
+    if (failed) usage = failed;
     if (shutdown) return;
     if (isClosedFence(error) || controller.signal.aborted) {
       // Whoever closed the fence ended or reset the run; a lost lease is released by the tick.
       return;
     }
-    const failed = usageFromError(error, Date.now() - started);
-    if (failed) usage = failed;
     const failure = classifyRunError(error);
     await end("failed", {
       errorCode: failure.code.slice(0, 64),

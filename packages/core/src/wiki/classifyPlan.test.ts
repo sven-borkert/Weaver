@@ -83,6 +83,23 @@ describe("buildClassifyPlan", () => {
     expect(buildClassifyPlan("no json here", candidates).entries).toEqual([]);
     expect(buildClassifyPlan("{bad", candidates).entries).toEqual([]);
   });
+
+  it("stores a cleaned, surrogate-safe title and skips paths too long to store", () => {
+    const title = `${"a".repeat(199)}😀tail\u0000`;
+    const long = candidate(2, { path: `${"d/".repeat(600)}p.md` });
+    const reply = JSON.stringify({
+      pages: [
+        { id: ID(1), type: "topic" },
+        { id: ID(2), type: "topic" },
+      ],
+    });
+    const plan = buildClassifyPlan(reply, [candidate(1, { title }), long]);
+    expect(plan.entries.map((e) => e.documentId)).toEqual([ID(1)]);
+    const stored = plan.entries[0]!.title;
+    expect(stored).toBe("a".repeat(199));
+    expect(stored).not.toMatch(/\p{Cs}|\u0000/u);
+    expect(parseStoredClassifyPlan(plan)).not.toBeNull();
+  });
 });
 
 describe("plan digest and stored plans", () => {

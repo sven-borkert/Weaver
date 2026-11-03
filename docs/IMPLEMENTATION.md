@@ -571,7 +571,7 @@ started it. The Runs tab is [`wiki/runs`](<../apps/web/src/app/(workspace)/proje
 Lint: [`wikiLint.ts`](../packages/core/src/services/wikiLint.ts) validates `lintSchedule` (`taskScheduleSchema`, stored with its derived cron
 and timezone), claims due slots from `wiki.tick` with a conditional `lintNextRunAt` update (missed and colliding slots are skipped and recorded
 on the settings row) and starts "Run maintenance now" (Editor+, one start per hour). `endRunInTx` counts lint failures and sets `lintPausedAt`
-after five. The agent's lint-only reads (`list_missing_entity_pages`, `list_pages_with_newer_sources`) are in
+after five. A lost lint or classify-apply lease restarts the run (`expireWikiRunLeases` in `wikiTick.ts`); the report page id comes from `liveLintReport` in `wikiRunStart.ts`, and a lint run's patches outside its report are limited to small edits and inserts. The agent's lint-only reads (`list_missing_entity_pages`, `list_pages_with_newer_sources`) are in
 [`wikiReads.ts`](../packages/core/src/services/wikiReads.ts); `list_recent_changes` walks an ancestry range from a trusted first-parent boundary
 (`firstParentTrustedBefore`, `listCommitShas`, `logChangesForShas` in `@weaver/git-store`).
 

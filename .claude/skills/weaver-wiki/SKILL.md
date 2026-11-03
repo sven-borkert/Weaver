@@ -251,7 +251,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 
 ## Restart and pauses
 
-- `expireWikiRunLeases` (in `reapWikiRuns`, so it runs from `system.reconcile` too) requeues a lost run at most twice. An input live through two lost leases (`lostLeases`, not `attempts`, which counts Process presses) fails `QUARANTINED`.
+- `expireWikiRunLeases` (in `reapWikiRuns`, so it runs from `system.reconcile` too) requeues a lost run at most twice; only ingest checks for remaining input items, so lint, classify apply and revert (no items) restart as they are, and at the limit fail `LEASE_LOST` (a lint failure counts toward the pause). An input live through two lost leases (`lostLeases`, not `attempts`, which counts Process presses) fails `QUARANTINED`.
 - `reconcileReservedOperations` runs before each attempt: only a trusted commit with this agent's trailer and the reserved hash counts as committed; anything else under the id is failed and reported.
 - `destructivePausedAt` refuses Process, stops a new run at lease and clears in the tick once the sum falls. Pause and spend alert reach Owners through `wikiAlertSourceSql`, a personal bell row whose revision changes per incident.
 
@@ -282,6 +282,8 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - Session rules for kind `lint`: `read_input`, `complete_input` and `wiki_note` refuse ("applies to ingest runs only"); writes need no current input; folder creates are
   refused; the only page create is the report (`type: report`, `REPORT_EXISTS` once `reportDocumentId` points at a live page), recorded with a conditional update after the
   commit. A human-edited report is non-owned, so the prompt tells the agent to append a dated section.
+- Report id: `liveLintReport` (`wikiRunStart.ts`) is the recorded id when it still resolves (a dangling id counts as none), else a page this run committed through `wiki_create_page` (crash between commit and recording). `recordReport` is a compare-and-set over null or the stale id. The one-create rule is enforced in `reserve` under the run-row lock (a reserved or committed `wiki_create_page` in the run refuses a second), so parallel calls cannot both create.
+- Patch rule for kind `lint`: on any page but the report, `checkNonOwnedActions` applies even to owned pages (no `replace_section_body` or `remove_section`, `find` at most 500 characters, `expectedMatches` 1); the report page takes any action. The check runs in the session and does not count as a budget refusal. Scheduled starts also emit `wiki.settings.changed` (`lint_started`).
 - Reads (loadable, lint only): `list_missing_entity_pages` (`EntityMention` x `GraphEntity` of the active generation, source pages not counted, entities with a page or alias
   title excluded, at least three pages, keyset cursor) and `list_pages_with_newer_sources` (`wikiSources` document or table ids whose `lastEditedAt` is after the page's).
   `list_recent_changes` with `since` walks `<boundary>..HEAD` where the boundary is the newest trusted first-parent commit older than `since`; untrusted dates never end the walk.
@@ -300,7 +302,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   `PLAN_INVALID`), then writes each entry through `WikiRunSession.classifyPage` (ledger, ownership, fence, `applyWikiOperation`). A page that changed since the preview, or is now the guide, a source
   page, a task output, Python or exempt, is skipped. Property-only patches charge no gross or added characters; the page count (not the per-property write count) is capped at 100, while
   `WikiRun.writes` still counts one per property changed on a non-owned page. Classify runs are revertible like any run.
-- An unanswered plan expires after 24 hours; a lost preview claim is released and the third loss fails the run.
+- An unanswered plan expires 24 hours after it was stored (`queuedAt` is set by `storeClassifyPlan`; runs never previewed count from `startedAt`); a lost preview claim is released and the third loss fails the run. `acceptClassifyPlan` resets `attempts` so the apply has its own restart budget; a restarted apply is safe because pages whose head changed are skipped, and `reconcileReservedOperations` runs first. Plan titles are cleaned and cut without splitting a surrogate pair, and candidates whose path exceeds 1,024 characters are left out. `failRunWithoutRunner` ends only a queued run, or a classify preview with no plan.
 
 ## Save as page
 

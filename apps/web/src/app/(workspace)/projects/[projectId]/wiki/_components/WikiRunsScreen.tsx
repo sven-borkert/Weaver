@@ -309,7 +309,10 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
       setOpenId(null);
       await refresh();
     },
-    onError: (error) => toast.error(error.message),
+    onError: async (error) => {
+      toast.error(error.message);
+      await refresh();
+    },
   });
   const maintenance = api.wiki.runMaintenance.useMutation({
     onSuccess: async () => {

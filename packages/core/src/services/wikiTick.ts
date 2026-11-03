@@ -130,7 +130,13 @@ export async function expireWikiRunLeases(
 ): Promise<{ restarted: number; failed: number }> {
   const lost = await db.wikiRun.findMany({
     where: { status: "running", leaseExpiresAt: { lte: now } },
-    select: { id: true, projectId: true, attempts: true, leaseToken: true },
+    select: {
+      id: true,
+      projectId: true,
+      kind: true,
+      attempts: true,
+      leaseToken: true,
+    },
   });
   const outcome = { restarted: 0, failed: 0 };
   for (const run of lost) {
@@ -186,6 +192,8 @@ export async function expireWikiRunLeases(
           },
           now,
         );
+      // Only ingest runs have input items; lint, classify apply and revert restart as they are.
+      if (run.kind !== "ingest") return "restarted" as const;
       const remaining = await tx.wikiInputItem.count({
         where: { runId: run.id, status: { in: ["ready", "processing"] } },
       });

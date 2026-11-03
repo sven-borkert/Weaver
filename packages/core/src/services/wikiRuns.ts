@@ -230,8 +230,18 @@ export async function failRunWithoutRunner(
   db: PrismaClient,
   runId: string,
 ): Promise<boolean> {
-  // A classify preview waits in `preparing`; every other run waits in `queued`.
-  const ended = await endRun(db, runId, ["queued", "preparing"], {
+  const run = await db.wikiRun.findUnique({
+    where: { id: runId },
+    select: { kind: true, status: true, plan: true },
+  });
+  if (!run) return false;
+  // Ingest waits in `queued`; only a classify preview with no plan yet waits in `preparing`.
+  const waiting =
+    run.kind === "classify"
+      ? run.status === "preparing" && run.plan === null
+      : run.status === "queued";
+  if (!waiting) return false;
+  const ended = await endRun(db, runId, [run.status], {
     status: "failed",
     errorCode: WIKI_RUNNER_UNAVAILABLE,
     errorMessage: RUNNER_UNAVAILABLE_MESSAGE,

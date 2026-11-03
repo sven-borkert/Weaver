@@ -50,6 +50,7 @@ const saveFormSchema = z.object({
   body: z.string().min(1, "The page needs some text"),
 });
 type SaveFormValues = z.infer<typeof saveFormSchema>;
+const FORM_FIELDS = new Set(["title", "folder", "body"]);
 
 /** Editors and above see the action; it opens the prefilled create dialog. */
 export function SaveAsPageButton({
@@ -133,14 +134,15 @@ function SaveAsPageDialog({
       }),
     [text, cards, projectId, target.data],
   );
+  const loading = citations.isLoading || target.isLoading;
   return (
     <SaveAsPageForm
-      key={`${projectId}:${prefill.folderPath.join("/")}:${prefill.sources.length}`}
+      key={`${projectId}:${loading ? "loading" : "ready"}`}
       prefill={prefill}
       projects={projects}
       projectId={projectId}
       onProject={setProjectId}
-      loading={citations.isLoading || target.isLoading}
+      loading={loading}
       onClose={onClose}
     />
   );
@@ -193,8 +195,10 @@ function SaveAsPageForm({
       onClose();
     },
     onError: (error) => {
-      if (error.data?.field)
-        applyTrpcErrorToForm(error, (name, issue) =>
+      const field = error.data?.field;
+      const name = field === "folderPath" ? "folder" : field;
+      if (name && FORM_FIELDS.has(name))
+        applyTrpcErrorToForm(error, (_field, issue) =>
           setError(name as Parameters<typeof setError>[0], issue),
         );
       else toast.error(error.message || "Could not create the page");
@@ -226,7 +230,10 @@ function SaveAsPageForm({
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={onSubmit} className="flex flex-col gap-3" noValidate>
-          <fieldset disabled={pending} className="flex flex-col gap-3">
+          <fieldset
+            disabled={pending || loading}
+            className="flex flex-col gap-3"
+          >
             {projects.length > 1 ? (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="save-page-project">Project</Label>

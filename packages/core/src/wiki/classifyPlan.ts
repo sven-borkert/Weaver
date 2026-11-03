@@ -5,6 +5,7 @@ import { WIKI_PAGE_TYPES, wikiPagePropertiesToolSchema } from "./properties";
 export const CLASSIFY_MAX_PAGES = 100;
 export const CLASSIFY_EXCERPT_CHARS = 600;
 const CLASSIFY_TITLE_CHARS = 200;
+const MAX_STORED_PATH = 1_024;
 const CLASSIFY_ASSIGNABLE_TYPES = WIKI_PAGE_TYPES.filter(
   (type) => type !== "guide",
 );
@@ -31,7 +32,7 @@ export type ClassifyPlan = { version: 1; entries: ClassifyPlanEntry[] };
 
 const storedEntry = z.strictObject({
   documentId: z.uuid(),
-  path: z.string().min(1).max(1_024),
+  path: z.string().min(1).max(MAX_STORED_PATH),
   title: z.string().max(CLASSIFY_TITLE_CHARS),
   headCommitSha: z.string().regex(/^[0-9a-f]{40}$/),
   type: z.string().optional(),
@@ -41,6 +42,12 @@ const storedPlan = z.strictObject({
   version: z.literal(1),
   entries: z.array(storedEntry).max(CLASSIFY_MAX_PAGES),
 });
+
+/** Cuts at `max` UTF-16 units without leaving half a surrogate pair. */
+function cutUtf16(text: string, max: number): string {
+  const cut = text.slice(0, max);
+  return /[\uD800-\uDBFF]$/.test(cut) ? cut.slice(0, -1) : cut;
+}
 
 /** Sha-256 over the entries in a fixed key order, so the same plan always has the same digest. */
 export function classifyPlanDigest(plan: ClassifyPlan): string {
@@ -77,6 +84,7 @@ export function parseStoredClassifyPlan(raw: unknown): ClassifyPlan | null {
 function clean(text: string): string {
   return text
     .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, " ")
+    .replace(/\p{Cs}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -185,6 +193,8 @@ export function buildClassifyPlan(
   for (const page of parsed.success ? parsed.data.pages : []) {
     const candidate = byId.get(page.id);
     if (!candidate || seen.has(page.id)) continue;
+    // A longer path could never pass the stored-entry check, so accept would answer PLAN_CHANGED forever.
+    if (candidate.path.length > MAX_STORED_PATH) continue;
     seen.add(page.id);
     const proposed = validProperties({
       ...(page.type !== undefined && !candidate.hasType
@@ -198,7 +208,7 @@ export function buildClassifyPlan(
     entries.push({
       documentId: candidate.documentId,
       path: candidate.path,
-      title: candidate.title.slice(0, CLASSIFY_TITLE_CHARS),
+      title: cutUtf16(clean(candidate.title), CLASSIFY_TITLE_CHARS),
       headCommitSha: candidate.headCommitSha,
       ...proposed,
     });

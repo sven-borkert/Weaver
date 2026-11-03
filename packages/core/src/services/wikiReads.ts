@@ -719,7 +719,10 @@ export async function listPagesWithNewerSources(
       lastEditedAt: row.lastEditedAt.toISOString(),
       sources: [],
     };
-    if (entry.sources.length < 5)
+    const duplicate = entry.sources.some(
+      (source) => source.kind === row.sourceKind && source.id === row.sourceId,
+    );
+    if (!duplicate && entry.sources.length < 5)
       entry.sources.push({
         kind: row.sourceKind,
         id: row.sourceId,
