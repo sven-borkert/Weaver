@@ -196,7 +196,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
 | `WEAVER_INGESTION_EXTERNAL_RATE_LIMIT_PER_MINUTE` | 60; validated 1..100,000; per-key in-process window for the external feed (Phase 5 §8)                                                      |
 | `WEAVER_INGESTION_MAX_OCR_PAGES`                  | 50; validated 0..500, `0` disables OCR (spec §6)                                                                                            |
 | `WEAVER_INGESTION_TMP_TTL_MINUTES`                | 60; validated 1..10,080; upload storage cleanup only, independent of ingestion job recovery                                                 |
-| `WEAVER_WORKER_ROLES`                             | `knowledge,assistant,ingestion,tasks,git,wiki`; comma list, at least one valid role (spec §3.1)                                                  |
+| `WEAVER_WORKER_ROLES`                             | `knowledge,assistant,ingestion,tasks,git,wiki`; comma list, at least one valid role (spec §3.1)                                             |
 | `WEAVER_MCP_OPERATION_LOCK_POOL_MAX`              | 16; independent MCP write locks, 1..128                                                                                                     |
 | `WEAVER_ENCRYPTION_KEYS`                          | Versioned 32-byte base64 keys; required before storing provider credentials                                                                 |
 
