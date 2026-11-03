@@ -4,6 +4,8 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.235] - 2026-11-03
+
 ### Added
 
 - The wiki agent now works: with a `wiki` route assigned, pressing Process runs an unattended agent that reads each input and creates and patches wiki pages. It writes under its own identity and is confined to the project; the guide, source pages and source folders are refused by construction.
