@@ -15,6 +15,7 @@ import { snapshotLabel } from "~/lib/assistant/scopeDraft";
 import { AssistantMarkdown } from "./AssistantMarkdown";
 import { useAssistant } from "./AssistantProvider";
 import { CitationCards } from "./CitationCard";
+import { SaveAsPageButton } from "./SaveAsPageDialog";
 import { ProposalCards } from "./ProposalCard";
 import { RunStateStrip } from "./RunStateStrip";
 import { ExternalApproval } from "./ExternalToolApprovalCard";
@@ -364,6 +365,13 @@ export function Transcript({
                     messageId={message.id}
                     citationIds={message.citationIds}
                   />
+                  {message.text ? (
+                    <SaveAsPageButton
+                      conversationId={conversationId}
+                      messageId={message.id}
+                      text={message.text}
+                    />
+                  ) : null}
                   <ProposalCards
                     conversationId={conversationId}
                     messageId={message.id}

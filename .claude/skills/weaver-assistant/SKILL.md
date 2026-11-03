@@ -869,3 +869,7 @@ tools), so the capacity figures above are 122 B lower.
 ## Review hardening invariants
 
 Runtime catalogs are bounded by owner (10 stored connections, 100 enabled tools, 2 MiB reviewed schemas) under the external-capacity advisory lock. Runtime projections omit discovered definitions. Loading a connection registers only its accepted tools into the shared execution map. Check the run deadline after generation and after final validation.
+
+## Save as page
+
+Each completed assistant answer offers "Save as page" to Editors and above (`components/assistant/SaveAsPageDialog.tsx`). The mapping is pure (`lib/assistant/saveAsPage.ts`): title from the answer's first heading, folder from `wiki.saveTarget` (the folder holding the recorded wiki sources folder, only while the wiki is enabled; otherwise none), the answer as body, `type: synthesis`, and `sources` from the answer's document and table citations in the target project only. Citations from other projects are listed unchecked and disabled with a warning. The dialog calls `document.create` with `properties`, so the page is created as the signed-in user with normal review, not as a proposal and not by the agent.

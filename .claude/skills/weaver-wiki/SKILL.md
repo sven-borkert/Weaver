@@ -302,6 +302,11 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   `WikiRun.writes` still counts one per property changed on a non-owned page. Classify runs are revertible like any run.
 - An unanswered plan expires after 24 hours; a lost preview claim is released and the third loss fails the run.
 
+## Save as page
+
+See `weaver-assistant`. The target folder comes from `wikiSaveTarget` (`services/wikiSaveTarget.ts`, Editor): the parent of the recorded sources folder while the wiki is enabled. The page is created by the
+signed-in user through `document.create`; the agent is not involved.
+
 ## Commit text
 
 `sanitizeCommitMessage` strips every caller-authored `Weaver-*:` line; trailers come only

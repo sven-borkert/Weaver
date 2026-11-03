@@ -1163,3 +1163,7 @@ Project machine writes use a separate content author (`services/contentAuthor.ts
 ## Review hardening invariants
 
 ZIP exports validate file, directory and wrapper paths at emission. ZIP Replace requires the collision preview revision under the repo lock. Historical restore copies referenced own-image blobs within image/count/aggregate limits. Create recovery inspects all changed canonical paths and verifies the operation-derived document ID.
+
+## Save as page
+
+The assistant's Save as page action creates a document through the ordinary `document.create` (`properties.type: synthesis`, `properties.sources` limited to the target project); there is no new write path. See `weaver-assistant` and `weaver-wiki`.

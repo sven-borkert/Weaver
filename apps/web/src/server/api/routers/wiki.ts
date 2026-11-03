@@ -8,6 +8,7 @@ import {
   startClassify,
 } from "@weaver/core/services/wikiClassify";
 import { startMaintenance } from "@weaver/core/services/wikiLint";
+import { wikiSaveTarget } from "@weaver/core/services/wikiSaveTarget";
 import { startRevert } from "@weaver/core/services/wikiRevert";
 import {
   getRun,
@@ -111,6 +112,9 @@ export const wikiRouter = createTRPCRouter({
     .mutation(({ ctx, input }) =>
       rejectClassifyPlan(ctx.db, ctx.security, input),
     ),
+  saveTarget: authedProcedure
+    .input(projectInput)
+    .query(({ ctx, input }) => wikiSaveTarget(ctx.db, ctx.security, input)),
   clearLintPause: authedProcedure
     .input(revisionInput)
     .mutation(({ ctx, input }) =>

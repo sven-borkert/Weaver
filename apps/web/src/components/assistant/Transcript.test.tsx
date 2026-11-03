@@ -45,6 +45,7 @@ vi.mock("~/trpc/react", () => ({
   api: {
     useUtils: () => mocked.utils,
     account: { me: { useQuery: () => ({ data: undefined }) } },
+    project: { list: { useQuery: () => ({ data: [] }) } },
     externalMcp: {
       listCalls: {
         useQuery: () => ({
