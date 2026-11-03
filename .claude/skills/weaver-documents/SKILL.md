@@ -52,6 +52,7 @@ Shared repository readers, advisory locks, recovery and transport primitives use
 | `packages/core/src/services/documentHeaderUpgrade.ts`                                                                                      | `upgradeDocumentHeaders`: legacy YAML, missing authors and missing review blocks                                       |
 | `apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/{DocumentReviewLine,MarkReviewedDialog,ReviewSettingsDialog}.tsx` | Header review line, mark-as-reviewed confirm, review settings dialog                                                   |
 | `packages/core/src/editor/markdown.ts`                                                                                                     | Deterministic TipTap JSON ↔ Markdown conversion and crossref labels                                                    |
+| `packages/core/src/editor/orderedList.ts`                                                                                                  | `MarkdownOrderedList`: ported ordered-list tokenizer with the separator-aware content indent                           |
 | `packages/core/src/editor/mermaid.ts`                                                                                                      | Dedicated Mermaid Markdown/HTML atom and adaptive fence handling                                                       |
 | `packages/core/src/editor/math.ts`                                                                                                         | `inlineMath`/`mathBlock` atoms, `$` delimiter rules, repair of formulas saved as text                                  |
 | `apps/web/src/lib/editor/math-render.ts`                                                                                                   | The one KaTeX call (`trust: false`, `maxSize`), shared by reader, editor and PDF                                       |
@@ -560,6 +561,13 @@ src>` can become an image without width and unknown attributes are dropped.
   serialize as `&nbsp;`;
   a callout with no body parses as one empty paragraph. Plain URLs and emails become links on parse (GFM autolink)
   and the serializer does not neutralize them — wanted for assistant/MCP text.
+  Ordered lists parse through `MarkdownOrderedList` (`editor/orderedList.ts`), a port of
+  the `@tiptap/extension-list` tokenizer whose content indent forgot the `.`/`)` separator,
+  leaving a stray space on every continuation line and dropping every fenced block after the
+  first in an item (the stock code-block handler rejects a fence whose `raw` starts with a
+  space). Keep the lenient any-indented-line continuation: the serializer indents item
+  children by two spaces whatever the marker width, so stored documents rely on it.
+  `MarkdownCodeBlock` accepts a fence indented by up to three spaces, as CommonMark does.
   A new node or mark needs a JSON → Markdown → JSON round-trip fixture with
   hostile punctuation in `markdown.test.ts`.
 - All repository writes and their derived-index transaction stay inside one

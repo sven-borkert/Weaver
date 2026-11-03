@@ -41,6 +41,7 @@ import {
 } from "./markdownEscapes";
 import { InlineMath, MathBlock } from "./math";
 import { Mermaid } from "./mermaid";
+import { MarkdownOrderedList } from "./orderedList";
 
 export const codeBlockLowlight = createLowlight(common);
 
@@ -57,7 +58,23 @@ const MarkdownCode = Code.extend({
   },
 });
 
+// marked keeps up to three spaces of fence indentation in `raw`; the stock handler rejects them.
+const FENCE_START = /^ {0,3}(?:```|~~~)/;
+
 export const MarkdownCodeBlock = CodeBlockLowlight.extend({
+  parseMarkdown: (token, helpers) => {
+    if (
+      !FENCE_START.test(text(token.raw)) &&
+      token.codeBlockStyle !== "indented"
+    )
+      return [];
+    const body = text(token.text);
+    return helpers.createNode(
+      "codeBlock",
+      { language: text(token.lang) || null },
+      body ? [helpers.createTextNode(body)] : [],
+    );
+  },
   renderMarkdown: (node, helpers) => {
     const body = node.content ? helpers.renderChildren(node.content) : "";
     const fence = codeFence(body);
@@ -175,9 +192,11 @@ export function documentExtensions(
       code: false,
       codeBlock: false,
       link: false,
+      orderedList: false,
       paragraph: false,
     }),
     MarkdownParagraph,
+    MarkdownOrderedList,
     MarkdownLink.configure({
       HTMLAttributes: {
         target: "_blank",

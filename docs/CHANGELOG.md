@@ -4,6 +4,10 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Fixed
+
+- Numbered lists keep every fenced code block inside a list item when Markdown is imported or parsed; before, only the first block survived and later ones vanished without warning. Continuation lines indented to the CommonMark content width (three spaces under `1. `) no longer keep a stray leading space in paragraphs and code lines. A fenced code block indented by up to three spaces now parses as a code block instead of being dropped.
+
 ## [0.1.236] - 2026-11-03
 
 ### Added

@@ -1080,3 +1080,77 @@ describe("ordered list items without text", () => {
     expect(parseDocumentBody(serialized)).toEqual(json);
   });
 });
+
+describe("ordered list items holding fenced code blocks", () => {
+  // Continuation lines sit at the CommonMark content indent of `1. `: three spaces.
+  const markdown = [
+    "1. Remove the helper.",
+    "   Open PowerShell and run:",
+    "",
+    "   ```powershell",
+    "   wsl --list --verbose",
+    "   ```",
+    "",
+    "   If it is listed, remove it:",
+    "",
+    "   ```powershell",
+    "   wsl --unregister wsl-vpnkit",
+    "   ```",
+    "",
+    "2. Enable mirrored networking.",
+    "",
+  ].join("\n");
+  const blocks = (node: JSONContent) =>
+    (node.content ?? []).map((block) => ({
+      type: block.type,
+      language: block.attrs?.language as unknown,
+      text: (block.content ?? []).map((inline) => inline.text ?? "").join(""),
+    }));
+
+  it("keeps every fenced code block and strips the item indentation", () => {
+    const json = parseDocumentBody(markdown);
+    const items = nodesOfType(json, "listItem") as JSONContent[];
+    expect(items).toHaveLength(2);
+    expect(blocks(items[0]!)).toEqual([
+      {
+        type: "paragraph",
+        language: undefined,
+        text: "Remove the helper.\nOpen PowerShell and run:",
+      },
+      {
+        type: "codeBlock",
+        language: "powershell",
+        text: "wsl --list --verbose",
+      },
+      {
+        type: "paragraph",
+        language: undefined,
+        text: "If it is listed, remove it:",
+      },
+      {
+        type: "codeBlock",
+        language: "powershell",
+        text: "wsl --unregister wsl-vpnkit",
+      },
+    ]);
+    expect(() => validateDocumentContent(json)).not.toThrow();
+  });
+
+  it("round-trips the fenced code blocks through the serializer", () => {
+    const json = parseDocumentBody(markdown);
+    expect(parseDocumentBody(serializeDocumentBody(json))).toEqual(json);
+  });
+});
+
+describe("fenced code blocks indented by up to three spaces", () => {
+  it("parse as code blocks", () => {
+    const json = parseDocumentBody(" ```js\nconst x = 1;\n```\n");
+    expect(nodesOfType(json, "codeBlock")).toEqual([
+      {
+        type: "codeBlock",
+        attrs: { language: "js" },
+        content: [{ type: "text", text: "const x = 1;" }],
+      },
+    ]);
+  });
+});

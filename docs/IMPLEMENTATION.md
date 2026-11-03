@@ -880,7 +880,9 @@ table, knowledge, role, AI, and service code lives in
 
 The shared [document extensions](../packages/core/src/editor/extensions.ts)
 allow inline code to coexist with emphasis and links, preserving valid Markdown
-through import acceptance, validation, and editor round trips.
+through import acceptance, validation, and editor round trips, and parse numbered
+lists through Weaver's own [ordered-list tokenizer](../packages/core/src/editor/orderedList.ts),
+whose content indent counts the marker separator.
 
 Documents and Tables both list their folder's contents through the shared
 [`ContentExplorerScreen`](../apps/web/src/components/explorer/ContentExplorerScreen.tsx)
