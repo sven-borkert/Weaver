@@ -258,7 +258,7 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
               : ` · indexing ${wikiCost(usage.indexingCostMicros, usage.currency)}`}
           </p>
         ) : null}
-        {runs && runs.runs.length === 0 ? (
+        {runs?.runs.length === 0 ? (
           <p className="text-text-2 text-[13px]">No runs yet.</p>
         ) : (
           <ul>

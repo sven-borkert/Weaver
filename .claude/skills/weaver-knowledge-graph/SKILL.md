@@ -3,6 +3,7 @@ name: weaver-knowledge-graph
 description: Use when working on Weaver knowledge indexing, hybrid search, entity/relation extraction, temporal provenance, graph APIs, pgvector queries, pg-boss knowledge jobs, or the graph/search UI.
 ---
 
+Enrichment and chunk embedding record `AiUsage.sourceCommitSha`; a wiki run's indexing cost joins on it at read time.
 Source pages (`Document.wikiSourceItemId` set) are keyword-only. `knowledge/aiExempt.ts` is the one predicate, in TypeScript and SQL,
 tested together. Change recording, `resumeGenerationBuild`, carry-forward, `processGenerationDocument` and the route-block paths give
 such a document a terminal `ready` row with both indexed shas at head and never a provider call. `flipDocumentAiExempt` handles a changed

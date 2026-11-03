@@ -457,7 +457,7 @@ describe("wiki agent writes", () => {
       documentId: created.documentId,
       baseCommitSha: created.baseCommitSha,
       actions: [
-        { action: "replace_section_body", sectionId: part.id, text: "New." },
+        { action: "replace_section_body", sectionId: part!.id, text: "New." },
       ],
     });
     expect(replaced.commitSha).toBeTruthy();
@@ -470,7 +470,7 @@ describe("wiki agent writes", () => {
       r.call("wiki_patch_page", {
         documentId: created.documentId,
         baseCommitSha: edited.headCommitSha,
-        actions: [{ action: "remove_section", sectionId: part.id }],
+        actions: [{ action: "remove_section", sectionId: part!.id }],
       }),
     ).rejects.toMatchObject({ code: "CONFLICT", reason: "BUDGET_REFUSED" });
   }, 30_000);
@@ -523,7 +523,7 @@ describe("wiki agent writes", () => {
           },
         ],
       })
-      .catch((error) => error);
+      .catch((error: unknown) => error);
     expect(first).toMatchObject({ code: "BAD_REQUEST" });
     const unique = await humanPage(r, "Unique", `${"x".repeat(1_990)}END\n`);
     const patched = await r.call("wiki_patch_page", {
@@ -867,14 +867,14 @@ describe("wiki agent writes", () => {
       resourceId: human.id,
     });
     expect(history.entries[0]).toMatchObject({ author: null, subject: null });
-    expect(history.entries[1].subject).toBeTruthy();
+    expect(history.entries[1]!.subject).toBeTruthy();
     await expect(
       r.call("content_history", {
         mode: "diff",
         resourceType: "document",
         resourceId: human.id,
-        fromSha: history.entries[1].sha,
-        toSha: history.entries[0].sha,
+        fromSha: history.entries[1]!.sha,
+        toSha: history.entries[0]!.sha,
       }),
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   }, 30_000);

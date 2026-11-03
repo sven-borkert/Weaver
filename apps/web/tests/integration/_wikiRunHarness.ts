@@ -65,6 +65,23 @@ export async function queuedRun(p: WikiProject, notes: string[] = ["A note"]) {
   return { run, items };
 }
 
+/** The fields specs read back from tool results. */
+export type ToolOutput = {
+  documentId: string;
+  baseCommitSha: string;
+  commitSha: string;
+  path: string;
+  status: string;
+  sections: Array<{ id: string; title?: string; heading?: string }>;
+  entries: Array<{ sha: string; subject: string | null }>;
+  refused: string[];
+  pages: unknown[];
+  changes: unknown[];
+  sourceDocumentId: string;
+  nextCursor?: string | null;
+  error?: { code: string };
+};
+
 export function toolCaller(session: WikiRunSession) {
   return async (name: string, input: unknown) => {
     const tool = WIKI_AGENT_DISPATCH.find((entry) => entry.name === name);
@@ -74,16 +91,16 @@ export function toolCaller(session: WikiRunSession) {
       parsed,
       wikiAgentToolContext(session),
     );
-    return output as Record<string, any>;
+    return output as ToolOutput;
   };
 }
 
 export async function startedRun(p: WikiProject, notes?: string[]) {
   const { run, items } = await queuedRun(p, notes);
-  const lease = (await leaseWikiRun(p.db, {
+  const lease: LeasedWikiRun = (await leaseWikiRun(p.db, {
     runId: run.id,
     workerId: "spec",
-  })) as LeasedWikiRun;
+  }))!;
   const session = new WikiRunSession(p.db, lease, 64 * 1024);
   return { lease, session, items, call: toolCaller(session) };
 }

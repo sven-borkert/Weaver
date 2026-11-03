@@ -4,10 +4,10 @@ import { WikiRunsScreen } from "./WikiRunsScreen";
 import { wikiCost, wikiDuration, wikiRunOutcome } from "./wikiRunPresentation";
 
 type Query = { data: unknown; error: unknown };
-const mocked = vi.hoisted(() => ({
-  project: { data: undefined, error: null } as Query,
-  runs: { data: undefined, error: null } as Query,
-  usage: { data: undefined, error: null } as Query,
+const mocked = vi.hoisted((): Record<"project" | "runs" | "usage", Query> => ({
+  project: { data: undefined, error: null },
+  runs: { data: undefined, error: null },
+  usage: { data: undefined, error: null },
 }));
 vi.mock("~/trpc/react", () => {
   const mutation = {

@@ -35,6 +35,7 @@ import {
 } from "~/components/ui/select";
 import { Skeleton } from "~/components/ui/skeleton";
 import { api, type RouterOutputs } from "~/trpc/react";
+import { wikiCost } from "../../wiki/_components/wikiRunPresentation";
 import { ReviewGuideDialog } from "./ReviewGuideDialog";
 
 type Settings = RouterOutputs["wiki"]["settings"];
@@ -91,6 +92,20 @@ export function WikiCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function WikiUsageLine({ projectId }: { projectId: string }) {
+  const { data } = api.wiki.usage.useQuery({ projectId });
+  if (!data) return null;
+  return (
+    <p className="text-text-3 m-0 text-[12px]">
+      Last 30 days: {data.tokens.toLocaleString("en-US")} tokens,{" "}
+      {wikiCost(data.costMicros, data.currency)}
+      {data.indexingCostMicros === null
+        ? ""
+        : `, indexing ${wikiCost(data.indexingCostMicros, data.currency)}`}
+    </p>
   );
 }
 
@@ -209,6 +224,7 @@ export function WikiSettings({
           guideId={settings.guide.documentId}
         />
       ) : null}
+      {settings.enabled ? <WikiUsageLine projectId={projectId} /> : null}
       {settings.enabled && isOwner ? (
         <BudgetForm key={settings.revision} settings={settings} />
       ) : null}

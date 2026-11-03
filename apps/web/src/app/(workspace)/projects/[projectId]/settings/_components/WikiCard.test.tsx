@@ -19,6 +19,12 @@ vi.mock("~/trpc/react", () => {
           { id: "s1", text: "Prefer short titles.", createdAt: new Date() },
         ]),
         reviewGuide: query(undefined),
+        usage: query({
+          tokens: 1_234,
+          costMicros: 500_000n,
+          currency: "USD",
+          indexingCostMicros: null,
+        }),
         enable: mutation(),
         disable: mutation(),
         revokeAgent: mutation(),

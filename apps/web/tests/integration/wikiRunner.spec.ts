@@ -32,14 +32,22 @@ import {
   humanPage,
   queuedRun,
   wikiProject,
+  type ToolOutput,
   type WikiProject,
 } from "./_wikiRunHarness";
 
 type Call = [string, Record<string, unknown>];
+type PromptPart = {
+  type: string;
+  toolCallId: string;
+  toolName: string;
+  output: { type: string; value: ToolOutput };
+};
+type PromptMessage = { role: string; content: string | PromptPart[] };
 type ScriptContext = {
   /** Latest result per tool name, parsed. */
-  results: Map<string, any>;
-  prompt: any[];
+  results: Map<string, ToolOutput>;
+  prompt: PromptMessage[];
 };
 type Step = (context: ScriptContext) => Call[] | string;
 
@@ -53,29 +61,30 @@ const USAGE = {
   outputTokens: { total: 20, text: 20, reasoning: undefined },
 };
 
-function resultsOf(prompt: any[]): Map<string, any> {
-  const results = new Map<string, any>();
-  for (const message of prompt) {
-    if (message.role !== "tool") continue;
-    for (const part of message.content) {
-      if (part.type !== "tool-result") continue;
-      const value = part.output?.value;
-      results.set(part.toolName, value);
-    }
-  }
+function toolParts(message: PromptMessage): PromptPart[] {
+  return message.role === "tool" && typeof message.content !== "string"
+    ? message.content.filter((part) => part.type === "tool-result")
+    : [];
+}
+
+function resultsOf(prompt: PromptMessage[]): Map<string, ToolOutput> {
+  const results = new Map<string, ToolOutput>();
+  for (const message of prompt)
+    for (const part of toolParts(message))
+      results.set(part.toolName, part.output.value);
   return results;
 }
 
 /** Replays a script; each step sees the prompt the model would have seen. */
 function scripted(steps: Step[]) {
-  const prompts: any[][] = [];
+  const prompts: PromptMessage[][] = [];
   const toolNames: string[][] = [];
   let counter = 0;
   const model = new MockLanguageModelV4({
-    doStream: async (options: any) => {
-      const prompt = options.prompt as any[];
+    doStream: async (options) => {
+      const prompt = options.prompt as unknown as PromptMessage[];
       prompts.push(prompt);
-      toolNames.push((options.tools ?? []).map((tool: any) => tool.name));
+      toolNames.push((options.tools ?? []).map((tool) => tool.name));
       const step = steps[Math.min(counter, steps.length - 1)]!;
       const action =
         counter < steps.length
@@ -116,12 +125,12 @@ function scripted(steps: Step[]) {
 /** A model call that hangs until it is aborted. */
 function stallingModel(onStart: () => void) {
   return new MockLanguageModelV4({
-    doStream: async ({ abortSignal }: any) => ({
+    doStream: async ({ abortSignal }) => ({
       stream: new ReadableStream({
         start(controller) {
           onStart();
           const fail = () =>
-            controller.error(abortSignal.reason ?? new Error("aborted"));
+            controller.error(abortSignal?.reason ?? new Error("aborted"));
           if (abortSignal?.aborted) fail();
           else abortSignal?.addEventListener("abort", fail);
         },
@@ -179,7 +188,7 @@ function happyScript(itemId: string): Step[] {
     ({ results }) => [
       [
         "read_document",
-        { documentId: results.get("read_input").sourceDocumentId },
+        { documentId: results.get("read_input")!.sourceDocumentId },
       ],
     ],
     () => [["wiki_create_page", page]],
@@ -283,7 +292,7 @@ describe("wiki runner", () => {
     const seen: Array<boolean | undefined> = [];
     const script = scripted(happyScript(items[0]!.id));
     const doStream = script.model.doStream.bind(script.model);
-    script.model.doStream = async (options: any) => {
+    script.model.doStream = async (options: Parameters<typeof doStream>[0]) => {
       seen.push(currentDiagnosticContext()?.suppressProviderBodies);
       return doStream(options);
     };
@@ -319,7 +328,7 @@ describe("wiki runner", () => {
         JSON.stringify(message.content).includes("POISON-AGENT-NOTE"),
     );
     expect(noted).toHaveLength(1);
-    expect(JSON.stringify(noted[0].content)).toContain("scratch notes");
+    expect(JSON.stringify(noted[0]!.content)).toContain("scratch notes");
   }, 60_000);
 
   describe("a poisoned source", () => {
@@ -349,7 +358,7 @@ describe("wiki runner", () => {
           actions: [{ action: "append", text: "owned" }],
         },
       ];
-      const results: Array<Record<string, any>> = [];
+      const results: PromptPart[] = [];
       const script = scripted([
         () => [["read_input", { id: items[0]!.id }]],
         () => [
@@ -363,20 +372,13 @@ describe("wiki runner", () => {
           ["wiki_create_folder", { parentPath: sourceFolder, name: "Nested" }],
         ],
         ({ prompt }) => {
-          const tool = prompt.filter((message) => message.role === "tool");
-          for (const message of tool)
-            for (const part of message.content)
-              results.push({
-                id: part.toolCallId,
-                name: part.toolName,
-                value: part.output?.value,
-              });
+          for (const message of prompt) results.push(...toolParts(message));
           return "stop";
         },
       ]);
       await executeWikiRun(deps(script.model), run.id);
-      const refused = results.filter((entry) => entry.value?.error);
-      expect(refused.map((entry) => entry.value.error.code)).toEqual([
+      const refused = results.filter((part) => part.output.value.error);
+      expect(refused.map((part) => part.output.value.error!.code)).toEqual([
         "FORBIDDEN",
         "FORBIDDEN",
         "NOT_FOUND",
@@ -399,7 +401,7 @@ describe("wiki runner", () => {
       const headBefore = await withProjectRepo(p.projectId, (repo) =>
         repo.resolveHead(),
       );
-      const seen: any[] = [];
+      const seen: PromptPart[] = [];
       const script = scripted([
         () => [
           [
@@ -414,9 +416,7 @@ describe("wiki runner", () => {
           ["get_table", { tableId: randomUUID() }],
         ],
         ({ prompt }) => {
-          for (const message of prompt)
-            if (message.role === "tool")
-              for (const part of message.content) seen.push(part);
+          for (const message of prompt) seen.push(...toolParts(message));
           return [["read_input", { id: items[0]!.id }]];
         },
         () => "stop",
@@ -445,7 +445,7 @@ describe("wiki runner", () => {
     expect(script.toolNames[0]).not.toContain("list_recent_changes");
     expect(script.toolNames[1]).toContain("list_recent_changes");
     const results = resultsOf(script.prompts[2]!);
-    expect(results.get("list_recent_changes").changes.length).toBeGreaterThan(
+    expect(results.get("list_recent_changes")!.changes.length).toBeGreaterThan(
       0,
     );
   }, 60_000);

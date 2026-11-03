@@ -925,26 +925,24 @@ async function updateMovedProjection(
 ): Promise<void> {
   try {
     const lastEditedAt = await repo.commitDate(input.sha);
-    await db.$transaction(async (tx) => {
-      await tx.document.update({
-        where: { id: input.documentId },
-        data: {
-          path: input.path,
-          slug: input.slug,
-          headCommitSha: input.sha,
-          lastEditedById: input.actorId,
-          ...machineEditorColumns(null),
-          lastEditedByName: null,
-          lastEditedAt,
-        },
-      });
-      // A move is always a human commit: the page stops being owned.
-      await applyOwnershipDecision(
-        tx,
-        { projectId: input.projectId, documentId: input.documentId },
-        { action: "delete" },
-      );
+    await db.document.update({
+      where: { id: input.documentId },
+      data: {
+        path: input.path,
+        slug: input.slug,
+        headCommitSha: input.sha,
+        lastEditedById: input.actorId,
+        ...machineEditorColumns(null),
+        lastEditedByName: null,
+        lastEditedAt,
+      },
     });
+    // A move is a human commit. A crash here is safe: the write-time check sees the new head.
+    await applyOwnershipDecision(
+      db,
+      { projectId: input.projectId, documentId: input.documentId },
+      { action: "delete" },
+    );
   } catch (error) {
     reportProjectionFailure({
       projectId: input.projectId,

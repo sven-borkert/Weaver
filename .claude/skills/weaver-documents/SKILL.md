@@ -128,6 +128,7 @@ Shared repository readers, advisory locks, recovery and transport primitives use
   through; `reviewExempt` pages get no review block; `type: source` grants nothing.
   Writers (`properties` on create/update/patch, `document.setProperties`, importers, transfer) merge through
   `applyPagePropertiesInput`; see `weaver-wiki` for the rules (reserved fields, import mapping, Index view).
+  `restoreDocumentInRepo` keeps the current properties unless `restoreProperties` (Revert only), which writes the restored header's exactly through `exactProperties`.
   Non-root folders now carry an optional canonical UUID `id`; newly created
   folders always receive one. Preserve it through metadata/stamp/review/appearance
   updates and moves. `projectApi/folderIdentity.ts` assigns legacy IDs only when

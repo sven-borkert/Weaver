@@ -142,7 +142,7 @@ describe("WikiInputScreen", () => {
       error: null,
     };
     const html = render();
-    expect(html).toContain("cannot run the wiki agent yet");
+    expect(html).toContain("cannot run the wiki agent");
     expect(html).not.toContain("RUNNER_UNAVAILABLE");
   });
 

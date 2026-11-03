@@ -3,6 +3,7 @@ name: weaver-dashboard
 description: Use when changing Weaver dashboard read models, recent content, project overview/activity, shared pins, report shortcuts, audience selection, counts or activity pagination. Background-job execution is covered by weaver-jobs.
 ---
 
+`visibleProjectsSql` also exposes `isOwner`; only the wiki pause and spend alert rows use it.
 Wiki runs are activity source `wiki` (`ACTIVITY_SOURCES`) through the shared work relation; the destination is `/projects/<id>/wiki`.
 
 # Weaver dashboard and project activity

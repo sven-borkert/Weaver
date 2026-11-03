@@ -23,7 +23,7 @@ const run = (over: Partial<WikiRunView>): WikiRunView => ({
 describe("wikiRunNotice", () => {
   it("words the missing runner plainly and without the code", () => {
     const notice = wikiRunNotice(run({ errorCode: "RUNNER_UNAVAILABLE" }));
-    expect(notice?.message).toMatch(/cannot run the wiki agent yet/);
+    expect(notice?.message).toMatch(/cannot run the wiki agent/);
     expect(notice?.message).toMatch(/back in the queue/);
     expect(notice?.message).not.toContain("RUNNER_UNAVAILABLE");
   });

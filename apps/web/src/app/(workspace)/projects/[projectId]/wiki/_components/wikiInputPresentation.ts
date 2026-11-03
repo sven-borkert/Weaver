@@ -56,7 +56,7 @@ export function wikiRunNotice(run: WikiRunView | null): {
     return {
       tone: "warn",
       message:
-        "Sources were prepared and kept, but this version of Weaver cannot run the wiki agent yet, so nothing was integrated into wiki pages. Your inputs are back in the queue and will reuse their sources.",
+        "Sources were prepared and kept, but the worker that picked this up cannot run the wiki agent, so nothing was integrated into wiki pages. Your inputs are back in the queue and will reuse their sources. Ask an administrator to check the worker.",
     };
   if (run.errorCode === "NO_WORKER")
     return {
@@ -69,6 +69,12 @@ export function wikiRunNotice(run: WikiRunView | null): {
       tone: "info",
       message:
         "The last run had nothing to integrate. Check the inputs under Needs attention.",
+    };
+  if (run.status === "stopped")
+    return {
+      tone: "info",
+      message:
+        "The last run stopped before finishing and returned what it had not finished to the queue. The Runs tab says why.",
     };
   if (run.status === "failed")
     return {

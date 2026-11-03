@@ -522,6 +522,7 @@ list and write annotations synchronized. Core additions must respect the 26,000-
 ceiling pinned in `toolsets.test.ts`. Admin tools
 must never enter `ASSISTANT_TOOLS`.
 `WIKI_TOOLS` (`find_page`, `inspect_links`, `list_recent_changes`, `get_wiki_guide`) are in `ASSISTANT_TOOLS` (last) and the MCP `wiki` toolset; see `weaver-wiki`.
+The wiki agent's tools are a separate allowlist (`wikiAgentRegistry.ts`), never in `ASSISTANT_TOOLS` or `MCP_TOOLS`. `toAiToolSet` is generic over the tool context so both use it. A read the agent shares is `defineSharedReadTool`.
 The assistant prompt pins now read 43 tools, tool definitions 71,075 B, instructions 3,894 B (floor 89,300 tokens; 88,100 with 70,026 B before the `properties` field on `create_document`/`patch_document` and their proposal tools, `list_documents` filters), after the wiki tools and the guide rule.
 The admin read surface includes ingestion inspection
 (`ingestionInspection.ts` → `list_ingestion_batches`, `list_ingestion_files`,
