@@ -414,3 +414,7 @@ detectable by that query.
 ## Review hardening invariants
 
 A ready row with both indexed SHAs matching its source may enter tokenless entity-vector repair. Repair clears stale ready claims, preserving fresh claim fencing. Missing document tombstones are not background-work failures.
+
+## Wiki lint read model
+
+`listMissingEntityPages` (`services/wikiReads.ts`) joins `GraphEntity`, `EntityMention` and `Document` for the active generation only (`KnowledgeGeneration.status = 'active'`, mentions not invalidated, source pages not counted) and lists entities named in at least three pages whose normalized name or alias matches no page title. It is a read for the wiki agent's lint run, bounded to 25 per page with a keyset cursor, and never writes the graph. See `weaver-wiki`.

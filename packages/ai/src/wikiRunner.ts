@@ -31,6 +31,7 @@ import {
 } from "@weaver/core/services/llmRoutes";
 import {
   buildRestartBriefing,
+  lintStartContext,
   readRunGuide,
   reconcileReservedOperations,
   wikiIndexHead,
@@ -226,7 +227,17 @@ async function runAttempt(input: {
   });
   const alwaysActive = WIKI_AGENT_TOOLS.map((tool) => tool.name);
   const briefing =
-    lease.attempt > 1 ? await buildRestartBriefing(db, lease.id) : null;
+    lease.attempt > 1
+      ? await buildRestartBriefing(
+          db,
+          lease.id,
+          lease.kind === "lint" ? "lint" : "ingest",
+        )
+      : null;
+  const lint =
+    lease.kind === "lint"
+      ? await lintStartContext(db, lease.id, lease.projectId)
+      : undefined;
   const remainingSteps = (caps.steps ?? 1) - lease.steps;
   if (remainingSteps <= 0)
     throw new WikiRunStop(
@@ -246,7 +257,9 @@ async function runAttempt(input: {
     model,
     onLanguageModelCallStart: input.onProviderStart,
     instructions,
-    messages: [{ role: "user", content: buildWikiStartMessage(briefing) }],
+    messages: [
+      { role: "user", content: buildWikiStartMessage(briefing, lint) },
+    ],
     maxOutputTokens: budget.maxOutputTokens,
     tools,
     abortSignal: signal,

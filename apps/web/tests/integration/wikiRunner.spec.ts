@@ -29,6 +29,19 @@ import {
   testEncryptionKeys,
 } from "./_harness";
 import {
+  deps,
+  scripted,
+  seedWikiRoute,
+  stallingModel,
+  resultsOf,
+  toolParts,
+  type Call,
+  type PromptMessage,
+  type PromptPart,
+  type ScriptContext,
+  type Step,
+} from "./_wikiScript";
+import {
   failOn,
   humanPage,
   queuedRun,
@@ -36,144 +49,6 @@ import {
   type ToolOutput,
   type WikiProject,
 } from "./_wikiRunHarness";
-
-type Call = [string, Record<string, unknown>];
-type PromptPart = {
-  type: string;
-  toolCallId: string;
-  toolName: string;
-  output: { type: string; value: ToolOutput };
-};
-type PromptMessage = { role: string; content: string | PromptPart[] };
-type ScriptContext = {
-  /** Latest result per tool name, parsed. */
-  results: Map<string, ToolOutput>;
-  prompt: PromptMessage[];
-};
-type Step = (context: ScriptContext) => Call[] | string;
-
-const USAGE = {
-  inputTokens: {
-    total: 100,
-    noCache: 100,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-  },
-  outputTokens: { total: 20, text: 20, reasoning: undefined },
-};
-
-function toolParts(message: PromptMessage): PromptPart[] {
-  return message.role === "tool" && typeof message.content !== "string"
-    ? message.content.filter((part) => part.type === "tool-result")
-    : [];
-}
-
-function resultsOf(prompt: PromptMessage[]): Map<string, ToolOutput> {
-  const results = new Map<string, ToolOutput>();
-  for (const message of prompt)
-    for (const part of toolParts(message))
-      results.set(part.toolName, part.output.value);
-  return results;
-}
-
-/** Replays a script; each step sees the prompt the model would have seen. */
-function scripted(steps: Step[]) {
-  const prompts: PromptMessage[][] = [];
-  const toolNames: string[][] = [];
-  let counter = 0;
-  const model = new MockLanguageModelV4({
-    doStream: async (options) => {
-      const prompt = options.prompt as unknown as PromptMessage[];
-      prompts.push(prompt);
-      toolNames.push((options.tools ?? []).map((tool) => tool.name));
-      const step = steps[Math.min(counter, steps.length - 1)]!;
-      const action =
-        counter < steps.length
-          ? step({ results: resultsOf(prompt), prompt })
-          : "done";
-      counter += 1;
-      const chunks: unknown[] =
-        typeof action === "string"
-          ? [
-              { type: "text-start", id: "t" },
-              { type: "text-delta", id: "t", delta: action },
-              { type: "text-end", id: "t" },
-              {
-                type: "finish",
-                finishReason: { unified: "stop", raw: undefined },
-                usage: USAGE,
-              },
-            ]
-          : [
-              ...action.map(([toolName, input], index) => ({
-                type: "tool-call",
-                toolCallId: `call-${counter}-${index}`,
-                toolName,
-                input: JSON.stringify(input),
-              })),
-              {
-                type: "finish",
-                finishReason: { unified: "tool-calls", raw: undefined },
-                usage: USAGE,
-              },
-            ];
-      return { stream: simulateReadableStream({ chunks }) as never };
-    },
-  });
-  return { model, prompts, toolNames };
-}
-
-/** A model call that hangs until it is aborted. */
-function stallingModel(onStart: () => void) {
-  return new MockLanguageModelV4({
-    doStream: async ({ abortSignal }) => ({
-      stream: new ReadableStream({
-        start(controller) {
-          onStart();
-          const fail = () =>
-            controller.error(abortSignal?.reason ?? new Error("aborted"));
-          if (abortSignal?.aborted) fail();
-          else abortSignal?.addEventListener("abort", fail);
-        },
-      }) as never,
-    }),
-  });
-}
-
-async function seedWikiRoute(
-  input: { contextWindow?: number; maxOutputTokens?: number } = {},
-) {
-  const seeded = await seedTestLlmRouting({
-    pricing: { input: 1_000_000, output: 1_000_000, currency: "USD" },
-  });
-  const db = getPrisma();
-  const actor = securityContextFor(seeded.admin);
-  const model = await createLlmModel(db, actor, {
-    connectionId: seeded.connection.id,
-    providerModelId: `wiki-${randomUUID().slice(0, 8)}`,
-    displayName: "Wiki",
-    contextWindow: input.contextWindow ?? 200_000,
-    maxOutputTokens: input.maxOutputTokens ?? 16_000,
-    capabilities: ["chat", "tool_use"],
-    inputCostMicrosPerMillion: 1_000_000,
-    outputCostMicrosPerMillion: 1_000_000,
-    currency: "USD",
-  });
-  await setLlmRoute(db, actor, { purpose: "wiki", modelId: model.id });
-}
-
-function deps(
-  model: unknown,
-  extra: Partial<WikiRunnerDeps> = {},
-): WikiRunnerDeps {
-  return {
-    db: getPrisma(),
-    ring: testEncryptionKeys(),
-    workerId: "spec-worker",
-    modelFactory: () => model as never,
-    ...extra,
-  };
-}
 
 const page = {
   folderPath: ["wiki"],

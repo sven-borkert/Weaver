@@ -214,3 +214,7 @@ Exam definitions, snapshots, answers and operation receipts live only in Postgre
 ## Review hardening invariants
 
 Wrap dependent migration DDL/DML in BEGIN/COMMIT unless a specific operation forbids transactions. Never edit released migration history. The guarded, idempotent knowledge-index-identity recovery SQL and docs/setup.md runbook handle its historical partial-failure case; the forward correction reruns verified fingerprints and releases affected processing claims.
+
+## Wiki lint and classify columns
+
+`20261103130000_wiki_lint_classify` adds `WikiRun.plan` (classify's stored preview plan, re-validated and digest-checked before use) and `ProjectWikiSettings.lintSkippedAt`/`lintSkipReason` (the last scheduled lint slot that did not start). The lint schedule, streak (`lintConsecutiveFailures`) and pause (`lintPausedAt`) columns existed from the settings slice.

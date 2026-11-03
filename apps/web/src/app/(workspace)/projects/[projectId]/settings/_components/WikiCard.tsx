@@ -36,6 +36,7 @@ import {
 import { Skeleton } from "~/components/ui/skeleton";
 import { api, type RouterOutputs } from "~/trpc/react";
 import { wikiCost } from "../../wiki/_components/wikiRunPresentation";
+import { MaintenanceSection } from "./MaintenanceSection";
 import { ReviewGuideDialog } from "./ReviewGuideDialog";
 
 type Settings = RouterOutputs["wiki"]["settings"];
@@ -225,6 +226,9 @@ export function WikiSettings({
         />
       ) : null}
       {settings.enabled ? <WikiUsageLine projectId={projectId} /> : null}
+      {settings.enabled ? (
+        <MaintenanceSection settings={settings} isOwner={isOwner} />
+      ) : null}
       {settings.enabled && isOwner ? (
         <BudgetForm key={settings.revision} settings={settings} />
       ) : null}

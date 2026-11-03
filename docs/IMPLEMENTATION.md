@@ -568,6 +568,13 @@ The runner reaches content only through [`wikiRunSession.ts`](../packages/core/s
 [`wikiRunStart.ts`](../packages/core/src/services/wikiRunStart.ts). [`wikiRevert.ts`](../packages/core/src/services/wikiRevert.ts) is a separate no-model run authored by the Editor who
 started it. The Runs tab is [`wiki/runs`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/runs/page.tsx>) over [`wikiRunViews.ts`](../packages/core/src/services/wikiRunViews.ts);
 `AiUsage.sourceCommitSha`, set by enrichment, is joined to a run's commits at read time for its indexing cost.
+Lint: [`wikiLint.ts`](../packages/core/src/services/wikiLint.ts) validates `lintSchedule` (`taskScheduleSchema`, stored with its derived cron
+and timezone), claims due slots from `wiki.tick` with a conditional `lintNextRunAt` update (missed and colliding slots are skipped and recorded
+on the settings row) and starts "Run maintenance now" (Editor+, one start per hour). `endRunInTx` counts lint failures and sets `lintPausedAt`
+after five. The agent's lint-only reads (`list_missing_entity_pages`, `list_pages_with_newer_sources`) are in
+[`wikiReads.ts`](../packages/core/src/services/wikiReads.ts); `list_recent_changes` walks an ancestry range from a trusted first-parent boundary
+(`firstParentTrustedBefore`, `listCommitShas`, `logChangesForShas` in `@weaver/git-store`).
+
 The Input page is [`wiki/_components/WikiInputScreen.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/wiki/_components/WikiInputScreen.tsx>) over the
 `wiki.input` router; the sidebar link depends on `project.get`'s `wikiEnabled`. Runs reach the bell and Activity through
 [`backgroundWork/wikiSource.ts`](../packages/core/src/services/backgroundWork/wikiSource.ts) (`PersonalWorkKind.wiki`).
@@ -3420,3 +3427,7 @@ the reservation retryable. Publishing checks the base action using committed res
 and folder identities before loading rows or validating deltas, then checks all derived
 actions. Generated publishing examples persist payloads and ETags locally under
 `.weaver-requests`, keyed by the operation ID.
+
+The wiki agent ships in slices on `feature/wiki-agent` (properties, principal, settings and guide, source queue, runner and Revert,
+then scheduled and manual lint, Classify and Save as page); see the wiki paragraphs under
+[Web adapters and UI](#web-adapters-and-ui) and the `weaver-wiki` skill for the canonical files.

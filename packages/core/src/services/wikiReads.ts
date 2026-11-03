@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@weaver/db/client";
-import { openProjectRepo } from "@weaver/git-store";
+import { openProjectRepo, type GitChangeEntry } from "@weaver/git-store";
 import { CoreError } from "../errors";
 import { normalizeKnowledgeName } from "../knowledge/extraction";
 import { changeKindOf, type WikiChangeKind } from "../wiki/changeKinds";
@@ -16,6 +16,7 @@ const SHA_RE = /^[0-9a-f]{40}$/;
 export const FIND_PAGE_LIMIT = 10;
 export const INSPECT_LINKS_LIMIT = 50;
 export const RECENT_CHANGES_LIMIT = 25;
+const MAX_RANGE_COMMITS = 5000;
 const MAX_CHANGES_PER_COMMIT = 20;
 
 export type WikiPageRef = {
@@ -324,20 +325,34 @@ export async function listRecentChanges(
     !(await repo.isAncestor(input.cursor, head))
   )
     throw invalidCursorError();
-  const entries = await repo.logChangesBefore(input.cursor ?? head, {
-    limit: limit + 1,
-  });
-  if (input.cursor !== undefined && entries[0]?.sha !== input.cursor)
-    throw invalidCursorError();
-  const page = entries.slice(0, limit);
   const since = input.since;
-  // Dates in untrusted commits are attacker-controlled: only a trusted commit ends the walk.
-  const stop = since
-    ? page.findIndex(
-        (entry) => entry.trustedAuthor === true && entry.date < since,
-      )
-    : -1;
-  const kept = stop === -1 ? page : page.slice(0, stop);
+  let kept: GitChangeEntry[];
+  let nextCursor: string | null;
+  if (since === undefined) {
+    const entries = await repo.logChangesBefore(input.cursor ?? head, {
+      limit: limit + 1,
+    });
+    if (input.cursor !== undefined && entries[0]?.sha !== input.cursor)
+      throw invalidCursorError();
+    kept = entries.slice(0, limit);
+    nextCursor = entries.length <= limit ? null : entries[limit]!.sha;
+  } else {
+    // Untrusted dates cannot end the walk: the boundary is a trusted first-parent ancestor.
+    const boundary = await repo.firstParentTrustedBefore(head, since);
+    const shas = await repo.listCommitShas(head, {
+      exclude: boundary,
+      maxCount: MAX_RANGE_COMMITS,
+    });
+    const start = input.cursor === undefined ? 0 : shas.indexOf(input.cursor);
+    if (start === -1) throw invalidCursorError();
+    const entries = await repo.logChangesForShas(
+      shas.slice(start, start + limit),
+    );
+    kept = entries.filter(
+      (entry) => !(entry.trustedAuthor === true && entry.date < since),
+    );
+    nextCursor = shas[start + limit] ?? null;
+  }
   const paths = new Set(
     kept.flatMap((entry) =>
       entry.changes.slice(0, MAX_CHANGES_PER_COMMIT).map((c) => c.path),
@@ -348,7 +363,6 @@ export async function listRecentChanges(
     select: { id: true, path: true },
   });
   const idByPath = new Map(documents.map((row) => [row.path, row.id]));
-  const exhausted = stop !== -1 || entries.length <= limit;
   return {
     changes: kept.map((entry) => ({
       sha: entry.sha,
@@ -364,7 +378,7 @@ export async function listRecentChanges(
       })),
       moreChanges: entry.changes.length > MAX_CHANGES_PER_COMMIT,
     })),
-    nextCursor: exhausted ? null : entries[limit]!.sha,
+    nextCursor,
   };
 }
 
@@ -482,5 +496,247 @@ export async function listPageIndex(
           ).toString("base64url")
         : null,
     overview,
+  };
+}
+
+export const WIKI_LINT_READ_LIMIT = 25;
+export const WIKI_MISSING_ENTITY_MIN_PAGES = 3;
+
+function decodeKeyset(cursor: string, arity: number): unknown[] {
+  try {
+    const value = JSON.parse(
+      Buffer.from(cursor, "base64url").toString("utf8"),
+    ) as unknown;
+    if (Array.isArray(value) && value.length === arity) return value;
+  } catch {
+    /* falls through */
+  }
+  throw invalidCursorError();
+}
+
+const encodeKeyset = (parts: unknown[]) =>
+  Buffer.from(JSON.stringify(parts)).toString("base64url");
+
+type MissingEntityRow = {
+  id: string;
+  canonicalName: string;
+  entityType: string;
+  pages: number;
+};
+
+/**
+ * Entities of the active generation named in at least `minPages` pages that no page is titled after.
+ * Source pages are not counted, and a source page never counts as the entity's page.
+ */
+export async function listMissingEntityPages(
+  db: PrismaClient,
+  input: {
+    projectId: string;
+    minPages?: number;
+    cursor?: string;
+    limit?: number;
+  },
+  actor: SecurityContext,
+): Promise<{
+  entities: Array<{
+    id: string;
+    name: string;
+    type: string;
+    pages: number;
+  }>;
+  nextCursor: string | null;
+}> {
+  await assertProjectRole(db, input.projectId, actor, "Viewer");
+  const limit = Math.max(
+    1,
+    Math.min(input.limit ?? WIKI_LINT_READ_LIMIT, WIKI_LINT_READ_LIMIT),
+  );
+  const minPages = Math.max(
+    2,
+    Math.min(input.minPages ?? WIKI_MISSING_ENTITY_MIN_PAGES, 100),
+  );
+  let after: [number, string, string] | null = null;
+  if (input.cursor !== undefined) {
+    const [pages, name, id] = decodeKeyset(input.cursor, 3);
+    if (
+      !Number.isInteger(pages) ||
+      typeof name !== "string" ||
+      typeof id !== "string" ||
+      !UUID_RE.test(id)
+    )
+      throw invalidCursorError();
+    after = [pages as number, name, id];
+  }
+  const rows = await db.$queryRaw<MissingEntityRow[]>(Prisma.sql`
+    SELECT entity."id", entity."canonicalName", entity."entityType",
+           COUNT(DISTINCT mention."documentId")::int AS "pages"
+    FROM "GraphEntity" AS entity
+    JOIN "KnowledgeGeneration" AS generation
+      ON generation."id" = entity."generationId" AND generation."status" = 'active'
+    JOIN "EntityMention" AS mention
+      ON mention."entityId" = entity."id" AND mention."generationId" = entity."generationId"
+     AND mention."invalidatedAt" IS NULL
+    JOIN "Document" AS doc
+      ON doc."id" = mention."documentId" AND doc."projectId" = entity."projectId"
+     AND doc."wikiSourceItemId" IS NULL
+    WHERE entity."projectId" = ${input.projectId}::uuid
+      AND NOT EXISTS (
+        SELECT 1 FROM "Document" AS page
+        WHERE page."projectId" = entity."projectId" AND page."wikiSourceItemId" IS NULL
+          AND (page."normalizedTitle" = entity."normalizedName"
+            OR page."normalizedTitle" IN (
+              SELECT alias."normalizedAlias" FROM "GraphEntityAlias" AS alias
+              WHERE alias."entityId" = entity."id"))
+      )
+    GROUP BY entity."id", entity."canonicalName", entity."entityType"
+    HAVING COUNT(DISTINCT mention."documentId") >= ${minPages}
+       ${
+         after === null
+           ? Prisma.empty
+           : Prisma.sql`AND (-COUNT(DISTINCT mention."documentId"), (entity."canonicalName" COLLATE "C"), entity."id")
+              > (${-after[0]}::int, ${after[1]}, ${after[2]}::uuid)`
+       }
+    ORDER BY "pages" DESC, (entity."canonicalName" COLLATE "C") ASC, entity."id" ASC
+    LIMIT ${limit + 1}
+  `);
+  const page = rows.slice(0, limit);
+  const last = page.at(-1);
+  return {
+    entities: page.map((row) => ({
+      id: row.id,
+      name: row.canonicalName,
+      type: row.entityType,
+      pages: row.pages,
+    })),
+    nextCursor:
+      rows.length > limit && last
+        ? encodeKeyset([last.pages, last.canonicalName, last.id])
+        : null,
+  };
+}
+
+type StaleSourceRow = {
+  id: string;
+  title: string;
+  path: string;
+  lastEditedAt: Date;
+  sourceKind: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceEditedAt: Date;
+};
+
+/** Pages whose document or table source was committed after the page itself; ids and times only. */
+export async function listPagesWithNewerSources(
+  db: PrismaClient,
+  input: { projectId: string; cursor?: string; limit?: number },
+  actor: SecurityContext,
+): Promise<{
+  pages: Array<{
+    id: string;
+    title: string;
+    path: string;
+    lastEditedAt: string;
+    sources: Array<{
+      kind: string;
+      id: string;
+      title: string;
+      lastEditedAt: string;
+    }>;
+  }>;
+  nextCursor: string | null;
+}> {
+  await assertProjectRole(db, input.projectId, actor, "Viewer");
+  const limit = Math.max(
+    1,
+    Math.min(input.limit ?? WIKI_LINT_READ_LIMIT, WIKI_LINT_READ_LIMIT),
+  );
+  let afterId: string | null = null;
+  if (input.cursor !== undefined) {
+    const [id] = decodeKeyset(input.cursor, 1);
+    if (typeof id !== "string" || !UUID_RE.test(id)) throw invalidCursorError();
+    afterId = id;
+  }
+  const pageRows = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT d."id"
+    FROM "Document" AS d
+    WHERE d."projectId" = ${input.projectId}::uuid
+      AND d."wikiSourceItemId" IS NULL
+      AND jsonb_typeof(d."wikiSources") = 'array'
+      ${afterId === null ? Prisma.empty : Prisma.sql`AND d."id" > ${afterId}::uuid`}
+      AND EXISTS (
+        SELECT 1 FROM jsonb_array_elements(d."wikiSources") AS src(value)
+        WHERE (src.value ->> 'kind' = 'document' AND EXISTS (
+                 SELECT 1 FROM "Document" AS s
+                 WHERE s."projectId" = d."projectId" AND s."id"::text = src.value ->> 'id'
+                   AND s."lastEditedAt" > d."lastEditedAt"))
+           OR (src.value ->> 'kind' = 'table' AND EXISTS (
+                 SELECT 1 FROM "DataTable" AS t
+                 WHERE t."projectId" = d."projectId" AND t."id"::text = src.value ->> 'id'
+                   AND t."lastEditedAt" > d."lastEditedAt"))
+      )
+    ORDER BY d."id" ASC
+    LIMIT ${limit + 1}
+  `);
+  const ids = pageRows.slice(0, limit).map((row) => row.id);
+  const rows = ids.length
+    ? await db.$queryRaw<StaleSourceRow[]>(Prisma.sql`
+        SELECT d."id", d."title", d."path", d."lastEditedAt",
+               src.value ->> 'kind' AS "sourceKind", src.value ->> 'id' AS "sourceId",
+               COALESCE(s."title", t."title") AS "sourceTitle",
+               COALESCE(s."lastEditedAt", t."lastEditedAt") AS "sourceEditedAt"
+        FROM "Document" AS d
+        CROSS JOIN LATERAL jsonb_array_elements(d."wikiSources") AS src(value)
+        LEFT JOIN "Document" AS s
+          ON src.value ->> 'kind' = 'document' AND s."projectId" = d."projectId" AND s."id"::text = src.value ->> 'id'
+        LEFT JOIN "DataTable" AS t
+          ON src.value ->> 'kind' = 'table' AND t."projectId" = d."projectId" AND t."id"::text = src.value ->> 'id'
+        WHERE d."id" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+          AND COALESCE(s."lastEditedAt", t."lastEditedAt") > d."lastEditedAt"
+        ORDER BY d."id" ASC, src.value ->> 'id' ASC
+      `)
+    : [];
+  const byPage = new Map<
+    string,
+    {
+      id: string;
+      title: string;
+      path: string;
+      lastEditedAt: string;
+      sources: Array<{
+        kind: string;
+        id: string;
+        title: string;
+        lastEditedAt: string;
+      }>;
+    }
+  >();
+  for (const row of rows) {
+    const entry = byPage.get(row.id) ?? {
+      id: row.id,
+      title: row.title,
+      path: row.path,
+      lastEditedAt: row.lastEditedAt.toISOString(),
+      sources: [],
+    };
+    if (entry.sources.length < 5)
+      entry.sources.push({
+        kind: row.sourceKind,
+        id: row.sourceId,
+        title: row.sourceTitle,
+        lastEditedAt: row.sourceEditedAt.toISOString(),
+      });
+    byPage.set(row.id, entry);
+  }
+  const pages = ids.flatMap((id) => {
+    const entry = byPage.get(id);
+    return entry ? [entry] : [];
+  });
+  return {
+    pages,
+    nextCursor:
+      pageRows.length > limit && ids.length > 0
+        ? encodeKeyset([ids.at(-1)!])
+        : null,
   };
 }

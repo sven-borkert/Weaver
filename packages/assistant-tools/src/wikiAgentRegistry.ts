@@ -15,6 +15,8 @@ import { getTableTool, queryTableRowsTool } from "./tools/tables";
 import {
   findPageTool,
   inspectLinksTool,
+  listMissingEntityPagesTool,
+  listPagesWithNewerSourcesTool,
   listRecentChangesTool,
 } from "./tools/wiki";
 import {
@@ -64,6 +66,14 @@ export const WIKI_AGENT_LOADABLE_TOOLS: readonly WikiAgentTool[] = [
   runScopedRead(
     contentHistoryTool,
     "Commit metadata for one document or table (mode=versions only).",
+  ),
+  runScopedRead(
+    listMissingEntityPagesTool,
+    "Lint only. Entities named in several pages that have no page of their own, with page counts.",
+  ),
+  runScopedRead(
+    listPagesWithNewerSourcesTool,
+    "Lint only. Pages whose source changed after the page, with source times.",
   ),
 ];
 

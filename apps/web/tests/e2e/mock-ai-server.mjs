@@ -481,7 +481,36 @@ function orderedToolCalls(messages) {
   return calls;
 }
 
+/** Lint: create the report page when none exists, then finish. */
+function handleWikiLint(body, response) {
+  const calls = orderedToolCalls(body.messages);
+  const start = body.messages.find((m) => m.role === "user");
+  const hasReport =
+    typeof start?.content === "string" &&
+    /Report page: [0-9a-f-]{36}/.test(start.content);
+  if (!hasReport && !calls.some((call) => call.name === "wiki_create_page")) {
+    streamToolCall(response, "wiki_create_page", {
+      folderPath: ["wiki"],
+      title: "Wiki lint report",
+      markdown: "# Lint report\n\nWritten by the mock wiki agent.",
+      properties: { type: "report", summary: "Mock lint report" },
+    });
+    return;
+  }
+  streamToolCall(response, "finish_run", {
+    summary: "Checked links; nothing to fix.",
+  });
+}
+
 function handleWiki(body, response) {
+  const system = body.messages.find((m) => m.role === "system");
+  if (
+    typeof system?.content === "string" &&
+    system.content.includes("Lint protocol")
+  ) {
+    handleWikiLint(body, response);
+    return;
+  }
   const calls = orderedToolCalls(body.messages);
   const listed = calls.find((call) => call.name === "list_inputs")?.result;
   if (!listed) {

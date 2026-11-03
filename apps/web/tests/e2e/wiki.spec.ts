@@ -69,4 +69,36 @@ test.describe("wiki agent", () => {
         .getByText("Reverted"),
     ).toHaveCount(2);
   });
+
+  test("Run maintenance now writes a lint report and the Runs tab shows it", async ({
+    page,
+  }) => {
+    test.setTimeout(240_000);
+    await login(page, "owner@weaver.local");
+    await openNewProjectDialog(page);
+    await page
+      .getByRole("dialog", { name: "New project" })
+      .getByLabel("Name")
+      .fill("Wiki Lint E2E");
+    await page.getByRole("button", { name: "Create", exact: true }).click();
+    await expect(
+      page.getByRole("heading", { name: "Wiki Lint E2E" }),
+    ).toBeVisible();
+    const projectId = new URL(page.url()).pathname.split("/")[2]!;
+
+    await page.goto(`/projects/${projectId}/settings`);
+    await page.getByTestId("wiki-enable").click();
+    await expect(page.getByText("Wiki agent enabled")).toBeVisible();
+    await expect(page.getByText("Scheduled maintenance is off.")).toBeVisible();
+
+    await page.goto(`/projects/${projectId}/wiki/runs`);
+    await page.getByRole("button", { name: "Run maintenance now" }).click();
+    await expect(page.getByText("lint · manual")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByText("Succeeded")).toBeVisible({ timeout: 180_000 });
+    // A second press within the hour is refused with a clear message.
+    await page.getByRole("button", { name: "Run maintenance now" }).click();
+    await expect(page.getByText(/less than an hour ago/)).toBeVisible();
+  });
 });

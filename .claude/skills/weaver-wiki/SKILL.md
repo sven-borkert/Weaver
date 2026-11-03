@@ -1,11 +1,11 @@
 ---
 name: weaver-wiki
-description: Use when changing Weaver's wiki-agent foundations: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset (find_page, inspect_links, list_recent_changes), the per-project wiki settings, bootstrap and guide approval, the input queue, runs, source writer and Input page, change kinds, or tracked-link teaching in prompts.
+description: Use when changing Weaver's wiki agent: page `properties` (type, summary, tags, sources, reviewExempt), the `Document.wiki*` projection, wiki read services and the MCP `wiki` toolset, per-project wiki settings, bootstrap and guide approval, the input queue, runs, the runner, agent tools and budgets, Revert, scheduled and manual lint maintenance, Classify existing pages, Save as page, the Runs tab, source writer and Input page, change kinds, or tracked-link teaching in prompts.
 ---
 
 # Weaver Wiki
 
-This skill records what has shipped; later slices extend it.
+This skill records what has shipped.
 
 ## Page properties
 
@@ -14,7 +14,7 @@ This skill records what has shipped; later slices extend it.
   `normalizeProperties` drops invalid values, never throws, returns null when empty and
   fixes key order. `parsePropertiesLine` also rejects oversized lines.
 - `type: source` and `reviewExempt` are plain data on read and grant nothing alone; only
-  system state (`wikiSourceItemId`, later slices) marks a source page.
+  system state (`wikiSourceItemId`) marks a source page.
 - Every header rewrite must carry `meta.properties` through (`...meta` spreads, moves,
   review commits, version restore, deleted-item recovery via the create `properties`
   field).
@@ -121,8 +121,7 @@ is the agent's only write path.
   integer `revision` CAS on every write (0 means no row yet), session actors only, Owner enable /
   disable / revoke / budgets / guide pick, Maintainer settings read, review and approve; non-members
   (including global Admins) get `NOT_FOUND`. Anchor ids (`guideDocumentId`, `sourcesFolderId`, ...) are
-  plain uuids without FKs. Columns for later slices (`lint*`, `destructive*`, `sourceTablesFolderId`,
-  `reportDocumentId`, `WikiGuideSuggestion.runId`) exist but only budgets and the guide are edited.
+  plain uuids without FKs. The lint schedule (Owner) and budgets are edited through `wiki.update`; `reportDocumentId` and the lint streak are system-written.
 - `enableWiki`: creates or reuses the live agent in one transaction, then `runWikiBootstrap` writes
   folders, guide, overview as the agent (ids `wiki-bootstrap:<agentId>:0001..0004`, so a successor agent never meets a revoked agent's commits; request hash per
   step, no `Weaver-Run-Id`; `commitAll` allows a missing run id only for that prefix). It is idempotent by
@@ -224,7 +223,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 
 - `tools/wikiAgent.ts` and `wikiAgentRegistry.ts`: `WIKI_AGENT_TOOLS` (always active) and `WIKI_AGENT_LOADABLE_TOOLS` (through `load_tools`, charged to a
   schema reserve); `WIKI_AGENT_DISPATCH` is the allowlist. None takes `projectId`: `runScopedRead` omits it and the run row supplies it. Definitions measure
-  13,876 B always and 8,012 B loadable, pinned in `wikiAgentRegistry.test.ts`.
+  13,995 B always and 8,638 B loadable (the lint reads are loadable), pinned in `wikiAgentRegistry.test.ts`.
 - `WikiRunSession` (`wikiRunSession.ts`) is the tools' only way in: inputs, notes, suggestions, `finish_run` and the writes. A write reserves `n` atomically
   under the fence, then `applyWikiOperation` runs with a ledger. In an ingest run a write needs `read_input` first, so every page gets that input's source reference (folder creates included). The reserve step also enforces the write cap (reserved plus committed ops, under the run-row lock; folder creates count). Once `applyWikiOperation` returns, an op is never `failed`: a lost `committed` update stays `reserved` for reconciliation. A patch that changes no body text and no property is `NO_CHANGE`. `summary`, outcome notes and `wiki_note` have control, bidi and format characters stripped, not refused. `finish_run` with unfinished items ends the run `stopped` / `unfinished_items`.
 - `applyWikiOperation` enforces ownership and budgets itself under the project lock on the worktree body (`admitPatch`, `compileDocumentPatch`, `wiki/budget.ts`),
@@ -242,10 +241,10 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - `packages/ai/src/wikiRunner.ts` (`createWikiRunner`, injected in `apps/agent-worker`) uses `streamText` with `prepareStep`: live-run check, notes, elision, fit check, in that order. Without
   the injection `wiki.run` still fails `RUNNER_UNAVAILABLE`. Revert needs no model and runs either way.
 - `wikiPrompt.ts`: fixed rules, a protocol per run kind, counts-only index head, then the guide in a labelled block. No other authored string enters the system prompt. Notes return as a
-  user-role message labelled as the agent's own; the restart briefing holds ledger fields only. Lint adds a protocol entry in the next slice.
+  user-role message labelled as the agent's own; the restart briefing holds ledger fields only. The lint protocol is described under Lint.
 - `wikiElision.ts`: oldest tool results become stubs until the array fits `maxInputBytes` minus 16 KB per parallel call of the last step. A written page's call input goes with its result, and
   fully stubbed turns are dropped when stubs alone no longer fit. Exempt: the current input's `read_input` and its latest source window, together at most 25 % of `maxInputBytes`.
-- Budget at the minimum route (100,000 window, 8,192 output, 16,000 B guide): fixed prompt 2,815 B, tools 13,896 B, schema reserve 12,500 B, leaving 45,573 B of input, so the exempt share holds an
+- Budget at the minimum route (100,000 window, 8,192 output, 16,000 B guide): fixed prompt 2,815 B (lint 3,810 B), tools 14,015 B, schema reserve 12,500 B, leaving 45,454 B (lint 44,459 B) of input, so the exempt share holds an
   8,000-character window. Pinned in `wikiRunner.test.ts`.
 - Failures: `ROUTE_UNSUITABLE`, `GUIDE_UNAVAILABLE`, `CONTEXT_LIMIT`. A closed fence ends the run `cancelled` only if this attempt still holds the lease; a worker shutdown leaves it for restart.
 - One `AiUsage` row per attempt (deterministic id), upserted after every step, with provider bodies suppressed.
@@ -266,7 +265,28 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - Ids `wiki-revert:<runId>:<nnnn>` with `Weaver-Wiki-Request-Hash`, the Editor as author, no agent trailer and no `Weaver-Run-Id`; recovery uses the `wikiRevertRequestHash` identity (`trustedAuthor === true`,
   no agent trailer, matching hash). Revert operations do not count toward the 24-hour sum.
 - `wikiRunViews.ts`: `listRuns`, `getRun`, `wikiUsageSummary`. Viewer+ read; `indexingCostMicros` is null below Maintainer. The "Wiki agent" badge needs `verified`: the commit's trust, operation id and agent
-  trailer from Git, never the ledger row alone. Maintenance and Classify actions arrive with their slice.
+  trailer from Git, never the ledger row alone. Run maintenance now (Editor+) sits above the list.
+
+## Lint
+
+- `wikiLint.ts`: `lintScheduleFields` (preset from `taskScheduleSchema`, derived cron, IANA timezone, first slot via `nextOccurrence`; `null` turns it off),
+  `claimDueLintRuns` (called from `runWikiTick`; the settings-row lock plus `lintNextRunAt` compare-and-set claims once; a slot more than 15 minutes late
+  is `missed`, others skip as `run_active`, `lint_paused`, `budget_paused` or `agent_unavailable`; the skip lives in `lintSkippedAt`/`lintSkipReason` and clears
+  on the next start) and `startMaintenance` (Editor session, enabled wiki, live agent, no active run, not budget-paused, one manual start per hour with a
+  `RATE_LIMITED` CONFLICT naming the retry time). A lint run is created `queued` (it has no preparation phase) with no starter when scheduled.
+- `endRunInTx` calls `recordLintOutcome`: succeeded resets `lintConsecutiveFailures`; failed, or stopped with an error code, adds one; cancelled and clean stops do
+  nothing. Five set `lintPausedAt` (schedule skips, manual runs still work); an Owner clears it with `wiki.clearLintPause`. The settings view carries schedule,
+  next run, pause, streak, last skip and `reportDocumentId`; `wiki.update` takes `lintSchedule` and `lintTimezone` (Owner).
+- Prompt: `wikiPrompt.ts` has a lint protocol (checks in order, only the allowed fixes, the report rules) and `buildWikiStartMessage` takes a `WikiLintContext`
+  (today, previous successful lint start, report page id), all system-side facts. A lint restart is briefed from the run's committed operations.
+- Session rules for kind `lint`: `read_input`, `complete_input` and `wiki_note` refuse ("applies to ingest runs only"); writes need no current input; folder creates are
+  refused; the only page create is the report (`type: report`, `REPORT_EXISTS` once `reportDocumentId` points at a live page), recorded with a conditional update after the
+  commit. A human-edited report is non-owned, so the prompt tells the agent to append a dated section.
+- Reads (loadable, lint only): `list_missing_entity_pages` (`EntityMention` x `GraphEntity` of the active generation, source pages not counted, entities with a page or alias
+  title excluded, at least three pages, keyset cursor) and `list_pages_with_newer_sources` (`wikiSources` document or table ids whose `lastEditedAt` is after the page's).
+  `list_recent_changes` with `since` walks `<boundary>..HEAD` where the boundary is the newest trusted first-parent commit older than `since`; untrusted dates never end the walk.
+- Measured at this slice: always-active tool definitions 13,995 B (the `load_tools` description lists the new names), loadable 8,638 B, ingest prompt 2,815 B, lint prompt 3,810 B,
+  minimum input at the 100,000 window 45,454 B (ingest) and 44,459 B (lint); pinned in `wikiAgentRegistry.test.ts` and `wikiRunner.test.ts`.
 
 ## Commit text
 

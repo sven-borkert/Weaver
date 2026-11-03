@@ -22,6 +22,8 @@ import {
 import { getDocumentAtSnapshot } from "./documents";
 import type { FolderScope } from "./folders";
 import { resolveLlmRoute } from "./llmRoutes";
+import type { TaskSchedule } from "../scheduledTasks/scheduleSchema";
+import { lintScheduleFields } from "./wikiLint";
 import { assertProjectRole } from "./projectAccess";
 import { runWikiBootstrap, type WikiBootstrapRecord } from "./wikiBootstrap";
 import { createWikiAgent, revokeWikiAgent } from "./wikiAgents";
@@ -59,7 +61,14 @@ export type WikiSettingsView = {
   destructiveBudget24h: number;
   destructivePausedAt: Date | null;
   spendAlertCentsPerDay: number | null;
-  lintSchedule: unknown;
+  lintSchedule: TaskSchedule | null;
+  lintTimezone: string;
+  lintNextRunAt: Date | null;
+  /** Five failed lint runs in a row set this; an Owner clears it. */
+  lintPausedAt: Date | null;
+  lintConsecutiveFailures: number;
+  lintSkipped: { at: Date; reason: string } | null;
+  reportDocumentId: string | null;
 };
 
 export type WikiGuideReview = {
@@ -185,7 +194,16 @@ async function view(
     destructiveBudget24h: row?.destructiveBudget24h ?? 100_000,
     destructivePausedAt: row?.destructivePausedAt ?? null,
     spendAlertCentsPerDay: row?.spendAlertCentsPerDay ?? null,
-    lintSchedule: row?.lintSchedule ?? null,
+    lintSchedule: (row?.lintSchedule as TaskSchedule | null) ?? null,
+    lintTimezone: row?.lintTimezone ?? "UTC",
+    lintNextRunAt: row?.lintNextRunAt ?? null,
+    lintPausedAt: row?.lintPausedAt ?? null,
+    lintConsecutiveFailures: row?.lintConsecutiveFailures ?? 0,
+    lintSkipped:
+      row?.lintSkippedAt && row.lintSkipReason
+        ? { at: row.lintSkippedAt, reason: row.lintSkipReason }
+        : null,
+    reportDocumentId: row?.reportDocumentId ?? null,
   };
 }
 
@@ -380,6 +398,9 @@ export async function updateWikiSettings(
     expectedRevision: number;
     destructiveBudget24h?: number;
     spendAlertCentsPerDay?: number | null;
+    /** null turns scheduled maintenance off. */
+    lintSchedule?: unknown;
+    lintTimezone?: string;
   },
 ): Promise<WikiSettingsView> {
   await requireRole(db, actor, input.projectId, "Owner", true);
@@ -404,16 +425,46 @@ export async function updateWikiSettings(
       field: "spendAlertCentsPerDay",
     });
   await db.$transaction(async (tx) => {
-    await requireRow(tx, input.projectId, input.expectedRevision);
+    const row = await requireRow(tx, input.projectId, input.expectedRevision);
+    const scheduleChange =
+      input.lintSchedule !== undefined || input.lintTimezone !== undefined;
     await guarded(tx, input.projectId, input.expectedRevision, {
       ...(budget !== undefined
         ? { destructiveBudget24h: budget, destructivePausedAt: null }
         : {}),
       ...(alert !== undefined ? { spendAlertCentsPerDay: alert } : {}),
+      ...(scheduleChange
+        ? lintScheduleFields({
+            schedule:
+              input.lintSchedule === undefined
+                ? row.lintSchedule
+                : input.lintSchedule,
+            timezone: input.lintTimezone ?? row.lintTimezone,
+          })
+        : {}),
     });
   });
   const result = await currentView(db, input.projectId);
   changed(input.projectId, "settings", result.revision);
+  return result;
+}
+
+/** Owner only: lets the schedule run again after five failed lint runs. */
+export async function clearLintPause(
+  db: PrismaClient,
+  actor: Actor,
+  input: { projectId: string; expectedRevision: number },
+): Promise<WikiSettingsView> {
+  await requireRole(db, actor, input.projectId, "Owner", true);
+  await db.$transaction(async (tx) => {
+    await requireRow(tx, input.projectId, input.expectedRevision);
+    await guarded(tx, input.projectId, input.expectedRevision, {
+      lintPausedAt: null,
+      lintConsecutiveFailures: 0,
+    });
+  });
+  const result = await currentView(db, input.projectId);
+  changed(input.projectId, "lint-pause-cleared", result.revision);
   return result;
 }
 

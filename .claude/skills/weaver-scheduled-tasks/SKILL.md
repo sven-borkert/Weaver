@@ -330,3 +330,7 @@ remote names, metadata and values cannot close their untrusted delimiter.
 Schedule ticks advance nextRunAt without adding a run when queued/running work exists under the task-row lock. Publication persists output identity and completion metadata as a receipt before later acknowledgement. Success is idempotent; retry acknowledgement without regenerating. Expiry reconciliation acknowledges published receipts instead of increasing provider failure counts.
 
 Persist completion metadata before publication. Missing receipt identity is recoverable only from a unique locally trusted Git commit with the exact task-run operation and run IDs. Expiry of prepared output locks the repository before rereading the run and taking task locks, matching the writer lock order. Unprepared expiry atomically requires a null output project; failure transitions require no accepted output SHA.
+
+## Reuse by the wiki agent
+
+The wiki lint schedule reuses `taskScheduleSchema`, `scheduleToCron`, `describeSchedule`, `isValidTimezone` and `nextOccurrence` (always with an explicit timezone) but is not a `ScheduledTask`: it is stored on `ProjectWikiSettings` (`lintSchedule`, `lintCron`, `lintTimezone`, `lintNextRunAt`) and claimed by `wiki.tick` with the same conditional-update pattern as `claimDueTasks`. A slot that cannot start is skipped and recorded, not queued. See `weaver-wiki`.

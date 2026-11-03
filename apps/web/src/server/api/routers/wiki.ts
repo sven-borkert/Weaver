@@ -2,6 +2,7 @@ import { authedProcedure, createTRPCRouter } from "~/server/api/trpc";
 import * as wiki from "@weaver/core/services/wikiSettings";
 import * as inputs from "@weaver/core/services/wikiInputs";
 import { cancelRun } from "@weaver/core/services/wikiRuns";
+import { startMaintenance } from "@weaver/core/services/wikiLint";
 import { startRevert } from "@weaver/core/services/wikiRevert";
 import {
   getRun,
@@ -86,6 +87,16 @@ export const wikiRouter = createTRPCRouter({
   revertRun: authedProcedure
     .input(cancelWikiRunInput)
     .mutation(({ ctx, input }) => startRevert(ctx.db, ctx.security, input)),
+  runMaintenance: authedProcedure
+    .input(projectInput)
+    .mutation(({ ctx, input }) =>
+      startMaintenance(ctx.db, ctx.security, input),
+    ),
+  clearLintPause: authedProcedure
+    .input(revisionInput)
+    .mutation(({ ctx, input }) =>
+      wiki.clearLintPause(ctx.db, ctx.security, input),
+    ),
   settings: authedProcedure
     .input(projectInput)
     .query(({ ctx, input }) =>

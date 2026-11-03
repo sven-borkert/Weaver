@@ -619,6 +619,9 @@ model ProjectWikiSettings {
   lintNextRunAt           DateTime?
   lintConsecutiveFailures Int       @default(0)
   lintPausedAt            DateTime?
+  /// The last scheduled lint slot that did not start, and why (missed, run_active, lint_paused, budget_paused).
+  lintSkippedAt           DateTime?
+  lintSkipReason          String?   @db.VarChar(32)
   destructiveBudget24h    Int       @default(100000)
   destructivePausedAt     DateTime?
   spendAlertCentsPerDay   Int?
@@ -726,6 +729,8 @@ model WikiRun {
   usageTokens       Int            @default(0)
   usageCostMicros   BigInt         @default(0)
   planDigest        String?        @db.VarChar(64)
+  /// A classify run: the stored preview plan (page, proposed type and summary) the Owner accepts.
+  plan              Json?
   /// A revert run: the run it undoes.
   revertsRunId      String?        @db.Uuid
   /// A revert run: pages restored, deleted and skipped with the reason.

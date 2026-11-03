@@ -4,6 +4,14 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Added
+
+- **Wiki maintenance (lint).** Owners can set a schedule (hourly, daily, weekly or monthly, with a timezone) in Settings, and Editors can press **Run maintenance now** on the Runs tab, at most once an hour per project. The agent checks orphan pages and dangling links, what changed since the last lint, pages whose sources changed after the page, and entities named in many pages without a page of their own. It makes only small fixes (cross-references, unambiguous dangling links, a missing summary or type, contradiction notes) and writes a report page. Scheduled runs have no starter and show only in Project activity. A slot that was missed or collided with another run is skipped and shown on the settings card. Five failed lint runs in a row pause the schedule until an Owner resumes it.
+
+### Fixed
+
+- The recent-changes feed (assistant, MCP and wiki agent) no longer drops a backdated commit that arrived through a merged branch when a `since` time is given, and shows the file changes of merge commits.
+
 ## [0.1.235] - 2026-11-03
 
 ### Added

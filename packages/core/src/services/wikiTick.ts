@@ -8,6 +8,7 @@ import {
 } from "../wiki/states";
 import { rollingDestructiveChars } from "./wikiRunSession";
 import { retireWikiIngestionFile } from "./ingestion";
+import { claimDueLintRuns } from "./wikiLint";
 import { prepareRunItems } from "./wikiPrepare";
 import {
   emitRunEnded,
@@ -375,6 +376,11 @@ export async function runWikiTick(
     }
   }
   const { cancelled } = await reapWikiRuns(db, options);
+  try {
+    await claimDueLintRuns(db, now);
+  } catch (error) {
+    errors.push(error);
+  }
   const dispatched = await dispatchQueuedRuns(db);
   if (errors.length)
     throw new AggregateError(errors, "wiki.tick failed for some runs");

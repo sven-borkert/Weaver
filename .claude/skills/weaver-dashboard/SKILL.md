@@ -82,3 +82,7 @@ unavailable pin capacity and pagination after data changes.
 
 Raw readers select the machine editor pair (`lastEditedByMachineKind`/`Id`), not the old
 project key column; Activity's "Changes by others" counts any machine editor.
+
+## Scheduled wiki runs
+
+A scheduled lint run has no `startedById`, so its work row is never personal; it appears in Project > Activity for Maintainers and in no one's bell. Manual lint and classify runs belong to their starter.

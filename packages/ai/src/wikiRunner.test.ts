@@ -23,12 +23,16 @@ import {
 const WORST_GUIDE = "g".repeat(16_000);
 const head = { types: {}, depths: {} };
 
-function budgetAt(contextWindow: number, maxOutputTokens: number) {
+function budgetAt(
+  contextWindow: number,
+  maxOutputTokens: number,
+  kind: "ingest" | "lint" = "ingest",
+) {
   return wikiContextBudget({
     contextWindow,
     maxOutputTokens,
     instructions: buildWikiSystemPrompt({
-      kind: "ingest",
+      kind,
       guide: WORST_GUIDE,
       indexHead: head,
     }),
@@ -71,15 +75,28 @@ describe("preflight", () => {
       guide: "",
       indexHead: head,
     });
+    const lint = buildWikiSystemPrompt({
+      kind: "lint",
+      guide: "",
+      indexHead: head,
+    });
     expect({
       fixedPrompt: Buffer.byteLength(fixed),
+      lintPrompt: Buffer.byteLength(lint),
       alwaysTools: Buffer.byteLength(wikiToolDefinitions()),
       minimumInput: budgetAt(WIKI_MIN_CONTEXT_WINDOW, WIKI_MIN_OUTPUT_TOKENS)
         .maxInputBytes,
+      lintMinimumInput: budgetAt(
+        WIKI_MIN_CONTEXT_WINDOW,
+        WIKI_MIN_OUTPUT_TOKENS,
+        "lint",
+      ).maxInputBytes,
     }).toEqual({
       fixedPrompt: 2_815,
-      alwaysTools: 13_896,
-      minimumInput: 45_573,
+      lintPrompt: 3_810,
+      alwaysTools: 14_015,
+      minimumInput: 45_454,
+      lintMinimumInput: 44_459,
     });
   });
 });

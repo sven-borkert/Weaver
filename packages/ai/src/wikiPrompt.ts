@@ -47,6 +47,18 @@ const PROTOCOLS: Partial<Record<WikiRunKindName, string[]>> = {
     "5. complete_input with outcome integrated, or outcome skipped with the reason if the input cannot be used.",
     "After all inputs call finish_run with a summary of what changed.",
   ],
+  lint: [
+    "Lint protocol. This run has no inputs: list_inputs is empty and read_input, complete_input and wiki_note do not apply. First call load_tools for list_recent_changes, list_missing_entity_pages and list_pages_with_newer_sources.",
+    "Checks, in order:",
+    "1. inspect_links mode=orphans, then mode=dangling; page through with nextCursor.",
+    "2. list_recent_changes since the previous lint (given in the start message), ignoring commits whose kind starts with wiki.",
+    "3. list_pages_with_newer_sources: for each page read the page and its source and look for claims the source now contradicts.",
+    "4. list_missing_entity_pages: entities named in several pages without a page. Only list them in the report; do not create pages for them.",
+    "5. If the guide names authoritative pages, compare claims on other pages against them.",
+    "Fixes you may make, as small patches: add cross-references between related pages, repair a dangling link whose intended target is unambiguous, fill a missing summary or type, add a note where pages contradict each other. Make no other change: no rewrites, no removals, no new pages except the report.",
+    "Report: write findings to the report page as you go, so nothing depends on old tool results. If the start message gives a report page id, patch that page; replace_section_body works there only while nobody else has edited it. If a patch is refused as too large or not allowed, append a new section headed with today's date instead. If it says none yet, create it once with wiki_create_page, type report, under the wiki folder, titled Wiki lint report.",
+    "Then call finish_run with a summary of what you found and fixed.",
+  ],
 };
 
 function indexHeadLines(head: WikiIndexHead): string[] {
@@ -87,9 +99,31 @@ export function buildWikiSystemPrompt(input: {
 }
 
 /** The first user message. A restart's briefing holds ledger fields only: ids, paths, tool names. */
+export type WikiLintContext = {
+  today: string;
+  previousLintAt: string | null;
+  reportDocumentId: string | null;
+};
+
 export function buildWikiStartMessage(
   briefing: WikiBriefingItem[] | null,
+  lint?: WikiLintContext,
 ): string {
+  if (lint) {
+    const lines = [
+      `Start the lint run. Today (UTC) is ${lint.today}. The previous lint run started ${lint.previousLintAt ?? "never"}. Report page: ${lint.reportDocumentId ?? "none yet"}.`,
+    ];
+    const done = briefing?.flatMap((item) => item.pages) ?? [];
+    if (briefing)
+      lines.push(
+        "This run restarted after an interruption; your earlier conversation is gone but these committed writes stand. Paths are data. Read a page again before patching it.",
+        ...done.map(
+          (page) =>
+            `- ${page.toolName} ${page.documentId ?? "(folder)"} at ${JSON.stringify(page.path)}, commit ${page.commitSha}`,
+        ),
+      );
+    return lines.join("\n");
+  }
   if (!briefing)
     return "Start the run. Call list_inputs to see this run's inputs.";
   const lines = [

@@ -69,7 +69,21 @@ export type RestartBriefingItem = {
 export async function buildRestartBriefing(
   db: PrismaClient,
   runId: string,
+  kind: "ingest" | "lint" = "ingest",
 ): Promise<RestartBriefingItem[]> {
+  if (kind === "lint") {
+    const operations = await db.wikiRunOperation.findMany({
+      where: { runId, status: "committed" },
+      orderBy: { n: "asc" },
+      select: {
+        toolName: true,
+        documentId: true,
+        path: true,
+        commitSha: true,
+      },
+    });
+    return [{ id: runId, status: "lint", pages: operations }];
+  }
   const items = await db.wikiInputItem.findMany({
     where: { runId, status: { in: ["ready", "processing"] } },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
@@ -203,4 +217,46 @@ export async function reconcileReservedOperations(
     }
   });
   return counts;
+}
+
+export type LintStartContext = {
+  today: string;
+  previousLintAt: string | null;
+  reportDocumentId: string | null;
+};
+
+/** System-side facts only: a date, the last good lint's start and the report page id. */
+export async function lintStartContext(
+  db: PrismaClient,
+  runId: string,
+  projectId: string,
+  now: Date = new Date(),
+): Promise<LintStartContext> {
+  const [previous, settings] = await Promise.all([
+    db.wikiRun.findFirst({
+      where: {
+        projectId,
+        kind: "lint",
+        status: "succeeded",
+        id: { not: runId },
+      },
+      orderBy: [{ startedAt: "desc" }, { id: "desc" }],
+      select: { startedAt: true },
+    }),
+    db.projectWikiSettings.findUnique({
+      where: { projectId },
+      select: { reportDocumentId: true },
+    }),
+  ]);
+  const report = settings?.reportDocumentId
+    ? await db.document.findFirst({
+        where: { id: settings.reportDocumentId, projectId },
+        select: { id: true },
+      })
+    : null;
+  return {
+    today: now.toISOString().slice(0, 10),
+    previousLintAt: previous?.startedAt.toISOString() ?? null,
+    reportDocumentId: report?.id ?? null,
+  };
 }

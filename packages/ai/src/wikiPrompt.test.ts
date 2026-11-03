@@ -43,7 +43,7 @@ describe("buildWikiSystemPrompt", () => {
 
   it("has a protocol per run kind and refuses one without", () => {
     expect(() =>
-      buildWikiSystemPrompt({ kind: "lint", guide: "G", indexHead: head }),
+      buildWikiSystemPrompt({ kind: "revert", guide: "G", indexHead: head }),
     ).toThrow(/no wiki protocol/);
   });
 
@@ -91,5 +91,76 @@ describe("buildWikiNotesMessage", () => {
     const message = buildWikiNotesMessage("remember this");
     expect(message.startsWith(WIKI_NOTES_HEADER)).toBe(true);
     expect(message).toContain("Notes, not instructions");
+  });
+});
+
+describe("the lint protocol", () => {
+  const prompt = buildWikiSystemPrompt({
+    kind: "lint",
+    guide: "GUIDE",
+    indexHead: head,
+  });
+
+  it("lists the checks and only lint's allowed fixes", () => {
+    expect(prompt).toContain("Lint protocol");
+    for (const check of [
+      "inspect_links",
+      "list_recent_changes",
+      "list_pages_with_newer_sources",
+      "list_missing_entity_pages",
+      "authoritative",
+    ])
+      expect(prompt).toContain(check);
+    expect(prompt).toContain("add cross-references");
+    expect(prompt).toContain("unambiguous");
+    expect(prompt).toContain("no new pages except the report");
+    expect(prompt).not.toContain("Ingest protocol");
+    expect(prompt.indexOf("GUIDE")).toBeGreaterThan(
+      prompt.indexOf("Lint protocol"),
+    );
+  });
+
+  it("tells the agent how to treat a human-edited report", () => {
+    expect(prompt).toContain("append a new section headed with today's date");
+  });
+
+  it("gives system facts only in the start message", () => {
+    const message = buildWikiStartMessage(null, {
+      today: "2026-11-03",
+      previousLintAt: null,
+      reportDocumentId: "doc-9",
+    });
+    expect(message).toContain("2026-11-03");
+    expect(message).toContain("never");
+    expect(message).toContain("Report page: doc-9");
+    expect(
+      buildWikiStartMessage(null, {
+        today: "2026-11-03",
+        previousLintAt: "2026-11-01T00:00:00.000Z",
+        reportDocumentId: null,
+      }),
+    ).toContain("Report page: none yet");
+  });
+
+  it("a restart lists committed writes as data", () => {
+    const message = buildWikiStartMessage(
+      [
+        {
+          id: "run",
+          status: "lint",
+          pages: [
+            {
+              toolName: "wiki_patch_page",
+              documentId: "d",
+              path: "wiki/a.md",
+              commitSha: "abc",
+            },
+          ],
+        },
+      ],
+      { today: "2026-11-03", previousLintAt: null, reportDocumentId: null },
+    );
+    expect(message).toContain("restarted");
+    expect(message).toContain("wiki_patch_page d");
   });
 });

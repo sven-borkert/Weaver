@@ -155,3 +155,7 @@ never emit from a transactional helper. Only accepted transitions emit. Events a
 policy/revision, status, safe error code and byte/duration counts, never names,
 endpoints, arguments, results, or raw exceptions. Unknown certainty remains separate
 from the cause code. Failed discovery emits after its failure summary commits.
+
+## Wiki lint events
+
+A started lint run emits `wiki.run.started` (details `runId`, `kind`, `trigger`); a skipped scheduled slot emits `wiki.settings.changed` with `change: lint_skipped` and a `reason` from a closed list; clearing the pause emits `change: lint-pause-cleared`. Details carry ids and codes only.

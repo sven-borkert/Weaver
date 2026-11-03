@@ -409,6 +409,29 @@ describe("wiki agent persona", () => {
     });
   });
 
+  it("lint creates the report once, then finishes", async () => {
+    const LINT = `${WIKI_SYSTEM}\nLint protocol. This run has no inputs.`;
+    const next = async (start, messages) => {
+      const chunks = await chatWithSystem(LINT, [
+        { role: "user", content: start },
+        ...messages,
+      ]);
+      const [call] = toolCalls(chunks);
+      return {
+        name: call.function.name,
+        args: JSON.parse(call.function.arguments),
+      };
+    };
+    const none = "Start the lint run. Report page: none yet.";
+    const created = await next(none, []);
+    assert.equal(created.name, "wiki_create_page");
+    assert.equal(created.args.properties.type, "report");
+    const history = turn(created.name, created.args, { documentId: SOURCE });
+    assert.equal((await next(none, history)).name, "finish_run");
+    const existing = `Start the lint run. Report page: ${SOURCE}.`;
+    assert.equal((await next(existing, [])).name, "finish_run");
+  });
+
   it("leaves the assistant persona alone", async () => {
     const chunks = await chat([
       { role: "user", content: "say something plain" },

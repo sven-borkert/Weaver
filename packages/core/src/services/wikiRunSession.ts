@@ -152,6 +152,14 @@ export class WikiRunSession {
     return assertLiveWikiRun(this.db, this.lease);
   }
 
+  private requireIngest(what: string): void {
+    if (this.lease.kind !== "ingest")
+      throw new CoreError(
+        "BAD_REQUEST",
+        `${what} applies to ingest runs only; this run has no inputs`,
+      );
+  }
+
   private async requireRunItem(id: string) {
     const item = await this.db.wikiInputItem.findFirst({
       where: { id, projectId: this.projectId, runId: this.lease.id },
@@ -180,6 +188,7 @@ export class WikiRunSession {
 
   /** Metadata only: the text is read through the ordinary reads, window by window. */
   async readInput(id: string) {
+    this.requireIngest("read_input");
     const item = await this.requireRunItem(id);
     if (item.status !== "ready" && item.status !== "processing")
       throw new CoreError(
@@ -211,6 +220,7 @@ export class WikiRunSession {
   }
 
   async writeNote(text: string): Promise<{ chars: number }> {
+    this.requireIngest("wiki_note");
     if (!this.currentItemId)
       throw new CoreError("BAD_REQUEST", "Call read_input first");
     const clean = stripUnwanted(text);
@@ -240,6 +250,7 @@ export class WikiRunSession {
     outcome: "integrated" | "skipped",
     note: string,
   ): Promise<{ id: string; status: string }> {
+    this.requireIngest("complete_input");
     const item = await this.requireRunItem(id);
     const outcomeNote = redactSecrets(
       plainText(note, OUTCOME_NOTE_MAX_CHARS, "note"),
@@ -325,7 +336,9 @@ export class WikiRunSession {
   }
 
   private requireWritableContext(): string | null {
-    if (this.lease.kind === "ingest" && !this.currentItemId)
+    // A lint run has no inputs, so it writes without a current item.
+    if (this.lease.kind === "lint") return null;
+    if (!this.currentItemId)
       throw new CoreError(
         "BAD_REQUEST",
         "Call read_input for the input you are integrating before writing",
@@ -539,6 +552,7 @@ export class WikiRunSession {
     properties: WikiPageProps;
   }): Promise<WikiWriteOutcome> {
     const itemId = this.requireWritableContext();
+    if (this.lease.kind === "lint") await this.assertLintMayCreate(input);
     const existing = await this.existingPageForItem(itemId, input);
     if (existing) return existing;
     const processed = await preprocessAgentMarkdown(
@@ -560,6 +574,15 @@ export class WikiRunSession {
         ...(source ? { source } : {}),
       },
     });
+    if (this.lease.kind === "lint" && result.resourceId)
+      await this.db.projectWikiSettings.updateMany({
+        where: {
+          projectId: this.projectId,
+          agentId: this.lease.agentId,
+          reportDocumentId: null,
+        },
+        data: { reportDocumentId: result.resourceId },
+      });
     return {
       documentId: result.resourceId,
       path: result.path,
@@ -570,6 +593,33 @@ export class WikiRunSession {
       unresolvedLinks: processed.unresolvedLinks,
       invalidLinks: processed.invalidLinks,
     };
+  }
+
+  /** A lint run's only page create is the report, and only while none is recorded. */
+  private async assertLintMayCreate(input: {
+    properties: WikiPageProps;
+  }): Promise<void> {
+    const settings = await this.db.projectWikiSettings.findUnique({
+      where: { projectId: this.projectId },
+      select: { reportDocumentId: true },
+    });
+    const recorded = settings?.reportDocumentId
+      ? await this.db.document.findFirst({
+          where: { id: settings.reportDocumentId, projectId: this.projectId },
+          select: { id: true },
+        })
+      : null;
+    if (recorded)
+      throw new CoreError(
+        "CONFLICT",
+        "The report page already exists; patch it instead of creating another page",
+        { reason: "REPORT_EXISTS" },
+      );
+    if (input.properties.type !== "report")
+      throw new CoreError(
+        "BAD_REQUEST",
+        "A lint run may create only the report page, with type report",
+      );
   }
 
   /** The current input already made this page: a retried create returns it instead of a -2 twin. */
@@ -684,6 +734,8 @@ export class WikiRunSession {
     name: string;
   }): Promise<{ path: string; commitSha: string }> {
     const itemId = this.requireWritableContext();
+    if (this.lease.kind === "lint")
+      throw new CoreError("BAD_REQUEST", "A lint run does not create folders");
     const result = await this.write({
       toolName: "wiki_create_folder",
       inputItemId: itemId,

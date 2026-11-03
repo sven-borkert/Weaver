@@ -50,6 +50,8 @@ describe("wiki agent registry", () => {
         "entity_neighborhood",
         "list_recent_changes",
         "content_history",
+        "list_missing_entity_pages",
+        "list_pages_with_newer_sources",
       ].sort(),
     );
     expect(
@@ -108,6 +110,6 @@ describe("wiki agent registry", () => {
     expect({
       always: sum(WIKI_AGENT_TOOLS),
       loadable: sum(WIKI_AGENT_LOADABLE_TOOLS),
-    }).toEqual({ always: 13_876, loadable: 8_012 });
+    }).toEqual({ always: 13_995, loadable: 8_638 });
   });
 });

@@ -236,6 +236,13 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
     onSuccess: refresh,
     onError: (error) => toast.error(error.message),
   });
+  const maintenance = api.wiki.runMaintenance.useMutation({
+    onSuccess: async () => {
+      toast.success("Maintenance started");
+      await refresh();
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
   if (isQueryAccessError(runsQuery.error))
     return (
@@ -249,6 +256,21 @@ export function WikiRunsScreen({ projectId }: { projectId: string }) {
     <div className="flex h-full flex-col">
       <WikiTabs projectId={projectId} active="runs" />
       <div className="space-y-4 overflow-auto p-6">
+        {canEdit ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              disabled={maintenance.isPending}
+              onClick={() => maintenance.mutate({ projectId })}
+            >
+              Run maintenance now
+            </Button>
+            <span className="text-text-3 text-[12px]">
+              Checks links, recent changes and stale pages and writes a report.
+              Once an hour at most.
+            </span>
+          </div>
+        ) : null}
         {usage ? (
           <p className="text-text-2 text-[12px]">
             Last 30 days: {usage.tokens.toLocaleString("en-US")} tokens ·{" "}

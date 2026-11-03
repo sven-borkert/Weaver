@@ -120,12 +120,15 @@ describe("Git-store contracts", () => {
       "blobShaAt",
       "blobSizeAt",
       "commitDate",
+      "firstParentTrustedBefore",
       "isAncestor",
       "lastCommitForPath",
+      "listCommitShas",
       "listHistoricalPaths",
       "listTrackedBlobs",
       "listTrackedFiles",
       "logChangesBefore",
+      "logChangesForShas",
       "logForPath",
       "logSince",
       "orderCommits",
@@ -213,6 +216,71 @@ describe("Git-store contracts", () => {
       [],
     );
   });
+
+  it("finds an ancestry boundary and lists a range with merge file changes", async () => {
+    const { openProjectRepo, withProjectRepo } = await import("./gitStore");
+    const projectId = "99999999-9999-4999-8999-999999999999";
+    const author = {
+      name: "Alice",
+      email: "alice@test.local",
+      userId: "11111111-1111-4111-8111-111111111111",
+    };
+    const ids = await withProjectRepo(projectId, async (repo) => {
+      await repo.writeFileAtomic("a.md", "one\n");
+      const trusted = await repo.commitAll("create: a.md", author);
+      const git = simpleGit(repo.dir);
+      const main = (
+        await git.raw(["rev-parse", "--abbrev-ref", "HEAD"])
+      ).trim();
+      await git.raw(["checkout", "-b", "side"]);
+      await repo.writeFileAtomic("side.md", "side\n");
+      await git.add("side.md");
+      await git.raw([
+        "-c",
+        "user.name=X",
+        "-c",
+        "user.email=x@x.test",
+        "commit",
+        "--date=2001-01-01T00:00:00Z",
+        "-m",
+        "side",
+      ]);
+      await git.raw(["checkout", main]);
+      await repo.writeFileAtomic("b.md", "two\n");
+      const second = await repo.commitAll("create: b.md", author);
+      await git.raw([
+        "-c",
+        "user.name=X",
+        "-c",
+        "user.email=x@x.test",
+        "merge",
+        "--no-ff",
+        "-m",
+        "merge side",
+        "side",
+      ]);
+      return { trusted, second, head: (await git.revparse(["HEAD"])).trim() };
+    });
+    const reader = (await openProjectRepo(projectId))!;
+    const future = new Date(Date.now() + 3_600_000);
+    expect(await reader.firstParentTrustedBefore(ids.head, future)).toBe(
+      ids.second,
+    );
+    expect(
+      await reader.firstParentTrustedBefore(ids.head, new Date(0)),
+    ).toBeNull();
+    const shas = await reader.listCommitShas(ids.head, {
+      exclude: ids.trusted,
+      maxCount: 100,
+    });
+    expect(shas).not.toContain(ids.trusted);
+    expect(shas).toHaveLength(3);
+    const entries = await reader.logChangesForShas(shas);
+    expect(entries.map((e) => e.sha)).toEqual(shas);
+    const merge = entries.find((e) => e.sha === ids.head)!;
+    expect(merge.changes.map((c) => c.path)).toEqual(["side.md"]);
+    expect(await reader.logChangesForShas([])).toEqual([]);
+  }, 20_000);
 
   it("writes and reads binary blobs byte-exactly and refuses oversize reads", async () => {
     const { openProjectRepo, withProjectRepo } = await import("./gitStore");
@@ -302,12 +370,15 @@ describe("Git-store contracts", () => {
       "blobShaAt",
       "blobSizeAt",
       "commitDate",
+      "firstParentTrustedBefore",
       "isAncestor",
       "lastCommitForPath",
+      "listCommitShas",
       "listHistoricalPaths",
       "listTrackedBlobs",
       "listTrackedFiles",
       "logChangesBefore",
+      "logChangesForShas",
       "logForPath",
       "logSince",
       "orderCommits",

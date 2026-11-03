@@ -47,6 +47,37 @@ export type WikiRunEnded = {
   returned: number;
 };
 
+export const WIKI_LINT_FAILURES_TO_PAUSE = 5;
+
+/** A succeeded run resets the streak; failed, or stopped with an error, extends it; the rest change nothing. */
+async function recordLintOutcome(
+  tx: Tx,
+  projectId: string,
+  end: WikiRunEnd,
+): Promise<void> {
+  if (end.status === "succeeded") {
+    await tx.projectWikiSettings.updateMany({
+      where: { projectId, lintConsecutiveFailures: { gt: 0 } },
+      data: { lintConsecutiveFailures: 0 },
+    });
+    return;
+  }
+  const errored =
+    end.status === "failed" ||
+    (end.status === "stopped" && end.errorCode !== undefined);
+  if (!errored) return;
+  const [row] = await tx.projectWikiSettings.updateManyAndReturn({
+    where: { projectId },
+    data: { lintConsecutiveFailures: { increment: 1 } },
+    select: { lintConsecutiveFailures: true },
+  });
+  if (row && row.lintConsecutiveFailures >= WIKI_LINT_FAILURES_TO_PAUSE)
+    await tx.projectWikiSettings.updateMany({
+      where: { projectId, lintPausedAt: null },
+      data: { lintPausedAt: new Date() },
+    });
+}
+
 /** Ends a run only from an expected status and returns its unfinished items to the queue. */
 export async function endRunInTx(
   tx: Tx,
@@ -74,10 +105,11 @@ export async function endRunInTx(
       leaseToken: null,
       leaseExpiresAt: null,
     },
-    select: { id: true, projectId: true },
+    select: { id: true, projectId: true, kind: true },
   });
   const run = ended[0];
   if (!run) return null;
+  if (run.kind === "lint") await recordLintOutcome(tx, run.projectId, end);
   const returned = await tx.wikiInputItem.updateMany({
     where: { runId, status: { in: [...WIKI_IN_RUN_ITEM_STATUSES] } },
     data: {

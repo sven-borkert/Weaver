@@ -69,7 +69,7 @@ async function assertEditor(
 }
 
 /** Serializes queue admission and Process on the settings row. */
-async function lockEnabledSettings(
+export async function lockEnabledSettings(
   tx: Tx,
   projectId: string,
 ): Promise<{ agentId: string }> {
@@ -536,13 +536,13 @@ async function bridgeFileItems(
   return jobs;
 }
 
-function runActive(): CoreError {
+export function runActive(): CoreError {
   return new CoreError("CONFLICT", "A wiki run is already active", {
     reason: "RUN_ACTIVE",
   });
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&

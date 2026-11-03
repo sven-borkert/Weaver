@@ -2,6 +2,8 @@ import { readApprovedWikiGuide } from "@weaver/core/services/wikiSettings";
 import {
   findPages,
   inspectLinks,
+  listMissingEntityPages,
+  listPagesWithNewerSources,
   listRecentChanges,
 } from "@weaver/core/services/wikiReads";
 import { z } from "zod";
@@ -16,6 +18,17 @@ import {
 } from "../contract";
 
 const cursor = z.string().max(200).optional();
+
+/** After a byte-bound cut the cursor must resume after the last returned item. */
+function resumeCursor(
+  truncated: boolean,
+  kept: number,
+  next: string | null,
+  lastKey: unknown[],
+): string | null {
+  if (!truncated || kept === 0) return next;
+  return Buffer.from(JSON.stringify(lastKey)).toString("base64url");
+}
 
 export const findPageTool = defineSharedReadTool({
   name: "find_page",
@@ -114,6 +127,66 @@ export const listRecentChangesTool = defineSharedReadTool({
           truncated && items.length > 0 && items.length < result.changes.length
             ? result.changes[items.length]!.sha
             : result.nextCursor,
+      },
+    };
+  },
+});
+
+export const listMissingEntityPagesTool = defineSharedReadTool({
+  name: "list_missing_entity_pages",
+  kind: "read",
+  capability: "content:read",
+  description:
+    "Entities the knowledge graph found in several pages that have no page of their own, most-mentioned first, with the number of pages naming each. For the lint report; do not create pages from it. Continue with nextCursor.",
+  inputSchema: z.object({ projectId: z.uuid(), cursor }),
+  async execute(input, ctx) {
+    requireScope(ctx, input.projectId);
+    const result = await listMissingEntityPages(
+      ctx.db,
+      {
+        projectId: input.projectId,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      },
+      ctx.actor,
+    );
+    const { items, truncated } = boundItems(result.entities, newPageBudget());
+    return {
+      output: {
+        entities: items,
+        nextCursor: resumeCursor(truncated, items.length, result.nextCursor, [
+          items.at(-1)?.pages,
+          items.at(-1)?.name,
+          items.at(-1)?.id,
+        ]),
+      },
+    };
+  },
+});
+
+export const listPagesWithNewerSourcesTool = defineSharedReadTool({
+  name: "list_pages_with_newer_sources",
+  kind: "read",
+  capability: "content:read",
+  description:
+    "Pages whose source document or table was changed after the page was last edited, with the sources and their times. For the lint run; re-read both before changing anything. Continue with nextCursor.",
+  inputSchema: z.object({ projectId: z.uuid(), cursor }),
+  async execute(input, ctx) {
+    requireScope(ctx, input.projectId);
+    const result = await listPagesWithNewerSources(
+      ctx.db,
+      {
+        projectId: input.projectId,
+        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+      },
+      ctx.actor,
+    );
+    const { items, truncated } = boundItems(result.pages, newPageBudget());
+    return {
+      output: {
+        pages: items,
+        nextCursor: resumeCursor(truncated, items.length, result.nextCursor, [
+          items.at(-1)?.id,
+        ]),
       },
     };
   },

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { taskScheduleSchema } from "@weaver/core/scheduledTasks/scheduleSchema";
 import {
   WIKI_NOTE_MAX_CHARS,
   WIKI_QUEUE_MAX_ITEMS,
@@ -27,6 +28,8 @@ export const updateWikiSettingsInput = wikiRevisionInput.extend({
     .max(WIKI_SPEND_ALERT_MAX_CENTS)
     .nullable()
     .optional(),
+  lintSchedule: taskScheduleSchema.nullable().optional(),
+  lintTimezone: z.string().min(1).max(64).optional(),
 });
 export const setWikiGuideDocumentInput = wikiRevisionInput.extend({
   documentId: z.uuid(),

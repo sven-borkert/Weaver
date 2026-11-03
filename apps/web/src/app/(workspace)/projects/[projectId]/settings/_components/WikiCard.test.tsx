@@ -29,6 +29,7 @@ vi.mock("~/trpc/react", () => {
         disable: mutation(),
         revokeAgent: mutation(),
         update: mutation(),
+        clearLintPause: mutation(),
         setGuideDocument: mutation(),
         approveGuide: mutation(),
         resolveSuggestion: mutation(),
@@ -65,6 +66,12 @@ const base: Settings = {
   destructivePausedAt: null,
   spendAlertCentsPerDay: null,
   lintSchedule: null,
+  lintTimezone: "UTC",
+  lintNextRunAt: null,
+  lintPausedAt: null,
+  lintConsecutiveFailures: 0,
+  lintSkipped: null,
+  reportDocumentId: null,
 };
 const on: Settings = {
   ...base,
@@ -176,4 +183,26 @@ it("refuses to show an oversized guide", () => {
   );
   expect(html).toContain("16,000 bytes");
   expect(html).not.toContain("Exact text every run receives");
+});
+
+it("shows the schedule, a skipped slot and a pause with Resume for an Owner only", () => {
+  const scheduled: Settings = {
+    ...on,
+    lintSchedule: { kind: "daily", hour: 3, minute: 0 },
+    lintNextRunAt: new Date("2026-11-04T03:00:00Z"),
+    lintPausedAt: new Date("2026-11-03T03:00:00Z"),
+    lintConsecutiveFailures: 5,
+    lintSkipped: { at: new Date("2026-11-02T03:00:00Z"), reason: "missed" },
+  };
+  const owner = render(scheduled, true);
+  expect(owner).toContain("Daily at 03:00, UTC");
+  expect(owner).toContain("paused after 5 failed runs");
+  expect(owner).toContain("Resume");
+  expect(owner).toContain("was skipped");
+  expect(owner).toContain("Maintenance schedule");
+  const maintainer = render(scheduled, false);
+  expect(maintainer).toContain("paused after 5 failed runs");
+  expect(maintainer).not.toContain("Resume");
+  expect(maintainer).not.toContain("Maintenance schedule");
+  expect(render(on, true)).toContain("Scheduled maintenance is off.");
 });

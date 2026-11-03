@@ -23,6 +23,7 @@ vi.mock("~/trpc/react", () => {
         run: { useQuery: () => ({ data: undefined, error: null }) },
         revertRun: mutation,
         cancelRun: mutation,
+        runMaintenance: mutation,
       },
     },
   };
@@ -90,10 +91,10 @@ describe("WikiRunsScreen", () => {
     expect(render()).toContain("indexing 0.25 USD");
   });
 
-  it("does not offer maintenance or classify yet", () => {
-    const html = render();
-    expect(html).not.toContain("Run maintenance now");
-    expect(html).not.toContain("Classify existing pages");
+  it("offers maintenance to an Editor and not to a Viewer", () => {
+    expect(render()).toContain("Run maintenance now");
+    mocked.project = { data: { myRole: "Viewer" }, error: null };
+    expect(render()).not.toContain("Run maintenance now");
   });
 
   it("says when there is nothing and when access is gone", () => {

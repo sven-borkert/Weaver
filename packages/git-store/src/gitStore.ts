@@ -1243,6 +1243,66 @@ function makeRepo(dir: string) {
         trustedAuthor: trusted.has(entry.sha),
       }));
     },
+    async firstParentTrustedBefore(commitish: string, before: Date) {
+      assertCommitish(commitish);
+      let raw: string;
+      try {
+        raw = await gitFor(dir).raw([
+          "log",
+          "--first-parent",
+          "--format=%H %at",
+          commitish,
+          "--",
+        ]);
+      } catch {
+        return null;
+      }
+      const trusted = await trustedCommits(dir);
+      const cutoff = Math.floor(before.getTime() / 1000);
+      for (const line of raw.split("\n")) {
+        const [sha, at] = line.split(" ");
+        if (sha && trusted.has(sha) && Number(at) < cutoff) return sha;
+      }
+      return null;
+    },
+    async listCommitShas(
+      commitish: string,
+      options: { exclude: string | null; maxCount: number },
+    ) {
+      assertCommitish(commitish);
+      if (options.exclude !== null) assertCommitish(options.exclude);
+      try {
+        const raw = await gitFor(dir).raw([
+          "rev-list",
+          "--max-count",
+          String(options.maxCount),
+          commitish,
+          ...(options.exclude === null ? [] : ["--not", options.exclude]),
+          "--",
+        ]);
+        return raw.split("\n").filter((sha) => GIT_SHA_RE.test(sha));
+      } catch {
+        return [];
+      }
+    },
+    async logChangesForShas(shas: string[]): Promise<GitChangeEntry[]> {
+      if (shas.length === 0) return [];
+      for (const sha of shas) assertCommitish(sha);
+      const raw = await gitFor(dir).raw([
+        "log",
+        "--no-walk=unsorted",
+        "--name-status",
+        "--diff-merges=first-parent",
+        `--format=${CHANGE_LOG_FORMAT}`,
+        ...shas,
+        "--",
+      ]);
+      const trusted = await trustedCommits(dir);
+      return parseChangeLog(raw).map((entry) => ({
+        ...entry,
+        trustedAuthor: trusted.has(entry.sha),
+      }));
+    },
     async fetchLocalRef(
       sourceGitDirectory: string,
       sourceRef: string,
@@ -1338,9 +1398,12 @@ const READER_KEYS = [
   "readBlobsAt",
   "logForPath",
   "logChangesBefore",
+  "logChangesForShas",
   "logSince",
   "orderCommits",
   "isAncestor",
+  "firstParentTrustedBefore",
+  "listCommitShas",
   "listHistoricalPaths",
   "renamedPathBetween",
   "commitDate",
