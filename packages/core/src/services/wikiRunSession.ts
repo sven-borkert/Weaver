@@ -19,7 +19,7 @@ import {
   type BudgetDelta,
 } from "../wiki/budget";
 import { WIKI_RUN_CAPS } from "../wiki/caps";
-import { normalizeGuideText } from "../wiki/guideText";
+import { normalizeGuideText, stripIgnorable } from "../wiki/guideText";
 import { trackedLink } from "../wiki/links";
 import { hashNormalizedTitle } from "./searchLexical";
 import {
@@ -41,7 +41,7 @@ export const WIKI_SUMMARY_MAX_CHARS = 4_000;
 export const WIKI_SUGGESTION_MAX_CHARS = 1_000;
 export const WIKI_SUGGESTIONS_PER_RUN = 5;
 const OUTCOME_NOTE_MAX_CHARS = 1_000;
-const CONTROL_EXCEPT_NEWLINE = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\p{Zl}\p{Zp}]/u;
+const UNWANTED_CHARS = /[\x00-\x08\x0b-\x1f\x7f\p{Zl}\p{Zp}\p{Cf}]/gu;
 const UNVERIFIED_PATH_MAX = 1_024;
 
 export type WikiWriteOutcome = {
@@ -66,18 +66,19 @@ type PatchActions = Extract<
   { kind: "document.patch" }
 >["actions"];
 
+/** Control, bidi and format characters are dropped, not refused. */
+function stripUnwanted(raw: string): string {
+  return stripIgnorable(raw.replace(UNWANTED_CHARS, ""));
+}
+
 function plainText(
   raw: string,
   max: number,
   field: string,
   options: { allowEmpty?: boolean } = {},
 ): string {
-  const text = raw.trim();
-  if (
-    (!options.allowEmpty && text.length === 0) ||
-    text.length > max ||
-    CONTROL_EXCEPT_NEWLINE.test(text)
-  )
+  const text = stripUnwanted(raw).trim();
+  if ((!options.allowEmpty && text.length === 0) || text.length > max)
     throw new CoreError(
       "BAD_REQUEST",
       `${field} must be plain text of at most ${max} characters`,
@@ -212,16 +213,17 @@ export class WikiRunSession {
   async writeNote(text: string): Promise<{ chars: number }> {
     if (!this.currentItemId)
       throw new CoreError("BAD_REQUEST", "Call read_input first");
-    if (text.length > WIKI_NOTE_BLOCK_MAX_CHARS)
+    const clean = stripUnwanted(text);
+    if (clean.length > WIKI_NOTE_BLOCK_MAX_CHARS)
       throw new CoreError(
         "BAD_REQUEST",
         `Notes are limited to ${WIKI_NOTE_BLOCK_MAX_CHARS} characters`,
       );
     await this.db.wikiInputItem.updateMany({
       where: { id: this.currentItemId, runId: this.lease.id },
-      data: { agentNote: text.replace(/\u0000/g, "") },
+      data: { agentNote: clean },
     });
-    return { chars: text.length };
+    return { chars: clean.length };
   }
 
   async currentNote(): Promise<string | null> {
@@ -342,19 +344,6 @@ export class WikiRunSession {
     return undefined;
   }
 
-  private async assertWithinWriteCap(): Promise<void> {
-    const run = await this.db.wikiRun.findUniqueOrThrow({
-      where: { id: this.lease.id },
-      select: { writes: true },
-    });
-    if (run.writes >= WIKI_RUN_CAPS[this.lease.kind].writes) {
-      this.stopRequested = "write_cap";
-      throw new CoreError("CONFLICT", "This run reached its write limit", {
-        reason: "RUN_CAP",
-      });
-    }
-  }
-
   /** Atomic and fenced: a closed lease allocates nothing; a restart resumes above the stored counter. */
   private async reserve(input: {
     operation: WikiOperation;
@@ -365,7 +354,8 @@ export class WikiRunSession {
     sourceReferenced: boolean;
   }): Promise<{ n: number; operationId: string }> {
     const requestHash = wikiRequestHash(input.operation);
-    return this.db.$transaction(async (tx) => {
+    const cap = WIKI_RUN_CAPS[this.lease.kind].writes;
+    const reserved = await this.db.$transaction(async (tx) => {
       const [run] = await tx.wikiRun.updateManyAndReturn({
         where: {
           id: this.lease.id,
@@ -373,12 +363,20 @@ export class WikiRunSession {
           leaseToken: this.lease.leaseToken,
         },
         data: { operationCounter: { increment: 1 } },
-        select: { operationCounter: true },
+        select: { operationCounter: true, writes: true },
       });
       if (!run)
         throw new CoreError("CONFLICT", "The run's lease is gone", {
           reason: "WIKI_FENCE_CLOSED",
         });
+      // The run row is locked by the update above, so parallel reserves count one at a time.
+      const used = await tx.wikiRunOperation.count({
+        where: {
+          runId: this.lease.id,
+          status: { in: ["reserved", "committed"] },
+        },
+      });
+      if (run.writes >= cap || used >= cap) return { capped: true as const };
       const n = run.operationCounter;
       const operationId = formatWikiOperationId("wiki-run", this.lease.id, n);
       await tx.wikiRunOperation.create({
@@ -394,8 +392,15 @@ export class WikiRunSession {
           sourceReferenced: input.sourceReferenced,
         },
       });
-      return { n, operationId };
+      return { capped: false as const, n, operationId };
     });
+    if (reserved.capped) {
+      this.stopRequested = "write_cap";
+      throw new CoreError("CONFLICT", "This run reached its write limit", {
+        reason: "RUN_CAP",
+      });
+    }
+    return { n: reserved.n, operationId: reserved.operationId };
   }
 
   private ledgerFor(n: number): WikiWriteLedger {
@@ -480,7 +485,6 @@ export class WikiRunSession {
     documentId?: string;
     baseCommitSha?: string;
   }): Promise<{ resourceId: string | null; path: string; commitSha: string }> {
-    await this.assertWithinWriteCap();
     const sourceReferenced =
       input.operation.kind !== "content.lifecycle" &&
       input.operation.source !== undefined;
@@ -488,32 +492,15 @@ export class WikiRunSession {
       ...input,
       sourceReferenced,
     });
+    let result: Awaited<ReturnType<typeof applyWikiOperation>>;
     try {
-      const result = await applyWikiOperation(this.db, {
+      result = await applyWikiOperation(this.db, {
         run: wikiRunFence(this.db, this.lease),
         guards: () => wikiWriteGuardsFor(this.db, this.projectId),
         operation: input.operation,
         operationId,
         ledger: this.ledgerFor(n),
       });
-      await this.db.wikiRunOperation.update({
-        where: { runId_n: { runId: this.lease.id, n } },
-        data: {
-          status: "committed",
-          commitSha: result.commitSha,
-          committedAt: new Date(),
-          documentId: result.resourceId,
-          path: result.path.slice(0, UNVERIFIED_PATH_MAX),
-        },
-      });
-      await checkDestructivePause(this.db, this.projectId);
-      const run = await this.db.wikiRun.findUniqueOrThrow({
-        where: { id: this.lease.id },
-        select: { writes: true },
-      });
-      if (run.writes >= WIKI_RUN_CAPS[this.lease.kind].writes)
-        this.stopRequested = "write_cap";
-      return result;
     } catch (error) {
       // A reserved row after a crash is reconciled; a thrown write simply did not happen.
       await this.db.wikiRunOperation
@@ -524,6 +511,25 @@ export class WikiRunSession {
         .catch(() => undefined);
       throw error;
     }
+    // Committed in Git: from here the op is never failed; a lost update stays reserved for reconciliation.
+    await this.db.wikiRunOperation.update({
+      where: { runId_n: { runId: this.lease.id, n } },
+      data: {
+        status: "committed",
+        commitSha: result.commitSha,
+        committedAt: new Date(),
+        documentId: result.resourceId,
+        path: result.path.slice(0, UNVERIFIED_PATH_MAX),
+      },
+    });
+    await checkDestructivePause(this.db, this.projectId);
+    const run = await this.db.wikiRun.findUniqueOrThrow({
+      where: { id: this.lease.id },
+      select: { writes: true },
+    });
+    if (run.writes >= WIKI_RUN_CAPS[this.lease.kind].writes)
+      this.stopRequested = "write_cap";
+    return result;
   }
 
   async createPage(input: {
@@ -677,9 +683,10 @@ export class WikiRunSession {
     parentPath: string[];
     name: string;
   }): Promise<{ path: string; commitSha: string }> {
+    const itemId = this.requireWritableContext();
     const result = await this.write({
       toolName: "wiki_create_folder",
-      inputItemId: this.currentItemId,
+      inputItemId: itemId,
       operation: {
         kind: "content.lifecycle",
         action: "folder_create",

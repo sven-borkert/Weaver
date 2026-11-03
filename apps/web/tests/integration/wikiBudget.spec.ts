@@ -36,6 +36,7 @@ import { listBackgroundWork } from "@weaver/core/services/backgroundWork";
 import { WIKI_AGENT_DISPATCH } from "@weaver/assistant-tools/wikiAgentRegistry";
 import { z } from "zod";
 import {
+  failOn,
   humanEdit,
   humanPage,
   startedRun,
@@ -666,6 +667,153 @@ describe("wiki agent writes", () => {
     expect(r.session.stopRequested).toBe("write_cap");
   }, 30_000);
 
+  it("counts a folder create as a write with no characters", async () => {
+    const r = await started();
+    await r.call("wiki_create_folder", { parentPath: [], name: "Notes" });
+    expect(
+      await r.db.wikiRun.findUniqueOrThrow({ where: { id: r.lease.id } }),
+    ).toMatchObject({ writes: 1, grossCharsChanged: 0 });
+    expect(await r.db.wikiRunOperation.findFirst()).toMatchObject({
+      toolName: "wiki_create_folder",
+      status: "committed",
+      grossCharsChanged: 0,
+      charsAdded: 0,
+      documentId: null,
+      sourceReferenced: false,
+    });
+    await expect(
+      r.call("complete_input", {
+        id: r.items[0]!.id,
+        outcome: "integrated",
+        note: "done",
+      }),
+    ).rejects.toMatchObject({ reason: "NOT_INTEGRATED" });
+  }, 30_000);
+
+  it("requires read_input before a folder create in an ingest run", async () => {
+    const p = await wikiProject();
+    const run = await startedRun(p);
+    await expect(
+      run.call("wiki_create_folder", { parentPath: [], name: "Early" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await p.db.wikiRunOperation.count()).toBe(0);
+  }, 30_000);
+
+  it("admits exactly one of several parallel writes at the cap", async () => {
+    const r = await started();
+    await r.db.wikiRun.update({
+      where: { id: r.lease.id },
+      data: { operationCounter: 119 },
+    });
+    await r.db.wikiRunOperation.createMany({
+      data: Array.from({ length: 119 }, (_, i) => ({
+        runId: r.lease.id,
+        n: i + 1,
+        toolName: "wiki_create_page",
+        requestHash: "a".repeat(64),
+        operationId: `wiki-run:${r.lease.id}:${String(i + 1).padStart(4, "0")}`,
+        status: i % 2 === 0 ? ("committed" as const) : ("reserved" as const),
+      })),
+    });
+    const results = await Promise.allSettled(
+      [1, 2, 3, 4, 5].map((i) =>
+        r.call("wiki_create_page", { ...page, title: `Parallel ${i}` }),
+      ),
+    );
+    expect(results.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+    for (const x of results)
+      if (x.status === "rejected")
+        expect(x.reason).toMatchObject({ reason: "RUN_CAP" });
+  }, 60_000);
+
+  describe("a committed write is never marked failed", () => {
+    async function viaFlaky(
+      r: Awaited<ReturnType<typeof started>>,
+      model: string,
+      method: string,
+      when: (args: unknown) => boolean,
+    ) {
+      const flaky = failOn(r.db, model, method, when);
+      const session = new WikiRunSession(flaky, r.lease, 64 * 1024);
+      const call = toolCaller(session);
+      await call("read_input", { id: r.items[0]!.id });
+      return call;
+    }
+
+    it("when the destructive-pause check throws after the commit", async () => {
+      const r = await started();
+      const call = await viaFlaky(
+        r,
+        "wikiRunOperation",
+        "aggregate",
+        () => true,
+      );
+      await expect(call("wiki_create_page", page)).rejects.toThrow();
+      const op = await r.db.wikiRunOperation.findFirstOrThrow();
+      expect(op.status).toBe("committed");
+      expect(op.commitSha).toBeTruthy();
+      expect(op.sourceReferenced).toBe(true);
+    }, 30_000);
+
+    it("leaves the op reserved when the committed update itself fails", async () => {
+      const r = await started();
+      const call = await viaFlaky(
+        r,
+        "wikiRunOperation",
+        "update",
+        (args) =>
+          (args as { data?: { status?: string } }).data?.status === "committed",
+      );
+      await expect(call("wiki_create_page", page)).rejects.toThrow();
+      expect(await r.db.wikiRunOperation.findFirstOrThrow()).toMatchObject({
+        status: "reserved",
+      });
+      expect(await r.db.document.count({ where: { title: page.title } })).toBe(
+        1,
+      );
+    }, 30_000);
+  });
+
+  describe("no-op patches", () => {
+    it("refuses a replace_text that changes nothing", async () => {
+      const r = await started();
+      const human = await humanPage(r, "Plain", "Words here.");
+      await expect(
+        r.call("wiki_patch_page", {
+          documentId: human.id,
+          baseCommitSha: human.headCommitSha,
+          actions: [
+            { action: "replace_text", find: "Words", replace: "Words" },
+          ],
+        }),
+      ).rejects.toMatchObject({
+        code: "BAD_REQUEST",
+        details: { reason: "NO_CHANGE" },
+      });
+      expect(
+        await r.db.wikiRunOperation.count({
+          where: { status: "committed", sourceReferenced: true },
+        }),
+      ).toBe(0);
+    }, 30_000);
+
+    it("accepts a property-only patch with a real change", async () => {
+      const r = await started();
+      const human = await humanPage(r, "Plain", "Words here.");
+      await r.call("wiki_patch_page", {
+        documentId: human.id,
+        baseCommitSha: human.headCommitSha,
+        actions: [],
+        properties: { summary: "A real summary" },
+      });
+      expect(
+        await r.db.wikiRunOperation.count({
+          where: { status: "committed", sourceReferenced: true },
+        }),
+      ).toBe(1);
+    }, 30_000);
+  });
+
   it("allocates fixed-width ids and resumes above the highest reserved number", async () => {
     const r = await started();
     await r.db.wikiRun.update({
@@ -773,12 +921,17 @@ describe("wiki agent writes", () => {
     ).toHaveLength(8_000);
   }, 30_000);
 
-  it("validates the summary as plain text", async () => {
+  it("strips control, bidi and format characters instead of refusing", async () => {
     const r = await started();
-    expect(() => r.session.finishRun(`bad\u0007summary`)).toThrow();
-    expect(r.session.finishRun("All good.\nTwo pages.")).toEqual({
+    await r.call("wiki_note", { text: "a\u0007b\u202Ec\u200Bd\u0000e\tf\ng" });
+    expect(await r.session.currentNote()).toBe("abcde\tf\ng");
+    expect(
+      r.session.finishRun("  Good\u0007 \u2066summary\u2069.\nTwo."),
+    ).toEqual({
       finished: true,
     });
+    expect(r.session.finished?.summary).toBe("Good summary.\nTwo.");
+    expect(() => r.session.finishRun("\u0007\u202E")).toThrow();
   }, 30_000);
 
   describe("second project", () => {

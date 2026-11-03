@@ -29,6 +29,7 @@ import {
   testEncryptionKeys,
 } from "./_harness";
 import {
+  failOn,
   humanPage,
   queuedRun,
   wikiProject,
@@ -553,6 +554,72 @@ describe("wiki runner", () => {
       ).toBe(0);
     }, 60_000);
 
+    const heartbeatOnly = (when: () => boolean) =>
+      failOn(
+        getPrisma(),
+        "wikiRun",
+        "updateMany",
+        (args) =>
+          when() &&
+          (args as { data?: { leaseExpiresAt?: unknown } }).data
+            ?.leaseExpiresAt !== undefined,
+        new Error("connection reset"),
+      );
+
+    it("tolerates a transient heartbeat database error", async () => {
+      await seedWikiRoute();
+      const p = await wikiProject();
+      const { run } = await queuedRun(p);
+      let failing = false;
+      let started!: () => void;
+      const inCall = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const execution = executeWikiRun(
+        {
+          ...deps(stallingModel(started), { heartbeatMs: 50 }),
+          db: heartbeatOnly(() => failing),
+        },
+        run.id,
+      );
+      await inCall;
+      failing = true;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      failing = false;
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(await runRow(p, run.id)).toMatchObject({ status: "running" });
+      await p.db.wikiRun.update({
+        where: { id: run.id },
+        data: { leaseToken: randomUUID() },
+      });
+      await execution;
+    }, 60_000);
+
+    it("aborts as a lost lease when heartbeats keep failing past the lease", async () => {
+      await seedWikiRoute();
+      const p = await wikiProject();
+      const { run } = await queuedRun(p);
+      let failing = false;
+      let started!: () => void;
+      const inCall = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      const execution = executeWikiRun(
+        {
+          ...deps(stallingModel(started), { heartbeatMs: 50, leaseMs: 300 }),
+          db: heartbeatOnly(() => failing),
+        },
+        run.id,
+      );
+      await inCall;
+      failing = true;
+      await execution;
+      expect(await runRow(p, run.id)).toMatchObject({
+        status: "cancelled",
+        stopReason: "fence_closed",
+      });
+    }, 60_000);
+
     it("ends without touching a run whose lease moved on", async () => {
       await seedWikiRoute();
       const p = await wikiProject();
@@ -758,19 +825,54 @@ describe("wiki runner", () => {
       expect(row.errorMessage ?? "").not.toContain("sk-supersecret");
     }, 60_000);
 
-    it("does not let a malformed summary end the run", async () => {
+    it("does not let an empty summary end the run", async () => {
       await seedWikiRoute();
       const p = await wikiProject();
       const { run } = await queuedRun(p);
       const script = scripted([
-        () => [["finish_run", { summary: "bad\u0007text" }]],
+        () => [["finish_run", { summary: "\u0007\u202E" }]],
         () => [["finish_run", { summary: "Good text." }]],
       ]);
       await executeWikiRun(deps(script.model), run.id);
       expect(await runRow(p, run.id)).toMatchObject({
-        status: "succeeded",
+        status: "stopped",
+        stopReason: "unfinished_items",
         summary: "Good text.",
       });
+    }, 60_000);
+
+    it("ends succeeded when every item is finished", async () => {
+      await seedWikiRoute();
+      const p = await wikiProject();
+      const { run, items } = await queuedRun(p);
+      await executeWikiRun(
+        deps(scripted(happyScript(items[0]!.id)).model),
+        run.id,
+      );
+      expect(await runRow(p, run.id)).toMatchObject({ status: "succeeded" });
+    }, 60_000);
+
+    it("ends stopped with unfinished_items when finish_run leaves items open", async () => {
+      await seedWikiRoute();
+      const p = await wikiProject();
+      const { run, items } = await queuedRun(p);
+      await executeWikiRun(
+        deps(
+          scripted([() => [["finish_run", { summary: "Gave up early." }]]])
+            .model,
+        ),
+        run.id,
+      );
+      expect(await runRow(p, run.id)).toMatchObject({
+        status: "stopped",
+        stopReason: "unfinished_items",
+        summary: "Gave up early.",
+      });
+      expect(
+        await p.db.wikiInputItem.findUniqueOrThrow({
+          where: { id: items[0]!.id },
+        }),
+      ).toMatchObject({ status: "queued", runId: null });
     }, 60_000);
   });
 

@@ -218,7 +218,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 - At write time `isOwnedAtWrite` needs the row, this agent's run and `lastCommitForPath === lastAgentCommitSha`, so a missed hook or a
   Git pull fails safe to non-owned.
 - `leaseWikiRun`, `heartbeatWikiRun`, `assertLiveWikiRun` and `wikiRunFence` (`wikiRuns.ts`): lease 60 s, heartbeat 15 s. The fence shares its
-  liveness core with `assertPreparingFence`.
+  liveness core with `assertPreparingFence`. The runner heartbeat aborts only on a closed fence or lost lease; other errors retry until 60 s pass since the last good heartbeat.
 
 ## Agent tools
 
@@ -226,7 +226,7 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   schema reserve); `WIKI_AGENT_DISPATCH` is the allowlist. None takes `projectId`: `runScopedRead` omits it and the run row supplies it. Definitions measure
   13,876 B always and 8,012 B loadable, pinned in `wikiAgentRegistry.test.ts`.
 - `WikiRunSession` (`wikiRunSession.ts`) is the tools' only way in: inputs, notes, suggestions, `finish_run` and the writes. A write reserves `n` atomically
-  under the fence, then `applyWikiOperation` runs with a ledger. In an ingest run a write needs `read_input` first, so every page gets that input's source reference.
+  under the fence, then `applyWikiOperation` runs with a ledger. In an ingest run a write needs `read_input` first, so every page gets that input's source reference (folder creates included). The reserve step also enforces the write cap (reserved plus committed ops, under the run-row lock; folder creates count). Once `applyWikiOperation` returns, an op is never `failed`: a lost `committed` update stays `reserved` for reconciliation. A patch that changes no body text and no property is `NO_CHANGE`. `summary`, outcome notes and `wiki_note` have control, bidi and format characters stripped, not refused. `finish_run` with unfinished items ends the run `stopped` / `unfinished_items`.
 - `applyWikiOperation` enforces ownership and budgets itself under the project lock on the worktree body (`admitPatch`, `compileDocumentPatch`, `wiki/budget.ts`),
   so no caller can skip them. Gross is what edits replace or remove; added is everything edits insert. Owned pages are unlimited; `WikiPageBudget` holds non-owned writes only.
   Counters are written in `beforeCommit`, so a crash over-counts and never forgets. Three refusals stop the run.

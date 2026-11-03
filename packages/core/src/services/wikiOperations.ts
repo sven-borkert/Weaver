@@ -178,6 +178,17 @@ async function assertNewLinkTargetsExist(
   }
 }
 
+function propertiesChange(
+  current: object | undefined,
+  next: Extract<WikiOperation, { kind: "document.patch" }>["properties"],
+): boolean {
+  const before = (current ?? {}) as Record<string, unknown>;
+  return Object.entries(next ?? {}).some(
+    ([key, value]) =>
+      JSON.stringify(value ?? null) !== JSON.stringify(before[key] ?? null),
+  );
+}
+
 function changedPropertyCount(
   properties: Extract<WikiOperation, { kind: "document.patch" }>["properties"],
 ): number {
@@ -370,6 +381,15 @@ async function admitPatch(
   const delta = measurePatch(
     compileDocumentPatch(canonical, operation.actions, kind),
   );
+  const bodyChanged =
+    applyDocumentPatch(canonical, operation.actions, kind) !== canonical;
+  if (
+    !bodyChanged &&
+    !propertiesChange(file.meta.properties, operation.properties)
+  )
+    throw new CoreError("BAD_REQUEST", "This patch changes nothing", {
+      reason: "NO_CHANGE",
+    });
   const counters = await ledger.counters(operation.documentId);
   const budget = checkBudget({ owned, ...counters, delta });
   if (!budget.allowed) await refuseWith(budget);
@@ -596,6 +616,15 @@ export async function applyWikiOperation(
             );
           }
           case "content.lifecycle":
+            measure = {
+              grossCharsChanged: 0,
+              charsAdded: 0,
+              documentId: null,
+              path: null,
+              baseCommitSha: null,
+              owned: true,
+              writes: 1,
+            };
             return applyFolderCreate(repo, content, author, {
               operationId: options.operationId,
               runId: options.runId,

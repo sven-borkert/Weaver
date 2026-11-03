@@ -40,6 +40,7 @@ import {
   assertLiveWikiRun,
   endRun,
   heartbeatWikiRun,
+  closedFence,
   isClosedFence,
   leaseWikiRun,
   WIKI_RUN_HEARTBEAT_MS,
@@ -361,13 +362,18 @@ export async function executeWikiRun(
         Math.max(0, wallRemaining),
       );
       // Disable, revoke, cancel or a lost lease reach the in-flight model call here.
+      let lastHeartbeat = Date.now();
       const heartbeat = setInterval(
         bindDiagnosticContext(() => {
           void (async () => {
             const held = await heartbeatWikiRun(db, lease, leaseMs);
-            if (!held) throw new Error("lease lost");
+            if (!held) throw closedFence("The run's lease is gone");
+            lastHeartbeat = Date.now();
             await assertLiveWikiRun(db, lease);
-          })().catch(() => {
+          })().catch((error: unknown) => {
+            // Other errors are retried until the lease itself would have lapsed.
+            if (!isClosedFence(error) && Date.now() - lastHeartbeat <= leaseMs)
+              return;
             fenceClosed = true;
             controller.abort(new Error("wiki run fence closed"));
           });
@@ -490,9 +496,20 @@ export async function executeWikiRun(
         controller.signal.throwIfAborted();
         usageOutcome = "success";
         const active = session as WikiRunSession | null;
-        if (active?.finished)
-          await end("succeeded", { summary: active.finished.summary });
-        else if (active?.stopRequested)
+        if (active?.finished) {
+          const unfinished = await db.wikiInputItem.count({
+            where: {
+              runId: lease.id,
+              status: { notIn: ["processed", "skipped"] },
+            },
+          });
+          if (unfinished > 0)
+            await end("stopped", {
+              stopReason: "unfinished_items",
+              summary: active.finished.summary,
+            });
+          else await end("succeeded", { summary: active.finished.summary });
+        } else if (active?.stopRequested)
           await end("stopped", { stopReason: active.stopRequested });
         else
           await end("stopped", {

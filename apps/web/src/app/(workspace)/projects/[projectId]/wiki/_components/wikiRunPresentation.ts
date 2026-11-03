@@ -22,6 +22,7 @@ const STOP_REASONS: Record<string, string> = {
   step_cap: "reached the step limit for one run",
   wall_clock: "reached the time limit for one run",
   model_stopped: "the model stopped before finishing",
+  unfinished_items: "finished with some inputs still unfinished",
   no_ready_items: "no input was ready",
   no_worker: "no worker is consuming wiki runs",
   fence_closed: "the wiki was disabled or its agent changed",

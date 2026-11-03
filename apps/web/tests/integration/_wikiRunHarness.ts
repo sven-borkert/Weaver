@@ -139,3 +139,35 @@ export async function humanEdit(
     p.security,
   );
 }
+
+/** A client whose `model.method` throws while `when(args)` holds. */
+export function failOn<T extends object>(
+  db: T,
+  model: string,
+  method: string,
+  when: (args: unknown) => boolean,
+  error: Error = new Error("injected failure"),
+): T {
+  return new Proxy(db, {
+    get(target, prop) {
+      const value = Reflect.get(target, prop, target) as unknown;
+      if (prop !== model) {
+        return typeof value === "function"
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      }
+      return new Proxy(value as object, {
+        get(delegate, name) {
+          const inner = Reflect.get(delegate, name, delegate) as unknown;
+          if (typeof inner !== "function") return inner;
+          if (name !== method)
+            return (inner as (...a: unknown[]) => unknown).bind(delegate);
+          return (...args: unknown[]) =>
+            when(args[0])
+              ? Promise.reject(error)
+              : (inner as (...a: unknown[]) => unknown).apply(delegate, args);
+        },
+      });
+    },
+  });
+}
