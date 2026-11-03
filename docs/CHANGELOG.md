@@ -4,18 +4,16 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.236] - 2026-11-03
+
 ### Added
 
 - **Wiki maintenance (lint).** Owners can set a schedule (hourly, daily, weekly or monthly, with a timezone) in Settings, and Editors can press **Run maintenance now** on the Runs tab, at most once an hour per project. The agent checks orphan pages and dangling links, what changed since the last lint, pages whose sources changed after the page, and entities named in many pages without a page of their own. It makes only small fixes (cross-references, unambiguous dangling links, a missing summary or type, contradiction notes) and writes a report page. Scheduled runs have no starter and show only in Project activity. A slot that was missed or collided with another run is skipped and shown on the settings card. Five failed lint runs in a row pause the schedule until an Owner resumes it.
-
 - **Classify existing pages** (Owner, Runs tab). One model call reads each untyped page's title and excerpt, treated as data, and proposes a type and summary for pages that lack them. The proposal is stored as a plan you review in the run's detail; **Accept** applies exactly that plan as property-only changes, at most 100 pages per run and with no model, and skips pages that changed since the preview or are not eligible (the guide, source pages, task outputs, Python files). **Reject** cancels the run. A plan that changes after you saw it is refused, and an unanswered plan expires after a day.
 - **Save as page** on assistant answers (Editors and above). It opens a prefilled create dialog with a title from the answer, the project's wiki folder when the wiki is on, the answer as the body, type `synthesis`, and the answer's document and table citations from that project as sources. Citations from other projects are listed unchecked with a warning and are not saved as sources. The page is created under your name with the project's normal review.
 
 ### Fixed
 
-- Wiki maintenance and Classify no longer end as "stopped" when the worker dies mid-run: a lost lease restarts the run (twice at most) and only then fails it. A classify plan's 24 hours now count from when the preview finished, and preview retries no longer use up the apply's restarts.
-- A lint run keeps exactly one report page: it recreates and records the report if the old page was deleted, refuses a second create in the same step, and finds its own report again after a crash. On pages other than its report a lint run can now only make small text edits and inserts, not rewrite or remove sections.
-- Save as page keeps what you typed while the target folder and sources load, and shows a folder error next to the folder field.
 - The recent-changes feed (assistant, MCP and wiki agent) no longer drops a backdated commit that arrived through a merged branch when a `since` time is given, and shows the file changes of merge commits.
 
 ## [0.1.235] - 2026-11-03
