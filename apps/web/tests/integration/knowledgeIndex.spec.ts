@@ -1434,6 +1434,39 @@ describe("local knowledge indexing", () => {
     ).toEqual(chunks);
   });
 
+  it("finds a document by a file name that appears inside a path in its body", async () => {
+    const { caller, project } = await setupEditor("document");
+    const document = await caller.document.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Interchange Notes",
+      contentJson: parseDocumentBody(
+        "Config files:\n\n- `/app/sword/axway/Interchange/conf/datastoreconfig.xml`\n- `/opt/oracle/network/admin/tnsnames.ora`\n",
+      ),
+    });
+    const context = knowledgeSystemContextForTests();
+    const db = getPrisma();
+    await syncDocumentKeywordIndex(context, db, {
+      projectId: project.id,
+      documentId: document.id,
+      sourceCommitSha: document.headCommitSha,
+      pathAtSha: document.path,
+    });
+
+    for (const query of [
+      "datastoreconfig.xml",
+      "datastoreconfig",
+      "/app/sword/axway/Interchange/conf/datastoreconfig.xml",
+      "tnsnames.ora",
+    ]) {
+      const result = await caller.search.query({ query, limitPerGroup: 8 });
+      expect(
+        result.documents.map((item) => item.documentId),
+        query,
+      ).toEqual([document.id]);
+    }
+  });
+
   it("flows an oversized fenced block through bounded enrichment requests", async () => {
     const { caller, project } = await setupEditor("oversized-fence");
     const document = await caller.document.create({

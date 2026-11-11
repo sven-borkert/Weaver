@@ -6,6 +6,7 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ### Fixed
 
+- Keyword search finds a file name that appears inside a path in a document body (`datastoreconfig.xml` in `/app/conf/datastoreconfig.xml`). Paths and dotted or underscored names are split into words in both the index and the query; hyphens are unchanged. The migration rebuilds the search index column, so existing documents need no reindex.
 - Numbered lists keep every fenced code block inside a list item when Markdown is imported or parsed; before, only the first block survived and later ones vanished without warning. Continuation lines indented to the CommonMark content width (three spaces under `1. `) no longer keep a stray leading space in paragraphs and code lines. A fenced code block indented by up to three spaces now parses as a code block instead of being dropped.
 
 ## [0.1.236] - 2026-11-03

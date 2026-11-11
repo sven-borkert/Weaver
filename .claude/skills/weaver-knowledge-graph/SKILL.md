@@ -40,7 +40,9 @@ metadata only—never rows, embeddings, entities, or relations.
   document is found by a word of its title without an exact-title match. Title
   occupies its own slot independently of Markdown H1–H6 levels; an identical
   leading title/H1 is deduplicated. Section navigation still uses the body's
-  canonical anchor. The
+  canonical anchor. The vector text and the lexical query both pass through the
+  immutable `weaver_search_text` SQL function (`/ \ . _` become spaces) so a file
+  name inside a path matches; hyphens stay so `-word` exclusion works. The
   global search query runs with `staleTime: 0`; index jobs land seconds after a
   save and a cached miss must not outlive them.
 - Prisma does not own the `vector`/`tsvector` columns. Use parameterized

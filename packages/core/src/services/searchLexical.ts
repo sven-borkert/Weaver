@@ -40,7 +40,7 @@ export async function loadLexicalDocuments(
   const normalizedQueryHash = hashNormalizedTitle(normalizedQuery);
   return db.$queryRaw<DocumentCandidate[]>(Prisma.sql`
     WITH search_query AS (
-      SELECT websearch_to_tsquery('simple', ${query}) AS value
+      SELECT websearch_to_tsquery('simple', weaver_search_text(${query})) AS value
     ), allowed_projects AS (
       SELECT project."id", project."name"
       FROM "Project" AS project

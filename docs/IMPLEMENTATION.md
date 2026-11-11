@@ -1484,7 +1484,9 @@ refresh descriptions. Graph details label model excerpts as generated summaries.
 Keyword indexing remains available without AI: every document, folder, and
 table write enqueues its search-sync job after the Git commit, and
 `DocumentSearchChunk.searchVector` is generated from the chunk's heading path
-(document title and headings) plus its body.
+(document title and headings) plus its body, with `/ \ . _` turned into spaces by
+`weaver_search_text` (the lexical query applies the same function) so a file name
+inside a path is findable.
 [`chunkDocument.ts`](../packages/core/src/knowledge/chunkDocument.ts) picks the
 chunker by document kind: Markdown splits at headings, Python
 ([`chunkPython.ts`](../packages/core/src/knowledge/chunkPython.ts)) at top-level
