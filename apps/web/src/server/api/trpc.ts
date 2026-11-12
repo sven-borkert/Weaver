@@ -54,6 +54,7 @@ export const createTRPCContext = async (opts: {
 };
 
 function fieldFromCause(cause: unknown): string | undefined {
+  if (isCoreError(cause)) cause = cause.details;
   if (cause && typeof cause === "object" && "field" in cause) {
     const field = (cause as { field?: unknown }).field;
     return typeof field === "string" ? field : undefined;
@@ -62,6 +63,7 @@ function fieldFromCause(cause: unknown): string | undefined {
 }
 
 function conflictsFromCause(cause: unknown): unknown {
+  if (isCoreError(cause)) cause = cause.details;
   if (cause && typeof cause === "object" && "conflicts" in cause) {
     return (cause as { conflicts?: unknown }).conflicts ?? null;
   }
@@ -69,6 +71,7 @@ function conflictsFromCause(cause: unknown): unknown {
 }
 
 function headCommitShaFromCause(cause: unknown): string | null {
+  if (isCoreError(cause)) cause = cause.details;
   if (cause && typeof cause === "object" && "headCommitSha" in cause) {
     const headCommitSha = (cause as { headCommitSha?: unknown }).headCommitSha;
     return typeof headCommitSha === "string" ? headCommitSha : null;

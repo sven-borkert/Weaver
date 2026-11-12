@@ -16,12 +16,14 @@ export function withReference(
   maxChars?: number,
 ): string {
   if (!reference)
-    return maxChars === undefined ? message : message.slice(0, maxChars);
+    return maxChars === undefined
+      ? message
+      : [...message].slice(0, maxChars).join("");
   const suffix = ` (ref ${reference})`;
   const body =
     maxChars === undefined
       ? message
-      : message.slice(0, Math.max(0, maxChars - suffix.length));
+      : [...message].slice(0, Math.max(0, maxChars - suffix.length)).join("");
   return `${body}${suffix}`;
 }
 

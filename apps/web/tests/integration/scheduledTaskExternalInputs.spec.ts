@@ -1,5 +1,5 @@
 import { buildTaskPrompt } from "@weaver/ai/taskPrompt";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ExternalMcpError } from "@weaver/external-mcp";
 import { fetchTaskExternalInputs } from "@weaver/core/scheduledTasks/externalInputs";
 import { createTaskSecurityContext } from "@weaver/core/security/context";
@@ -524,7 +524,15 @@ it("includes commits after a captured period end in the next report digest", asy
   const f = await fixture();
   f.calls.onCall = async () => {
     if (f.calls.tools.length !== 1) return;
-    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const periodEndValue = f.calls.arguments[0]?.to;
+    if (typeof periodEndValue !== "string")
+      throw new Error("Missing period end");
+    const periodEnd = Date.parse(periodEndValue);
+    await vi.waitFor(
+      () =>
+        expect(Math.floor(Date.now() / 1000) * 1000).toBeGreaterThan(periodEnd),
+      { timeout: 5000 },
+    );
     const { createDocument } = await import("@weaver/core/services/documents");
     const { parseDocumentBody } = await import("@weaver/core/editor/markdown");
     await createDocument(

@@ -42,12 +42,14 @@ check membership themselves.
 - Mutations: service does access assert → write (in `db.$transaction` when multi-step, e.g. `createProject` writes project + Owner membership). Never `Promise.all` on `tx` (single pg connection).
 - Field-pinned service errors use
   `new CoreError(code, message, { field: "<rhfField>" })`; the adapter in
-  `apps/web/src/server/api/coreError.ts` preserves the details as the tRPC
-  cause, and the formatter in `apps/web/src/server/api/trpc.ts` lifts the field
+  `apps/web/src/server/api/coreError.ts` keeps the original CoreError as the tRPC
+  cause, retaining its service stack and `details`;
+  the formatter in `apps/web/src/server/api/trpc.ts` lifts the field
   to `err.data.field` for
   `apps/web/src/lib/trpcErrors.ts`.
-- Structured conflict errors may put `conflicts` and a string `headCommitSha`
-  on the cause; the formatter exposes both as nullable error-data fields.
+- Structured conflict errors put `conflicts` and a string `headCommitSha`
+  in CoreError details; the formatter exposes both as nullable error-data fields
+  and also supports existing plain tRPC cause metadata.
 - Zod inputs live in `apps/web/src/server/api/schemas/<area>.ts` as `<verb><Entity>Input` plain ZodObjects; LLM schemas are shared with MCP in `packages/core/src/services/llmSchemas.ts` and re-exported by the web module. The same shape is mirrored client-side by the forms (see weaver-forms-dialogs). Change validation surfaces together.
 - Operations whose work can exceed a fixed server batch expose a validated
   stable cursor and return continuation state. `knowledge.retryFailed` uses a

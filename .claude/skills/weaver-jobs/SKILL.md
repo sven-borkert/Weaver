@@ -369,3 +369,13 @@ Materialized background-work sources must filter terminal history before the uni
 ## Wiki lint and classify dispatch
 
 `wiki.tick` also claims due lint slots (`claimDueLintRuns`, runs are created `queued`) and dispatches classify previews: a `preparing` classify run with no plan and no lease gets a `wiki.run` job, and the injected runner previews it (one tool-less model call). An accepted plan moves the run to `queued`; the `wiki.run` handler applies it with `executeWikiClassify` in core, like Revert, so it needs no runner. `reapClassifyRuns` releases a preview claim whose lease lapsed (the third loss fails the run `LEASE_LOST`) and cancels a plan nobody answered within 24 hours. Lint failures are counted in `endRunInTx`.
+
+`publishKnowledgeJob` returns `accepted` with a job id, `deduped` when an
+equivalent singleton is already queued, or `disabled`; transport failures throw.
+Use it when publication success matters (ingestion and scheduled tasks). The
+legacy `requestKnowledgeJob` returns an id only for newly accepted work and
+remains suitable for accepted-count metrics. Never treat deduplication as a
+publication failure. `task.run` singleton keys use run ids. System reconciliation
+uses one local consumer per worker; cross-worker maintenance retains its existing
+conditional writes and database advisory locks. A dedicated worker refuses startup
+when jobs are disabled; readiness paths ignore query strings.

@@ -1666,6 +1666,41 @@ describe("mergeFetchedBranch", () => {
     expect(await pullRefs(project.id)).toBe("");
   });
 
+  it("rejects case-colliding local and remote paths before modifying HEAD", async () => {
+    const { project, author } = await ownerProject(
+      "pull-case",
+      "Case collision Project",
+    );
+    const before = await withExistingProjectRepo(project.id, async (repo) => {
+      await repo.writeFileAtomic("notes.md", "local");
+      return repo.commitAll("local notes", author);
+    });
+    const { bareDirectory, remoteHead } = await buildRemoteRepo(
+      async (source) => {
+        await writeFile(path.join(source, "project.json"), "{}\n");
+        await writeFile(path.join(source, "Notes.md"), "remote");
+      },
+    );
+    await expect(
+      withExistingProjectRepo(project.id, (repo) =>
+        mergeFetchedBranch(getPrisma(), repo, {
+          projectId: project.id,
+          bareDirectory,
+          branch: "main",
+          remoteHead,
+          author,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_REMOTE_CONTENT" });
+    expect(await pullRefs(project.id)).toBe("");
+    expect(await (await openProjectRepo(project.id))!.resolveHead()).toBe(
+      before,
+    );
+    expect(
+      await (await openProjectRepo(project.id))!.showFileAt("HEAD", "notes.md"),
+    ).toBe("local");
+  });
+
   it("rejects a remote branch carrying a symlink before touching the worktree", async () => {
     const { project, author } = await ownerProject(
       "pull-symlink",

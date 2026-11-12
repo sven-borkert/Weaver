@@ -30,12 +30,22 @@ export function AttemptTimer({
     }
   }, [remaining, onExpired]);
   return (
-    <span
-      role="timer"
-      aria-live="polite"
-      className={remaining < 300000 ? "text-danger font-semibold" : ""}
-    >
-      {formatRemaining(remaining)}
-    </span>
+    <>
+      <span
+        role="timer"
+        className={remaining < 300000 ? "text-danger font-semibold" : ""}
+      >
+        {formatRemaining(remaining)}
+      </span>
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {remaining === 0
+          ? "Time is up."
+          : remaining <= 60000
+            ? "1 minute remaining."
+            : remaining <= 300000
+              ? "5 minutes remaining."
+              : ""}
+      </span>
+    </>
   );
 }

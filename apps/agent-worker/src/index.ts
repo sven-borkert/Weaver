@@ -46,6 +46,8 @@ const lifecycle = createRuntimeLifecycle({
       { roles, checkDependencies: probeKnowledgeWorkers },
     ),
   start: async () => {
+    if (!env.WEAVER_JOBS_ENABLED)
+      throw new Error("agent-worker requires WEAVER_JOBS_ENABLED=true");
     await sweepStaleGitRemoteKeys();
     startDiagnosticWriter({ db, runtime: "worker" });
     await waitForDiagnosticWriterReady();

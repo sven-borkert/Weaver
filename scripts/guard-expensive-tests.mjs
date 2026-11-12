@@ -12,7 +12,7 @@ try {
   const payload = JSON.parse(readFileSync(0, "utf8"));
   cmd = String(payload?.tool_input?.command ?? "");
 } catch {
-  process.exit(0); // never block the agent on malformed input
+  process.exit(0); // Workflow gate only; destructive database guards run independently.
 }
 if (!cmd) process.exit(0);
 

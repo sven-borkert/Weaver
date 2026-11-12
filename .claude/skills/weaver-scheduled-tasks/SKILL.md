@@ -21,7 +21,7 @@ history holds every past report.
 | `packages/db/prisma/migrations/20260918000000_scheduled_tasks/`                                                   | The migration adding both tables and their enums                                                                                                                                                               |
 | `packages/config/src/workerRoles.ts`                                                                              | `tasks` in `WORKER_ROLES`/`DEFAULT_WORKER_ROLES`                                                                                                                                                               |
 | `packages/config/src/jobs.ts`                                                                                     | `WEAVER_TASK_TICK_CRON`, default `* * * * *`                                                                                                                                                                   |
-| `packages/core/src/jobs/types.ts`                                                                                 | `task.tick`/`task.run` payloads, the `TaskRunner` type, `task.run`'s 20-minute expiry and task-id singleton key                                                                                                |
+| `packages/core/src/jobs/types.ts`                                                                                 | `task.tick`/`task.run` payloads, the `TaskRunner` type, `task.run`'s 20-minute expiry and run-id singleton key                                                                                                 |
 | `packages/core/src/jobs/runtime.ts`                                                                               | Registers both consumers and schedules `task.tick` only under the `tasks` role; a missing injected `taskRunner` acks and warns per job, like `assistant.run`                                                   |
 | `packages/core/src/security/context.ts`                                                                           | `"task"` `AuthenticationMethod`, `createTaskSecurityContext`                                                                                                                                                   |
 | `packages/core/src/scheduledTasks/scheduleSchema.ts`                                                              | Hourly/daily/weekly/monthly preset schema, `scheduleToCron`, `describeSchedule`, `TASK_FAILURE_CODES`, `TASK_SKIP_REASONS`, limits (browser-safe: zod only)                                                    |
@@ -334,3 +334,9 @@ Persist completion metadata before publication. Missing receipt identity is reco
 ## Reuse by the wiki agent
 
 The wiki lint schedule reuses `taskScheduleSchema`, `scheduleToCron`, `describeSchedule`, `isValidTimezone` and `nextOccurrence` (always with an explicit timezone) but is not a `ScheduledTask`: it is stored on `ProjectWikiSettings` (`lintSchedule`, `lintCron`, `lintTimezone`, `lintNextRunAt`) and claimed by `wiki.tick` with the same conditional-update pattern as `claimDueTasks`. A slot that cannot start is skipped and recorded, not queued. See `weaver-wiki`.
+
+Task ticks isolate each due-task claim and each publication, continue stale-run
+redispatch and lease expiry after failures, and diagnose bad schedule rows.
+`dispatchTaskRun` returns the shared publication outcome; singleton deduplication
+is success and cannot remove the durable run. Failure summaries are truncated by
+Unicode code point.

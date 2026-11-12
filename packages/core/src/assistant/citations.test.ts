@@ -313,3 +313,65 @@ describe("validateSourceLocators — aggregate dedupe", () => {
     expect(validated).toHaveLength(1);
   });
 });
+
+it("finds a late revision match using bounded blob batches", async () => {
+  const { composeDocumentFile } = await import("../documents/frontmatter");
+  const documentId = "44444444-4444-4444-8444-444444444444";
+  const text = composeDocumentFile(
+    {
+      id: documentId,
+      title: "Recovered source",
+      review: null,
+      createdBy: null,
+      updatedBy: null,
+      created: "2024-01-01T00:00:00.000Z",
+      updated: "2024-01-01T00:00:00.000Z",
+    },
+    "Evidence from the older path",
+    "markdown",
+  );
+  const paths = Array.from({ length: 121 }, (_, index) => `source-${index}.md`);
+  const repo = {
+    blobSizeAt: vi.fn().mockResolvedValue(null),
+    showFileAt: vi.fn(),
+    renamedPathBetween: vi.fn().mockResolvedValue(null),
+    listTrackedBlobs: vi
+      .fn()
+      .mockResolvedValue(paths.map((path) => ({ path, size: 500, sha: SHA }))),
+    readBlobsAt: vi.fn(
+      async (_sha: string, selected: string[]) =>
+        new Map(
+          selected.map((path) => [
+            path,
+            path === paths.at(-1) ? text : "invalid document",
+          ]),
+        ),
+    ),
+  };
+  gitStoreDoubles.openProjectRepo.mockResolvedValue(repo);
+  projectAccessDoubles.resolveProjectAccess.mockResolvedValue(undefined);
+  const db = {
+    document: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ path: "current.md", headCommitSha: SHA }),
+    },
+  } as unknown as PrismaClient;
+  const validated = await validateSourceLocators(
+    db,
+    createSessionSecurityContext({
+      userId: "u1",
+      globalRole: "User",
+      sessionId: "s1",
+    }),
+    [{ kind: "document", projectId: PROJECT, documentId, commitSha: SHA }],
+  );
+  expect(validated).toHaveLength(1);
+  expect(validated[0]?.label).toContain("Recovered source");
+  expect(repo.blobSizeAt).toHaveBeenCalledTimes(1);
+  expect(repo.showFileAt).not.toHaveBeenCalled();
+  expect(repo.readBlobsAt.mock.calls.length).toBeGreaterThan(1);
+  expect(
+    repo.readBlobsAt.mock.calls.every(([, selected]) => selected.length <= 50),
+  ).toBe(true);
+});

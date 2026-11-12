@@ -47,6 +47,8 @@ finalizes abandoned attempts every minute. Flush all unacknowledged edits before
 manual or expiry submission; failed/retrying edits remain unsaved and must block
 submission until flushed or the attempt closes. Never claim a submission succeeded
 before the server acknowledges it.
+Attempt timers announce only the five-minute, one-minute and expiry milestones;
+the visible timer is not a live region. Exam lists tick only for unexpired open attempts.
 
 `exam.deleteAttempt` is session-only: trainers delete project attempts and trainees
 only their own, in any status. Lock the exam before the attempt, matching start and
@@ -96,3 +98,7 @@ remain Tier 3 and require fresh consent.
 ## Review hardening invariants
 
 Trainer listExams returns bounded {items,nextCursor} pages ordered by updatedAt DESC, id ASC. Aggregate attempt statuses (including expired in_progress) and question scores in SQL for only that page. loadExamDefinitionInTx supplies start snapshots without history counters. Attempt-list indexes cover project and project/exam startedAt DESC, id DESC ordering.
+
+Attempt lists batch trainee/project metadata for the retained page and validate
+only snapshot titles; full snapshot validation belongs to attempt detail/grading.
+History still requires live project access, including `notDeleted` metadata reads.

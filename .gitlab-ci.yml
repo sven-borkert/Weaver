@@ -20,7 +20,7 @@ variables:
 
 test:
   stage: test
-  image: node:22
+  image: node:22.23.5-bookworm
   variables:
     PNPM_STORE_DIR: $CI_PROJECT_DIR/.pnpm-store
     COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
@@ -52,10 +52,12 @@ build:
   image: docker:29.1.4
   services:
     - name: docker:29.1.4-dind
-      command: ["--tls=false", "--host=tcp://0.0.0.0:2375"]
+      alias: docker
   variables:
-    DOCKER_HOST: tcp://docker:2375
-    DOCKER_TLS_CERTDIR: ""
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_CERT_PATH: "/certs/client"
+    DOCKER_TLS_VERIFY: "1"
     IMAGE: $CI_REGISTRY_IMAGE
     COMMIT_SHA: $CI_COMMIT_SHA
     SHORT_SHA: $CI_COMMIT_SHORT_SHA

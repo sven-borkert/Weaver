@@ -3372,12 +3372,12 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
   it("waits for the committed result when HTTP aborts after write admission", async () => {
     const { db, project, writeKey } = await fixture("write-http-abort");
     const gitDir = path.join(repoDir(project.id), ".git");
-    const hook = path.join(gitDir, "hooks", "pre-commit");
+    const hook = path.join(gitDir, "hooks", "reference-transaction");
     const admitted = path.join(gitDir, "mcp-write-admitted");
     const release = path.join(gitDir, "mcp-write-release");
     await writeFile(
       hook,
-      "#!/bin/sh\n: > .git/mcp-write-admitted\nwhile [ ! -e .git/mcp-write-release ]; do sleep 0.01; done\n",
+      '#!/bin/sh\n[ "$1" = prepared ] || exit 0\nwhile read old new ref; do\n  if [ "$ref" = refs/heads/main ] && [ "$old" != "$new" ]; then\n    : > .git/mcp-write-admitted\n    while [ ! -e .git/mcp-write-release ]; do sleep 0.01; done\n  fi\ndone\n',
       { mode: 0o755 },
     );
 
@@ -3470,12 +3470,12 @@ describe("MCP server over Streamable HTTP (spec §16, §20.3, §26)", () => {
     async (protocolVersion) => {
       const { db, project, writeKey } = await fixture("write-node-shutdown");
       const gitDir = path.join(repoDir(project.id), ".git");
-      const hook = path.join(gitDir, "hooks", "pre-commit");
+      const hook = path.join(gitDir, "hooks", "reference-transaction");
       const admitted = path.join(gitDir, "mcp-write-admitted");
       const release = path.join(gitDir, "mcp-write-release");
       await writeFile(
         hook,
-        "#!/bin/sh\n: > .git/mcp-write-admitted\nwhile [ ! -e .git/mcp-write-release ]; do sleep 0.01; done\n",
+        '#!/bin/sh\n[ "$1" = prepared ] || exit 0\nwhile read old new ref; do\n  if [ "$ref" = refs/heads/main ] && [ "$old" != "$new" ]; then\n    : > .git/mcp-write-admitted\n    while [ ! -e .git/mcp-write-release ]; do sleep 0.01; done\n  fi\ndone\n',
         { mode: 0o755 },
       );
 

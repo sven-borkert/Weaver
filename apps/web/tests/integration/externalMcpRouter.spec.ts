@@ -46,21 +46,27 @@ it("keeps configuration owner-only and all router DTOs secret-free", async () =>
 it("pages connections and filters an exact connection catalog without leaking private fields", async () => {
   const f = await makeExternalFixture();
   const mine = callerWithSecurity(userFor(f.owner), f.owner);
-  for (let index = 0; index < 26; index++)
+  for (let index = 0; index < 3; index++)
     await createExternalConnection(f.deps, f.owner, {
       name: `Paged ${String(index).padStart(2, "0")}`,
       endpoint: `https://page-${index}.test/mcp`,
       authMode: "none",
     });
-  const first = await mine.externalMcp.list({ limit: 25, search: "Paged" });
-  expect(first.items).toHaveLength(25);
+  const first = await mine.externalMcp.list({ limit: 2, search: "Paged" });
+  expect(first.items).toHaveLength(2);
   expect(first.nextCursor).toBeTypeOf("string");
   const second = await mine.externalMcp.list({
-    limit: 25,
+    limit: 2,
     search: "Paged",
     cursor: first.nextCursor!,
   });
   expect(second.items).toHaveLength(1);
+  expect(second.nextCursor).toBeNull();
+  expect(
+    [...first.items, ...second.items]
+      .map((connection) => connection.name)
+      .sort(),
+  ).toEqual(["Paged 00", "Paged 01", "Paged 02"]);
   expect(JSON.stringify([first, second])).not.toMatch(
     /ciphertext|credentialIv|credentialTag|authorization|token/i,
   );

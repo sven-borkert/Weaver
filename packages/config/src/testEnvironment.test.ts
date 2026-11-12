@@ -59,3 +59,16 @@ it("rejects host query overrides before resetting", () => {
     ),
   ).toThrow("Test reset refused");
 });
+
+it("rejects a bare service hostname that can resolve through a DNS search domain", () => {
+  expect(() =>
+    assertTestEnvironment(
+      {
+        DATABASE_URL: "postgres://postgres/weaver_test",
+        WEAVER_DATA_DIR: "./data-test",
+      },
+      "integration",
+      "/tmp/weaver-guard",
+    ),
+  ).toThrow("Test reset refused");
+});

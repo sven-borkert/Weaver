@@ -105,6 +105,7 @@ export function knowledgeJobWorkerConcurrency(
     "document.ai-enrich",
     "artifact.notebook.prepare",
     "wiki.run",
+    "system.reconcile",
   ].includes(name)
     ? 1
     : configuredConcurrency;
@@ -212,7 +213,7 @@ export function knowledgeJobSendOptions(
   }
   if (name === "task.run") {
     const payload = data as Partial<KnowledgeJobPayloads["task.run"]>;
-    return payload.taskId ? { singletonKey: payload.taskId } : undefined;
+    return payload.runId ? { singletonKey: payload.runId } : undefined;
   }
   if (name === "wiki.run") {
     const payload = data as Partial<KnowledgeJobPayloads["wiki.run"]>;

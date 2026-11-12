@@ -577,9 +577,11 @@ async function seedTasks(ownerId: string, projectId: string, count: number) {
   });
 }
 
-/** A queue that accepts nothing, like a runtime with WEAVER_JOBS_ENABLED=false. */
-const nullDispatchQueue: JobQueue = {
-  send: async () => null,
+/** A failed publication must not leave an undispatched run blocking later work. */
+const failedDispatchQueue: JobQueue = {
+  send: async () => {
+    throw new Error("queue unavailable");
+  },
   work: async () => undefined,
   schedule: async () => undefined,
   stop: async () => undefined,
@@ -965,9 +967,8 @@ describe("scheduled task policy", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      // The direct caller skips the HTTP errorFormatter; the field pin rides
-      // on the cause (see llm.spec.ts).
-      cause: expect.objectContaining({ field: "timezone" }),
+      // Direct callers retain the service error; HTTP formatting exposes its details.
+      cause: expect.objectContaining({ details: { field: "timezone" } }),
     });
     await expect(
       caller.scheduledTask.create({
@@ -1167,7 +1168,7 @@ describe("scheduled task policy", () => {
       where: { id: dispatched.runId },
     });
 
-    setJobQueueForTests(nullDispatchQueue);
+    setJobQueueForTests(failedDispatchQueue);
     await expect(
       callerFor(owner).scheduledTask.runNow({ taskId: task.id }),
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
@@ -1321,6 +1322,38 @@ describe("scheduled task claiming and run state", () => {
   beforeEach(async () => {
     await resetDb();
     setJobQueueForTests(new FakeJobQueue());
+  });
+
+  it("continues claiming healthy tasks after a corrupt schedule", async () => {
+    const { owner, project } = await fixture("corrupt-schedule");
+    const db = getPrisma();
+    const broken = await createTask(
+      db,
+      securityContextFor(owner),
+      definition(project.id),
+    );
+    const healthy = await createTask(db, securityContextFor(owner), {
+      ...definition(project.id),
+      name: "Healthy task",
+    });
+    const now = new Date();
+    await db.scheduledTask.update({
+      where: { id: broken.id },
+      data: {
+        cron: "invalid cron",
+        nextRunAt: new Date(now.getTime() - 120_000),
+      },
+    });
+    await db.scheduledTask.update({
+      where: { id: healthy.id },
+      data: { nextRunAt: new Date(now.getTime() - 60_000) },
+    });
+    expect(await claimDueTasks(db, now)).toEqual([
+      { runId: expect.any(String), taskId: healthy.id },
+    ]);
+    expect(
+      await db.scheduledTaskRun.count({ where: { taskId: broken.id } }),
+    ).toBe(0);
   });
 
   it("claims a due task exactly once under two concurrent ticks and advances nextRunAt", async () => {

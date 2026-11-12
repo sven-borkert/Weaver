@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createExam,
   updateExam,
@@ -70,6 +70,49 @@ describe("exam attempts service", () => {
       exam,
     };
   }
+  it("batches list metadata and only parses the snapshot title", async () => {
+    const { db, trainer, trainee, exam } = await fixture();
+    const first = await startAttempt(db, trainee, { examId: exam.id }, T0);
+    await submitAttempt(db, trainee, { attemptId: first.id }, T0);
+    const second = await startAttempt(db, trainee, { examId: exam.id }, T0);
+    const userReads = vi.spyOn(db.user, "findUniqueOrThrow");
+    const projectReads = vi.spyOn(db.project, "findUniqueOrThrow");
+    try {
+      const listed = await listAttempts(
+        db,
+        trainer,
+        { projectIds: [exam.projectId] },
+        T0,
+      );
+      expect(listed.items.map((item) => item.id).sort()).toEqual(
+        [first.id, second.id].sort(),
+      );
+      expect(listed.items.every((item) => item.examTitle === "Safety")).toBe(
+        true,
+      );
+      expect(userReads).not.toHaveBeenCalled();
+      expect(projectReads).not.toHaveBeenCalled();
+    } finally {
+      userReads.mockRestore();
+      projectReads.mockRestore();
+    }
+  });
+
+  it("refuses exam history after project deletion", async () => {
+    const { db, trainer, trainee, exam } = await fixture();
+    const attempt = await startAttempt(db, trainee, { examId: exam.id }, T0);
+    await db.project.update({
+      where: { id: exam.projectId },
+      data: { deletedAt: T0 },
+    });
+    await expect(
+      getAttemptForReview(db, trainer, attempt.id, T0),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(
+      listAttempts(db, trainer, { projectIds: [exam.projectId] }, T0),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(await db.examAttempt.count({ where: { id: attempt.id } })).toBe(1);
+  });
   it.each(["in_progress", "submitted", "in_review", "released"] as const)(
     "allows trainees to delete their own %s attempt and its answers",
     async (status) => {

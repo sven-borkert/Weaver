@@ -6,6 +6,12 @@ import {
 } from "./reference";
 
 describe("diagnostic references", () => {
+  it("preserves whole Unicode code points when capping messages", () => {
+    expect(withReference("😀😀end", null, 1)).toBe("😀");
+    expect(withReference("😀😀end", "a3f9c2e1", 17)).toBe(
+      "😀😀 (ref a3f9c2e1)",
+    );
+  });
   it("takes the first eight hex characters of an event id", () => {
     expect(diagnosticReference("A3F9C2E1-0000-4000-8000-000000000000")).toBe(
       "a3f9c2e1",

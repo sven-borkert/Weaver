@@ -299,6 +299,9 @@ Discovery skips malformed/overlong IDs, shares bounds, resolves an Ollama creden
 
 ## Outbound MCP connection internals
 
+External tool result text and structured JSON share a 16,000-byte UTF-8 budget
+in `packages/external-mcp/src/result.ts`; truncation preserves whole code points.
+
 - The endpoint origin is the credential boundary: `updateExternalConnection`
   rejects an origin change on a bearer connection without a new token
   (`BAD_REQUEST`, `field: "token"`), and the dialog mirrors it with

@@ -1,0 +1,66 @@
+name: Database integration
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: database-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.6-pg17-trixie
+        env:
+          POSTGRES_USER: weaver
+          POSTGRES_PASSWORD: isolated-ci-only
+          POSTGRES_DB: weaver_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U weaver -d weaver_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+      NODE_OPTIONS: --max-old-space-size=4096
+      DATABASE_URL: postgresql://weaver:isolated-ci-only@127.0.0.1:5432/weaver_test?schema=public
+      WEAVER_DATA_DIR: ./data-test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 22.23.5
+          package-manager-cache: false
+      - run: npm install --global corepack@0.34.0
+      - run: corepack enable
+      - run: corepack prepare "$(node -p "require('./package.json').packageManager.split('+')[0]")" --activate
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Prepare the isolated test environment
+        run: |
+          node --input-type=module <<'NODE'
+          import { writeFileSync } from "node:fs";
+          import { randomBytes } from "node:crypto";
+          writeFileSync(".env.test", [
+            `DATABASE_URL=${process.env.DATABASE_URL}`,
+            `WEAVER_DATA_DIR=${process.env.WEAVER_DATA_DIR}`,
+            `AUTH_SECRET=${randomBytes(32).toString("base64")}`,
+            "AUTH_URL=http://localhost:3000",
+            "NODE_ENV=test",
+            "WEAVER_JOBS_ENABLED=true",
+            "",
+          ].join("\n"), { mode: 0o600 });
+          NODE
+      - run: pnpm db:test:migrate
+      - name: Run the guarded full integration suite
+        run: RUN_FULL_TESTS=1 pnpm test:integration

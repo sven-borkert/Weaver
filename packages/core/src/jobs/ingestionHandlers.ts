@@ -15,7 +15,7 @@ import {
   withProjectIngestionLifecycleLock,
 } from "../services/ingestion";
 import { notDeleted } from "../services/projectAccess";
-import { requestKnowledgeJob } from "./queue";
+import { publishKnowledgeJob } from "./queue";
 import { knowledgeJobExpireInSeconds } from "./types";
 
 const RECOVERY_MIN_AGE_MS =
@@ -116,7 +116,7 @@ export async function reconcileIngestionFiles(
     try {
       if (await failExhaustedIngestionFile(db, file)) continue;
       if (!(await reserveIngestionFileRecovery(db, file))) continue;
-      const jobId = await requestKnowledgeJob(
+      const publication = await publishKnowledgeJob(
         INGESTION_STAGE_JOBS[recoveryStageOf(file.status)],
         {
           fileId: file.id,
@@ -125,8 +125,9 @@ export async function reconcileIngestionFiles(
           baseAttemptCount: file.attemptCount,
         },
       );
-      if (!jobId) throw new Error("ingestion recovery job publication failed");
-      enqueued += 1;
+      if (publication.status === "disabled")
+        throw new Error("ingestion recovery jobs are disabled");
+      if (publication.status === "accepted") enqueued += 1;
     } catch (error) {
       errors.push(error);
     }

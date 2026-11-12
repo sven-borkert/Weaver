@@ -52,7 +52,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
   one waiting pool client per project).
   `WEAVER_WORKER_HEALTH_PORT` is validated `1..65535` (default `3101`);
   `DATABASE_POOL_MAX` is bounded `1..1000` and
-  `DATABASE_STATEMENT_TIMEOUT_MS` `0..86400000`.
+  `DATABASE_STATEMENT_TIMEOUT_MS` `0..86400000` (default 30,000; 0 disables it).
 - The root `db:*`/`test:integration*`/`e2e` scripts run through `scripts/require-env.mjs`, which aborts when the env file is missing, names a different database/data-dir pair than expected, or is overridden by a differing shell `DATABASE_URL`/`WEAVER_DATA_DIR`. Integration/e2e resets recursively delete their Git root as well as truncating their database, so a dev pairing destroys dev state. `dev`, `build`, `start`, and `db:studio` still use plain `dotenv -e .env`.
 - Playwright forwards `WEAVER_DATA_DIR` explicitly because Next.js would otherwise read the dev `.env` during build/start. Resolve its repository-relative value from the config file's repository root before forwarding the same absolute path to all three application runtimes; do not depend on their package working directories.
 - `pnpm dev` starts `@weaver/web`, `@weaver/agent-worker`, and
@@ -165,7 +165,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
 ## Knowledge jobs and LLM routing
 
 - PostgreSQL 17 must have pgvector. The local dev container uses
-  `pgvector/pgvector:pg17`; Compose pins `pgvector/pgvector:0.8.6-pg17-trixie`; host installations need matching pgvector server
+  `pgvector/pgvector:0.8.6-pg17-trixie`; Compose pins `pgvector/pgvector:0.8.6-pg17-trixie`; host installations need matching pgvector server
   extension files before migrations. Apply `pnpm db:migrate`,
   `pnpm db:test:migrate`, and `pnpm db:e2e:migrate` to the three canonical
   database/data pairs; the migration enables `vector` in each database.
@@ -187,7 +187,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
 | `WEAVER_ASSISTANT_RECONCILE_CRON`                 | `* * * * *`; assistant-run recovery, keep near the 30 s lease                                                                               |
 | `WEAVER_TASK_TICK_CRON`                           | `* * * * *`; scheduled-task tick — claims due tasks, re-dispatches stale runs, expires abandoned leases (`weaver-scheduled-tasks`)          |
 | `WEAVER_INGESTION_MAX_FILE_BYTES`                 | 52,428,800; validated 1,024..268,435,456                                                                                                    |
-| `WEAVER_ARTIFACT_MAX_FILE_BYTES`                  | 268,435,456; validated 1,024..268,435,456; Files upload/read cap, independent of Imports                                                    |
+| `WEAVER_ARTIFACT_MAX_FILE_BYTES`                  | 536,870,912; validated 1,024..536,870,912; Files upload/read cap, independent of Imports                                                    |
 | `WEAVER_PDF_TIMEOUT_MS`                           | 30,000; validated 5,000..120,000; Chromium render cap for document PDF export (`weaver-documents`)                                          |
 | `WEAVER_CHROMIUM_PATH`                            | Optional Chromium executable for PDF export; unset uses the Playwright-managed browser, the web image sets `/usr/bin/chromium`              |
 | `WEAVER_CHROMIUM_NO_SANDBOX`                      | `true`/`false` (default `false`); the web image sets `true` because the distro Chromium runs as the unprivileged `node` user in a container |
@@ -225,7 +225,7 @@ For repository mechanics use `weaver-git-store`; for per-user peer OAuth tokens 
 - Compose gives worker 45 seconds and MCP 135 seconds to stop; `tini -g` relays signals to the process group. Web retains native Next HTTP/`after` draining. Its pinned Next16 private close adapter (`apps/web/server-lifecycle.mjs`) then drains publisher/writer/database with bounded per-step cleanup; revalidate the adapter before changing Next versions. Web also receives 135 seconds of Compose grace. HSTS belongs to the edge operator.
 - `WEAVER_MIGRATION_HANDOFF_TIMEOUT_MS` defaults to 600,000 (30,000..3,600,000) for the historical OAuth cutover barrier.
 - `@weaver/ingestion`'s `@napi-rs/canvas` dependency (image decode/PDF page
-  rendering) ships prebuilt musl binaries for `node:22-alpine`; the worker
+  rendering) ships prebuilt musl binaries for `node:22.23.5-alpine3.23`; the worker
   Dockerfile's `pnpm install --ignore-scripts` still works because the
   package needs no native build step at install time.
 
@@ -345,3 +345,11 @@ Backups stop both running and restarting application writers, then verify no run
 ## Wiki agent runtime
 
 The `wiki` worker role runs `wiki.tick` (minute: prepares sources, claims due lint slots, dispatches queued runs, expires leases, previews classify plans) and `wiki.run`. It needs no new environment variable. The agent's model is the `wiki` route in Administration > AI; the outbound allowlist applies to it like any route. Operators who pinned `WEAVER_ENABLED_WORKER_ROLES` must add `wiki` before upgrading, and a deployment with no `wiki` consumer keeps working: runs end "no worker is consuming wiki runs" (`system.reconcile`) and scheduled lint never starts. A worker built without the injected runner still applies an accepted classify plan and performs Revert (neither needs a model) but cannot preview or lint. Three Compose files list the role; `compose-services.test.mjs` pins them.
+
+The generic deployment example binds plain HTTP to loopback and requires a TLS
+reverse proxy for public use; both workers probe `/ready`. Node runtime images
+pin patch and base OS, and GitLab dind uses TLS on 2376 with a per-job shared
+`/certs/client` runner volume. The nightly/manual GitHub integration workflow
+uses an isolated pgvector service published on localhost and the normal guarded
+test command. The dev database script uses Node’s built-in dotenv parser without sourcing shell
+code or requiring installed dependencies.

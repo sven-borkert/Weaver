@@ -4,6 +4,8 @@ import { resolveMcpPrincipal } from "@weaver/core/security/bearer";
 import type { EnrichedActor } from "@weaver/core/services/documents";
 import { env } from "~/env";
 import { getBearerVerifiers } from "~/server/auth/bearer";
+import { CoreError } from "@weaver/core/errors";
+import { transferCredentialLimiter } from "./admission";
 
 /** Validated like an MCP request: same audience, consent and scope rules. */
 export async function resolveTransferActor(
@@ -16,6 +18,13 @@ export async function resolveTransferActor(
     // Same value as ~/server/auth's MCP_RESOURCE_URL, without loading Better Auth.
     url: mcpResourceUrl(env),
   });
+  const decision = transferCredentialLimiter.check(
+    `${principal.security.authenticationMethod}:${principal.security.credentialId}`,
+  );
+  if (!decision.allowed)
+    throw new CoreError("TOO_MANY_REQUESTS", "Transfer rate limit exceeded", {
+      retryAfterSeconds: decision.retryAfterSeconds,
+    });
   return {
     ...principal.security,
     name: principal.profile.name,

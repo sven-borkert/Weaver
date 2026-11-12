@@ -31,7 +31,7 @@ import {
 import { emitDiagnostic } from "../diagnostics/writer";
 import { assertSafeSegments } from "../documents/paths";
 import { CoreError } from "../errors";
-import { requestKnowledgeJob } from "../jobs/queue";
+import { publishKnowledgeJob, type JobPublication } from "../jobs/queue";
 import { projectRoleAtLeast, type ProjectRoleName } from "../roles";
 import { nextOccurrence } from "../scheduledTasks/schedule";
 import {
@@ -895,17 +895,19 @@ export async function runTaskNow(
   });
   // A run that was never dispatched must not linger as `queued`: it would block
   // every later run-now with CONFLICT and never reach a worker.
-  let jobId: string | null = null;
+  let publication: JobPublication | null = null;
   try {
-    jobId = await dispatchTaskRun(db, { runId: run.id, taskId: task.id });
+    publication = await dispatchTaskRun(db, { runId: run.id, taskId: task.id });
   } catch {
-    jobId = null;
+    publication = null;
   }
-  if (!jobId) {
+  if (!publication || publication.status === "disabled") {
     await db.scheduledTaskRun.delete({ where: { id: run.id } });
     throw new CoreError(
       "PRECONDITION_FAILED",
-      "Background jobs are disabled; the run was not queued",
+      publication?.status === "disabled"
+        ? "Background jobs are disabled; the run was not queued"
+        : "The background queue is unavailable; the run was not queued",
     );
   }
   return { runId: run.id };
@@ -933,14 +935,14 @@ export async function taskForOutputDocument(
 export async function dispatchTaskRun(
   db: PrismaClient,
   run: { runId: string; taskId: string },
-): Promise<string | null> {
-  const jobId = await requestKnowledgeJob("task.run", run);
-  if (jobId)
+): Promise<JobPublication> {
+  const publication = await publishKnowledgeJob("task.run", run);
+  if (publication.status === "accepted")
     await db.scheduledTaskRun.updateMany({
       where: { id: run.runId, jobId: null },
-      data: { jobId },
+      data: { jobId: publication.jobId },
     });
-  return jobId;
+  return publication;
 }
 
 /** Claims every due task with a conditional nextRunAt update; a concurrent tick that loses updates zero rows (spec §6). */
@@ -961,31 +963,40 @@ export async function claimDueTasks(
   });
   const claimed: Array<{ runId: string; taskId: string }> = [];
   for (const task of due) {
-    const next = nextOccurrence(task.cron, task.timezone, now);
-    const run = await db.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT "id" FROM "ScheduledTask" WHERE "id" = ${task.id}::uuid FOR UPDATE`;
-      const result = await tx.scheduledTask.updateMany({
-        where: {
-          id: task.id,
-          status: "active",
-          nextRunAt: task.nextRunAt,
-          outputProject: notDeleted,
-        },
-        data: { nextRunAt: next },
+    try {
+      const next = nextOccurrence(task.cron, task.timezone, now);
+      const run = await db.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT "id" FROM "ScheduledTask" WHERE "id" = ${task.id}::uuid FOR UPDATE`;
+        const result = await tx.scheduledTask.updateMany({
+          where: {
+            id: task.id,
+            status: "active",
+            nextRunAt: task.nextRunAt,
+            outputProject: notDeleted,
+          },
+          data: { nextRunAt: next },
+        });
+        if (result.count !== 1) return null;
+        if (
+          await tx.scheduledTaskRun.count({
+            where: { taskId: task.id, status: { in: ["queued", "running"] } },
+          })
+        )
+          return null;
+        return tx.scheduledTaskRun.create({
+          data: { taskId: task.id, trigger: "schedule" },
+          select: { id: true },
+        });
       });
-      if (result.count !== 1) return null;
-      if (
-        await tx.scheduledTaskRun.count({
-          where: { taskId: task.id, status: { in: ["queued", "running"] } },
-        })
-      )
-        return null;
-      return tx.scheduledTaskRun.create({
-        data: { taskId: task.id, trigger: "schedule" },
-        select: { id: true },
+      if (run) claimed.push({ runId: run.id, taskId: task.id });
+    } catch {
+      emitDiagnostic({
+        event: "runtime.housekeeping.failed",
+        severity: "warn",
+        message: "Scheduled task claim failed; continuing with other tasks",
+        details: { operation: "task.claim", taskId: task.id },
       });
-    });
-    if (run) claimed.push({ runId: run.id, taskId: task.id });
+    }
   }
   return claimed;
 }
@@ -1493,7 +1504,7 @@ export async function failTaskRun(
       data: {
         status: "failed",
         errorCode: input.code,
-        errorMessage: input.message.slice(0, 300),
+        errorMessage: [...input.message].slice(0, 300).join(""),
         finishedAt: now,
       },
     });

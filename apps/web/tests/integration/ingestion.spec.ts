@@ -3717,7 +3717,7 @@ describe("ingestion router", () => {
       ).rejects.toMatchObject({
         code: "BAD_REQUEST",
         message: expect.stringMatching(/deselect.*related/i),
-        cause: expect.objectContaining({ field: "markdown" }),
+        cause: expect.objectContaining({ details: { field: "markdown" } }),
       });
       const ready = await caller.ingestion.getFile({ fileId });
       expect(ready).toMatchObject({
@@ -3959,7 +3959,7 @@ describe("ingestion router", () => {
         callerFor(owner).ingestion.accept(await reviewed(fileId)),
       ).rejects.toMatchObject({
         code: "BAD_REQUEST",
-        cause: { field: "proposedFolderPath" },
+        cause: { details: { field: "proposedFolderPath" } },
       });
       expect(
         await getFile(db, securityContextFor(owner), { fileId }),
@@ -4373,7 +4373,7 @@ describe("ingestion router", () => {
           callerFor(owner).ingestion.accept(await reviewed(fileId)),
         ).rejects.toMatchObject({
           code: "BAD_REQUEST",
-          cause: { field: "proposedTitle" },
+          cause: { details: { field: "proposedTitle" } },
         });
         expect(
           await getFile(db, securityContextFor(owner), { fileId }),
@@ -4518,13 +4518,12 @@ describe("ingestion router", () => {
           project.id,
           `ingestion:${fileId}`,
         );
-        expect(candidates).toHaveLength(committed ? 2 : 1);
-        expect(candidates[0]).toMatchObject({
-          operationId: null,
-          message: expect.stringContaining(
-            `Weaver-Operation-Id: ingestion:${fileId}`,
+        expect(candidates).toHaveLength(committed ? 1 : 0);
+        expect(
+          candidates.every(
+            (entry) => entry.operationId === `ingestion:${fileId}`,
           ),
-        });
+        ).toBe(true);
         const original = candidates.find(
           (entry) => entry.operationId === `ingestion:${fileId}`,
         );
@@ -4565,7 +4564,16 @@ describe("ingestion router", () => {
     it("retains accepting when release history exceeds the candidate bound", async () => {
       const fixture = await readyDocument("lookalike-bound");
       const { db, fileId, batchId, owner, project, actor } = fixture;
-      await addLookalikeHistory(fixture, 11);
+      await withProjectRepo(project.id, async (repo) => {
+        for (let index = 0; index < 11; index++) {
+          await repo.writeFileAtomic("release-bound.txt", `candidate ${index}`);
+          await repo.commitAll(
+            "release candidate",
+            { name: "Owner", email: actor.email, userId: actor.userId },
+            { operationId: `ingestion:${fileId}` },
+          );
+        }
+      });
       const candidates = await withProjectRepo(project.id, (repo) =>
         repo.logForPath(".", {
           skip: 0,
@@ -4574,9 +4582,11 @@ describe("ingestion router", () => {
         }),
       );
       expect(candidates).toHaveLength(11);
-      expect(candidates.every((entry) => entry.operationId === null)).toBe(
-        true,
-      );
+      expect(
+        candidates.every(
+          (entry) => entry.operationId === `ingestion:${fileId}`,
+        ),
+      ).toBe(true);
       await db.ingestionFile.update({
         where: { id: fileId },
         data: { status: "accepting" },
@@ -4689,7 +4699,7 @@ describe("ingestion router", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: { field: "columns" },
+      cause: { details: { field: "columns" } },
     });
     const updated = await caller.ingestion.updateDraft({
       fileId,
@@ -5013,7 +5023,6 @@ describe("ingestion router", () => {
         throw new CoreError("FORBIDDEN", "queue boundary error");
       },
     ],
-    ["returns null", async (): Promise<string | null> => null],
   ] as const)("leaves retry pending when publication %s", async (_, send) => {
     const db = getPrisma();
     const fixture = await makeRouterFile(
@@ -5038,6 +5047,19 @@ describe("ingestion router", () => {
         select: { status: true, failureKind: true, failureMessage: true },
       }),
     ).toEqual({ status: "pending", failureKind: null, failureMessage: null });
+  });
+
+  it("accepts a retry whose identical delivery is already queued", async () => {
+    const fixture = await makeRouterFile("retry-dedup", "failed");
+    setJobQueueForTests({
+      send: async () => null,
+      work: async () => undefined,
+      schedule: async () => undefined,
+      stop: async () => undefined,
+    });
+    await expect(
+      callerFor(fixture.owner).ingestion.retry({ fileId: fixture.fileId }),
+    ).resolves.toMatchObject({ fileId: fixture.fileId });
   });
 
   it("deletes through configured storage and preserves shared blobs", async () => {
@@ -6575,39 +6597,57 @@ describe("ingestion reconciliation", () => {
     expect(await reconcileIngestionFiles(db)).toEqual({ enqueued: 0 });
   });
 
-  it.each(["throw", "null"] as const)(
-    "keeps failed %s publication recoverable after the cooldown",
-    async (failure) => {
-      const db = getPrisma();
-      const fixture = await makeBatchFile(`recovery-failure-${failure}`);
-      const queue = new FakeJobQueue();
-      setJobQueueForTests(queue);
-      const send = vi.spyOn(queue, "send");
-      if (failure === "throw")
-        send.mockRejectedValueOnce(new Error("queue offline"));
-      else send.mockResolvedValueOnce(null);
-      await db.ingestionFile.update({
+  it("keeps thrown publication failures recoverable after the cooldown", async () => {
+    const db = getPrisma();
+    const fixture = await makeBatchFile("recovery-failure-throw");
+    const queue = new FakeJobQueue();
+    setJobQueueForTests(queue);
+    const send = vi.spyOn(queue, "send");
+    send.mockRejectedValueOnce(new Error("queue offline"));
+    await db.ingestionFile.update({
+      where: { id: fixture.fileId },
+      data: { updatedAt: old() },
+    });
+    await expect(reconcileIngestionFiles(db)).rejects.toThrow();
+    expect(
+      await db.ingestionFile.findUniqueOrThrow({
         where: { id: fixture.fileId },
-        data: { updatedAt: old() },
-      });
-      await expect(reconcileIngestionFiles(db)).rejects.toThrow();
-      expect(
-        await db.ingestionFile.findUniqueOrThrow({
-          where: { id: fixture.fileId },
-        }),
-      ).toMatchObject({ status: "pending", attemptCount: 0 });
-      expect(await reconcileIngestionFiles(db)).toEqual({
-        enqueued: 0,
-      });
-      await db.ingestionFile.update({
+      }),
+    ).toMatchObject({ status: "pending", attemptCount: 0 });
+    expect(await reconcileIngestionFiles(db)).toEqual({
+      enqueued: 0,
+    });
+    await db.ingestionFile.update({
+      where: { id: fixture.fileId },
+      data: { updatedAt: old() },
+    });
+    expect(await reconcileIngestionFiles(db)).toEqual({
+      enqueued: 1,
+    });
+  });
+
+  it("accepts an already queued recovery without a housekeeping failure", async () => {
+    const db = getPrisma();
+    const fixture = await makeBatchFile("recovery-dedup");
+    const queue = new FakeJobQueue();
+    setJobQueueForTests(queue);
+    await db.ingestionFile.update({
+      where: { id: fixture.fileId },
+      data: { updatedAt: old() },
+    });
+    expect(await reconcileIngestionFiles(db)).toEqual({ enqueued: 1 });
+    await db.ingestionFile.update({
+      where: { id: fixture.fileId },
+      data: { updatedAt: old() },
+    });
+    expect(await reconcileIngestionFiles(db)).toEqual({ enqueued: 0 });
+    expect(queue.jobs).toHaveLength(1);
+    expect(
+      await db.ingestionFile.findUniqueOrThrow({
         where: { id: fixture.fileId },
-        data: { updatedAt: old() },
-      });
-      expect(await reconcileIngestionFiles(db)).toEqual({
-        enqueued: 1,
-      });
-    },
-  );
+      }),
+    ).toMatchObject({ status: "pending", attemptCount: 0 });
+  });
 });
 
 describe("ingestion settings", () => {

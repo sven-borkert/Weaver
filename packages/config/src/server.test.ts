@@ -98,6 +98,14 @@ describe("parseServerEnv", () => {
     expect(env.WEAVER_GIT_LOCK_POOL_MAX).toBe(4);
   });
 
+  it("bounds ordinary query duration by default with an explicit opt-out", () => {
+    expect(parseServerEnv(base).DATABASE_STATEMENT_TIMEOUT_MS).toBe(30_000);
+    expect(
+      parseServerEnv({ ...base, DATABASE_STATEMENT_TIMEOUT_MS: "0" })
+        .DATABASE_STATEMENT_TIMEOUT_MS,
+    ).toBe(0);
+  });
+
   it("defaults the ingestion bounds", () => {
     const env = parseServerEnv(base);
     expect(env.WEAVER_INGESTION_MAX_FILE_BYTES).toBe(52_428_800);

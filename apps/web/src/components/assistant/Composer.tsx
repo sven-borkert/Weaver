@@ -1,7 +1,7 @@
 "use client";
 
 import { Send, Square } from "lucide-react";
-import { useState } from "react";
+import { useRef } from "react";
 import { toast } from "sonner";
 import type { ScopeRequest } from "@weaver/core/assistant/scopeSchema";
 import { Button } from "~/components/ui/button";
@@ -23,12 +23,26 @@ export function Composer({
   activeRunId: string | null;
 }) {
   const utils = api.useUtils();
-  const { startLiveRun, composerRef } = useAssistant();
-  const [text, setText] = useState("");
+  const {
+    startLiveRun,
+    composerRef,
+    composerDrafts,
+    composerDraftRevisions,
+    setComposerDraft,
+    clearComposerDraft,
+  } = useAssistant();
+  const text = composerDrafts[conversationId] ?? "";
+  const submittedRevision = useRef<number | null>(null);
 
   const send = api.assistant.sendMessage.useMutation({
-    onSuccess: ({ run }, variables) => {
-      setText("");
+    onMutate: () => ({ draftRevision: submittedRevision.current }),
+    onSuccess: ({ run }, variables, submitted) => {
+      if (submitted?.draftRevision != null)
+        clearComposerDraft(
+          variables.conversationId,
+          variables.text,
+          submitted.draftRevision,
+        );
       startLiveRun({ runId: run.id, conversationId: variables.conversationId });
       void utils.assistant.getConversation.invalidate({
         conversationId: variables.conversationId,
@@ -47,6 +61,9 @@ export function Composer({
         humanAssistantError(err.message, "Couldn't send the message"),
       );
     },
+    onSettled: () => {
+      submittedRevision.current = null;
+    },
   });
   const cancel = api.assistant.cancelRun.useMutation({
     onSuccess: () =>
@@ -58,7 +75,14 @@ export function Composer({
   const trimmed = text.trim();
   const busy = Boolean(activeRunId) || send.isPending;
   const submit = () => {
-    if (!trimmed || busy || trimmed.length > MAX_CHARS) return;
+    if (
+      !trimmed ||
+      busy ||
+      trimmed.length > MAX_CHARS ||
+      submittedRevision.current !== null
+    )
+      return;
+    submittedRevision.current = composerDraftRevisions[conversationId] ?? 0;
     send.mutate({ conversationId, text: trimmed, scope });
   };
 
@@ -74,7 +98,9 @@ export function Composer({
         ref={composerRef}
         aria-label="Message the assistant"
         value={text}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) =>
+          setComposerDraft(conversationId, event.target.value)
+        }
         onKeyDown={(event) => {
           if (
             event.key === "Enter" &&

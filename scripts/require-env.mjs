@@ -63,12 +63,12 @@ if (actualDb !== expectedDb) {
 
 if (
   ["weaver_test", "weaver_e2e"].includes(expectedDb) &&
-  !["localhost", "127.0.0.1", "[::1]", "postgres"].includes(
+  !["localhost", "127.0.0.1", "[::1]"].includes(
     new URL(fileEnv.DATABASE_URL).hostname,
   )
 ) {
   fail(
-    "Destructive test commands require a local database host (localhost, loopback or postgres).",
+    "Destructive test commands require a local database host (localhost or loopback).",
   );
 }
 

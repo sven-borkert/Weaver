@@ -9,7 +9,7 @@ import { z } from "zod";
 
 export const externalConnectionIdInput = z.object({ id: z.uuid() });
 export const externalConnectionListInput = z.object({
-  cursor: z.string().optional(),
+  cursor: z.string().max(2048).optional(),
   limit: z.number().int().min(1).max(100).default(25),
   search: z.string().max(120).optional(),
 });
@@ -24,7 +24,7 @@ export const revisionExternalConnectionInput = z.object({
   expectedRevision: z.number().int().positive(),
 });
 export const externalToolsInput = toolFilterSchema.extend({
-  cursor: z.string().optional(),
+  cursor: z.string().max(2048).optional(),
   limit: z.number().int().min(1).max(100).default(25),
 });
 export const externalToolKeysInput = toolFilterSchema;

@@ -70,15 +70,17 @@ const diagnostics = vi.hoisted(() => ({
 }));
 
 vi.mock("node:os", () => ({ hostname: () => "test-host" }));
+const workerEnv = vi.hoisted(() => ({
+  NODE_ENV: "test",
+  WEAVER_JOBS_ENABLED: true,
+  WEAVER_WORKER_HEALTH_PORT: 3101,
+  WEAVER_DATA_DIR: "./data-test",
+  WEAVER_WORKER_ROLES: new Set(["knowledge", "assistant", "ingestion"]),
+  WEAVER_INGESTION_MAX_OCR_PAGES: 50,
+  WEAVER_INGESTION_MAX_FILE_BYTES: 52_428_800,
+}));
 vi.mock("@weaver/config/server", () => ({
-  parseServerEnv: () => ({
-    NODE_ENV: "test",
-    WEAVER_WORKER_HEALTH_PORT: 3101,
-    WEAVER_DATA_DIR: "./data-test",
-    WEAVER_WORKER_ROLES: new Set(["knowledge", "assistant", "ingestion"]),
-    WEAVER_INGESTION_MAX_OCR_PAGES: 50,
-    WEAVER_INGESTION_MAX_FILE_BYTES: 52_428_800,
-  }),
+  parseServerEnv: () => workerEnv,
 }));
 vi.mock("@weaver/core/diagnostics/writer", () => diagnostics);
 vi.mock("@weaver/core/jobs/runtime", () => jobs);
@@ -122,6 +124,7 @@ function deferred() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  workerEnv.WEAVER_JOBS_ENABLED = true;
   encryption.loadEncryptionKeyRing.mockReturnValue(encryption.ring);
   assistant.createAssistantRunner.mockReturnValue(assistant.runner);
   ingestion.createIngestionParseRunner.mockReturnValue(ingestion.runner);
@@ -136,6 +139,14 @@ beforeEach(() => {
 });
 
 describe("agent-worker runtime composition", () => {
+  it("refuses startup before initializing consumers when jobs are disabled", async () => {
+    workerEnv.WEAVER_JOBS_ENABLED = false;
+    await expect(lifecycle.dependencies!.start()).rejects.toThrow(
+      "agent-worker requires WEAVER_JOBS_ENABLED=true",
+    );
+    expect(diagnostics.startDiagnosticWriter).not.toHaveBeenCalled();
+    expect(jobs.startKnowledgeWorkers).not.toHaveBeenCalled();
+  });
   it("starts and stops the diagnostic writer around worker admission", async () => {
     const dependencies = lifecycle.dependencies;
     expect(dependencies).not.toBeNull();

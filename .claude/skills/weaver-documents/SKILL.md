@@ -711,10 +711,13 @@ src>` can become an image without width and unknown attributes are dropped.
   valid trailer to a User before consulting the commit author email; use email
   when the trailer is malformed, missing, or does not resolve.
 - Rebuild opens an existing repository read-only, pins one `HEAD` SHA, scans
-  its sorted Markdown files, and never initializes, recovers, resets, cleans,
-  or commits. The existing-only callback holds the same per-project advisory lock as
-  writers across the scan, attribution, and one project document/link
-  repair transaction; an absent repository leaves the existing
+  its sorted document files in bounded blob/history batches, and never initializes,
+  recovers, resets, cleans, or commits. Scanning and attribution run without a lock;
+  linear history uses batched heads, while merged ancestry uses canonical per-path
+  `--follow` outside the lock to avoid discarded side-branch attribution. Then
+  the existing-only shared-lock callback verifies the pinned HEAD is still current
+  before the one project document/link repair transaction. A changed HEAD returns
+  retryable CONFLICT, preserving newer projections; an absent repository leaves the existing
   projection untouched. Before parsing a candidate, require canonical safe
   lowercase slug path segments, folder depth at most 10, a blob no larger than
   2,000,000 bytes, and a trimmed, nonempty, single-line title of at most 200
@@ -759,9 +762,9 @@ HEAD` + clean before writes. Atomic replacement prevents truncated worktree
   `.git`. `fileExistsInWorktree` reports such a path as absent, so service
   gates answer NOT_FOUND. Never touch the worktree with `node:fs` directly.
 - `rebuildIndex` is the repair path for projection drift. It opens only an
-  existing repo, holds the project advisory lock while scanning one pinned
-  `HEAD`, never
-  changes Git, and repairs that project's projections transactionally. It
+  existing repo, scans one pinned `HEAD` outside the project lock, then verifies
+  that HEAD under a shared lock before repairing projections transactionally.
+  It never changes Git. It
   preserves surviving document rows and their search chunks through scoped
   upserts, frees changed path/slug slots before restoring them, and deletes
   only absent IDs. Recreated rows invalidate keyword readiness so reconciliation
@@ -1041,7 +1044,10 @@ Owners can also pull the remote branch's existing content in
 - A fetched branch whose tree holds a symlink (`120000`) or gitlink (`160000`)
   entry is rejected with `UNSUPPORTED_REMOTE_CONTENT` before any worktree reset
   (`repo.listTreeEntries`); the worktree containment check is the backstop for
-  repositories that pulled such content earlier.
+  repositories that pulled such content earlier. Pull also rejects case- or
+  Unicode-normalization-colliding file/directory paths across the local and remote
+  trees before any reset, so the same content is safe on case-insensitive hosts.
+  Normalize ambiguous paths (including case-only renames) before pulling.
 - Phase A reads each tree through one batched `repo.readBlobsAt`, never one
   `git show` per file: that scan runs under the exclusive lock inside the
   pull's lease. `readBlobsAt` streams `git cat-file --batch` chunk by chunk:
@@ -1055,7 +1061,8 @@ Owners can also pull the remote branch's existing content in
   and no path collision are not re-slugged; rebuild keeps only one.
 - `refs/weaver/pull` is transient: it exists only to fetch the remote branch
   locally for the merge and is deleted in a `finally`, on success and on any
-  failure, before the lock is released.
+  failure, before the lock is released. Cleanup failures emit
+  `git.remote.pull_cleanup_failed` without changing an already accepted result.
 - Push and pull share one lease per `ProjectGitRemote` row; a follow-up push
   after a pull is dispatched only after the pull's own lease release completes.
 

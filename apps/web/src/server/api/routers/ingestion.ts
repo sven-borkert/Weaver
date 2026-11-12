@@ -5,7 +5,7 @@ import {
 import { actorOf } from "~/server/api/actor";
 import { env } from "~/env";
 import { CoreError } from "@weaver/core/errors";
-import { requestKnowledgeJob } from "@weaver/core/jobs/queue";
+import { publishKnowledgeJob } from "@weaver/core/jobs/queue";
 import { parseKnowledgeConfig } from "@weaver/core/knowledge/config";
 import * as ingestion from "@weaver/core/services/ingestion";
 import {
@@ -54,9 +54,8 @@ export const ingestionRouter = createTRPCRouter({
       );
     }
     const result = await ingestion.retryFile(ctx.db, ctx.security, input);
-    let jobId: string | null;
     try {
-      jobId = await requestKnowledgeJob(
+      const publication = await publishKnowledgeJob(
         ingestion.INGESTION_STAGE_JOBS[result.stage],
         {
           fileId: result.fileId,
@@ -65,10 +64,10 @@ export const ingestionRouter = createTRPCRouter({
           baseAttemptCount: result.attemptCount,
         },
       );
+      if (publication.status === "disabled") throw retryPublicationError();
     } catch {
       throw retryPublicationError();
     }
-    if (jobId === null) throw retryPublicationError();
     return result;
   }),
   deleteBatch: authedProcedure

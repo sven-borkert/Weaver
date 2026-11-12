@@ -113,6 +113,7 @@ vi.mock("./ProposalCard", () => ({
   ),
 }));
 import { Transcript } from "./Transcript";
+import { AssistantMarkdown } from "./AssistantMarkdown";
 
 const CONVERSATION = "11111111-1111-4111-8111-111111111111";
 const snapshot = {
@@ -231,6 +232,61 @@ describe("Transcript", () => {
     );
     expect(html).toContain("Streaming so far");
     expect(html).toContain("attempt 2 of 3");
+  });
+
+  it("replaces an unconfirmed streamed reply when its persisted outcome arrives", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const conversation = {
+      id: CONVERSATION,
+      activeRun: null,
+      messages: [] as Record<string, unknown>[],
+    };
+    mocked.conversation.data = conversation;
+    mocked.liveRun = { runId: "r2", conversationId: CONVERSATION };
+    mocked.liveStatus = "unconfirmed";
+    mocked.live = {
+      text: "Recovered answer",
+      tools: [],
+      citations: [],
+      proposals: [],
+    };
+    let renderer!: ReactTestRenderer;
+    const view = () => (
+      <Transcript
+        conversationId={CONVERSATION}
+        onScopeReuse={() => undefined}
+      />
+    );
+    await act(() => {
+      renderer = create(view());
+    });
+    try {
+      expect(renderer.root.findAllByType(AssistantMarkdown)).toHaveLength(1);
+      expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(1);
+      mocked.conversation.data = {
+        ...conversation,
+        messages: [
+          {
+            id: "a2",
+            position: 1,
+            role: "assistant",
+            status: "complete",
+            text: "Recovered answer",
+            citationIds: [],
+            proposalIds: [],
+            scopeSnapshot: null,
+            runId: "r2",
+            createdAt: new Date(),
+          },
+        ],
+      };
+      await act(() => renderer.update(view()));
+      expect(renderer.root.findAllByType(AssistantMarkdown)).toHaveLength(1);
+      expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);
+    } finally {
+      await act(() => renderer.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 
   it("keeps showing the streamed answer through the post-terminal grace window, instead of flashing to a bare 'Thinking' state", () => {

@@ -6,6 +6,14 @@ export function parseDatabaseUrl(value) {
   if (!/^postgres(?:ql)?:$/.test(url.protocol) || name !== "weaver")
     throw new Error("DATABASE_URL must target the weaver database");
   if (
+    !["localhost", "127.0.0.1", "[::1]"].includes(url.hostname) ||
+    url.searchParams.has("host") ||
+    url.searchParams.has("hostaddr")
+  )
+    throw new Error(
+      "Local database containers require a loopback DATABASE_URL",
+    );
+  if (
     !password ||
     password === "password" ||
     password.startsWith("REPLACE_WITH_")

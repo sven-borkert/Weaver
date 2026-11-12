@@ -26,6 +26,14 @@ export async function getRetentionSettings(
 
 export type RetentionSettingsPatch = Partial<RetentionSettings>;
 
+export async function getRetentionSettingsAsAdmin(
+  db: PrismaClient,
+  actor: UserSecurityContext,
+): Promise<RetentionSettings> {
+  assertSystemAdmin(actor);
+  return getRetentionSettings(db);
+}
+
 export async function setRetentionSettings(
   db: PrismaClient,
   actor: UserSecurityContext,

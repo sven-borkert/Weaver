@@ -2053,6 +2053,10 @@ export async function listTables(
       : {}),
   };
   const total = await db.dataTable.count({ where });
+  const pageSize = Math.min(200, input.pageSize > 0 ? input.pageSize : total);
+  const skip = (input.page - 1) * pageSize;
+  if (!Number.isSafeInteger(skip) || skip < 0 || skip > 2_147_483_647)
+    throw new CoreError("BAD_REQUEST", "Invalid page");
   const orderBy: Prisma.DataTableOrderByWithRelationInput[] = [
     { [input.sort]: input.dir },
     { id: "asc" },
@@ -2060,9 +2064,8 @@ export async function listTables(
   const items = await db.dataTable.findMany({
     where,
     orderBy,
-    ...(input.pageSize > 0
-      ? { skip: (input.page - 1) * input.pageSize, take: input.pageSize }
-      : {}),
+    skip,
+    take: pageSize,
     select: {
       id: true,
       title: true,
@@ -2078,7 +2081,6 @@ export async function listTables(
       lastEditedByName: true,
     },
   });
-  const pageSize = input.pageSize > 0 ? input.pageSize : total;
   return {
     items: items.map(
       ({

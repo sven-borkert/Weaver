@@ -1059,6 +1059,40 @@ describe("table router — core", () => {
     });
   });
 
+  it("caps legacy All pages and exposes all remaining tables on continuation", async () => {
+    const { project, caller, actor } = await setupProjectWith(
+      "Viewer",
+      "list-cap",
+    );
+    const rows = Array.from({ length: 205 }, (_, i) => ({
+      id: randomUUID(),
+      projectId: project.id,
+      title: `Table ${String(i).padStart(3, "0")}`,
+      slug: `table-${i}`,
+      path: `tables/table-${i}.table`,
+      rowCount: 0,
+      headCommitSha: "a".repeat(40),
+      lastEditedById: actor.id,
+      createdAt: new Date(),
+      lastEditedAt: new Date(),
+    }));
+    await getPrisma().dataTable.createMany({ data: rows });
+    const input = {
+      projectId: project.id,
+      pageSize: -1,
+      sort: "title" as const,
+      dir: "asc" as const,
+    };
+    const first = await caller.table.list({ ...input, page: 1 });
+    const second = await caller.table.list({ ...input, page: 2 });
+    expect(first).toMatchObject({ pageSize: 200, pageCount: 2, total: 205 });
+    expect(first.items).toHaveLength(200);
+    expect(second.items).toHaveLength(5);
+    expect([...first.items, ...second.items].map((row) => row.id)).toEqual(
+      rows.map((row) => row.id),
+    );
+  });
+
   it("lists with real paging, filters, All mode, alternate sort, and stable ties", async () => {
     const { project, caller } = await setupProjectWith("Editor", "tc7b");
     await caller.tableFolder.create({
@@ -1361,7 +1395,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       conflicts: [{ kind: "cell", rowId: ROW_1, columnId: TEXT_COL.id }],
       headCommitSha: current.headCommitSha,
     });
@@ -1398,7 +1434,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       conflicts: [{ kind: "column", columnId: TEXT_COL.id }],
       headCommitSha: expect.stringMatching(/^[0-9a-f]{40}$/),
     });
@@ -1459,7 +1497,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       headCommitSha: created.headCommitSha,
     });
     expect(
@@ -1503,7 +1543,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       headCommitSha: current.headCommitSha,
     });
     expect(
@@ -1546,7 +1588,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       headCommitSha: current.headCommitSha,
     });
     expect(
@@ -1592,7 +1636,9 @@ describe("table router — merge", () => {
       })
       .catch((caught: unknown) => caught);
     expect(error).toMatchObject({ code: "CONFLICT" });
-    expect((error as { cause?: unknown }).cause).toMatchObject({
+    expect(
+      (error as { cause?: { details?: unknown } }).cause?.details,
+    ).toMatchObject({
       headCommitSha: current.headCommitSha,
     });
     expect(

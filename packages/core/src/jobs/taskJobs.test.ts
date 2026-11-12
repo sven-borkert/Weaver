@@ -19,12 +19,12 @@ describe("scheduled task jobs", () => {
     expect(knowledgeJobExpireInSeconds("task.run")).toBe(20 * 60);
   });
 
-  it("dedupes queued runs per task through the singleton key", () => {
+  it("dedupes the same run without blocking a later run of the task", () => {
     expect(
       knowledgeJobSendOptions("task.run", { runId: "r1", taskId: "t1" }),
-    ).toEqual({ singletonKey: "t1" });
+    ).toEqual({ singletonKey: "r1" });
     expect(
-      knowledgeJobSendOptions("task.run", { runId: "r1" }),
+      knowledgeJobSendOptions("task.run", { taskId: "t1" }),
     ).toBeUndefined();
   });
 });

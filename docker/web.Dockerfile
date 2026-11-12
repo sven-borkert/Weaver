@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-alpine AS base
+FROM node:22.23.5-alpine3.23 AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV COREPACK_HOME=/usr/local/share/corepack

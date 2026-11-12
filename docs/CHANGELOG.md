@@ -4,10 +4,26 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.239] - 2026-11-12
+
 ### Fixed
+
+- Git operations treat unusual file names literally, preserve merge/rename history, reject portable path collisions during pulls, and recover local commit trust after interrupted writes. Rebuilds and operation recovery batch and cache history reads to reduce lock contention.
+- Switching tables cannot apply a previous table's save to the new draft. Assistant transcripts preserve the reader's scroll position and unsent conversation drafts; approvals and run acknowledgements stop unnecessary polling. Exam timers announce milestones instead of every tick.
+- Machine API and transfer requests receive admission limits before expensive work. Exam attempt lists batch metadata queries, list responses and cursors are bounded, and service errors retain their original diagnostic stack.
+- Ingestion treats queued singleton duplicates as success. Scheduled tasks isolate failed claims and dispatches, and distinct runs cannot block one another through a stale queue singleton. Worker startup, readiness probes, Docling cleanup, and parser memory monitoring handle failure states consistently.
+- External tool results obey UTF-8 byte limits, graph citations require current live evidence, and final usage-accounting failures no longer replace the assistant's completed outcome.
 
 - Keyword search finds a file name that appears inside a path in a document body (`datastoreconfig.xml` in `/app/conf/datastoreconfig.xml`). Paths and dotted or underscored names are split into words in both the index and the query; hyphens are unchanged. The migration rebuilds the search index column, so existing documents need no reindex.
 - Numbered lists keep every fenced code block inside a list item when Markdown is imported or parsed; before, only the first block survived and later ones vanished without warning. Continuation lines indented to the CommonMark content width (three spaces under `1. `) no longer keep a stray leading space in paragraphs and code lines. A fenced code block indented by up to three spaces now parses as a code block instead of being dropped.
+
+### Changed
+
+- Database statements default to a 30-second timeout; transactions coupling Git and database writes emit slow-operation diagnostics. Deployment examples bind HTTP to loopback, worker probes check readiness, Node images are pinned, and GitLab Docker-in-Docker uses TLS.
+
+### Added
+
+- A nightly and manually dispatched integration workflow against isolated pgvector, plus operating guidance for identity-provider trust, rate limits across instances, connection budgets, and index maintenance.
 
 ## [0.1.236] - 2026-11-03
 

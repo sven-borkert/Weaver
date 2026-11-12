@@ -136,7 +136,7 @@ export const restoreTableInput = z.object({
 
 export const listTablesInput = z.object({
   projectId: z.uuid(),
-  page: z.number().int().min(1).default(1),
+  page: z.number().int().min(1).max(2_147_483_647).default(1),
   pageSize: z.number().int().min(-1).max(200).default(25),
   search: z.string().trim().max(200).optional(),
   folderPath: folderPathSchema.optional(),

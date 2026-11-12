@@ -488,7 +488,7 @@ export async function executeAssistantRun(
             : terminal === "cancelled" || terminal === "abandoned"
               ? "stale_discarded"
               : "provider_failure",
-        );
+        ).catch(() => undefined);
       }
     },
   );

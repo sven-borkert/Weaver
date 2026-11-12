@@ -14,12 +14,24 @@ import {
 } from "./examPresentation";
 export function TraineeExamList({ projectId }: { projectId: string }) {
   const [now, setNow] = useState(Date.now);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
   const q = api.exam.listAvailable.useQuery({ projectId });
   const exams = dataUnlessAccessError(q.data, q.error);
+  const countingDown = Boolean(
+    exams?.some(
+      (exam) =>
+        exam.openAttemptId &&
+        exam.attempts.some(
+          (attempt) =>
+            attempt.id === exam.openAttemptId &&
+            new Date(attempt.deadlineAt).getTime() > now,
+        ),
+    ),
+  );
+  useEffect(() => {
+    if (!countingDown) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [countingDown]);
   if (!exams)
     return (
       <ExamQueryState

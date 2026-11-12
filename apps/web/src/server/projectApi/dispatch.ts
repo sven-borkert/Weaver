@@ -25,6 +25,9 @@ import {
   readProjectApiJson,
 } from "./body";
 import { projectApiErrorResponse, projectApiHeaders } from "./respond";
+import { projectApiAdmission } from "./admission";
+import { requestClientAddress } from "~/server/clientAddress";
+import { env } from "~/env";
 
 export async function handleProjectApiRequest(
   req: Request,
@@ -41,7 +44,12 @@ export async function handleProjectApiRequest(
   let status = 500;
   let commitSha: string | null = null;
   let resourceId = params.documentId ?? params.tableId ?? null;
+  let admission: ReturnType<typeof projectApiAdmission.check> | undefined;
   try {
+    admission = projectApiAdmission.check(
+      req.headers.get("authorization"),
+      requestClientAddress(req.headers, env.WEAVER_AUTH_TRUST_PROXY),
+    );
     checkProjectApiDeclaredSize(req);
     for (const value of Object.values(params))
       if (!machineUuid.safeParse(value).success)
@@ -52,6 +60,7 @@ export async function handleProjectApiRequest(
       params.projectId,
     );
     authenticated = context;
+    admission.verified();
     await admitProjectMachineRequest(db, context);
     const url = new URL(req.url);
     if (
@@ -125,6 +134,7 @@ export async function handleProjectApiRequest(
       headers,
     });
   } catch (error) {
+    if (!authenticated) admission?.rejected();
     const response = projectApiErrorResponse(error, requestId);
     status = response.status;
     const details = error instanceof CoreError ? error.details : undefined;

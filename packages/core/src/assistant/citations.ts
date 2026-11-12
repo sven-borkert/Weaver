@@ -144,15 +144,31 @@ async function loadDocumentRevision(
     if (renamed && renamed !== row.path) file = await read(renamed);
   }
   if (!file) {
-    for (const path of await repo.listTrackedFiles(commitSha)) {
-      if (
-        path === row.path ||
-        documentKindFromPath(path) === null ||
-        path.startsWith("tables/")
-      )
-        continue;
-      file = await read(path);
-      if (file) break;
+    const candidates = (await repo.listTrackedBlobs(commitSha)).filter(
+      (entry) =>
+        entry.path !== row.path &&
+        entry.size <= 2_000_000 &&
+        documentKindFromPath(entry.path) !== null &&
+        !entry.path.startsWith("tables/"),
+    );
+    for (let offset = 0; offset < candidates.length && !file; offset += 50) {
+      const blobs = await repo.readBlobsAt(
+        commitSha,
+        candidates.slice(offset, offset + 50).map((entry) => entry.path),
+        2_000_000,
+      );
+      for (const [path, content] of blobs) {
+        try {
+          const kind = documentKindOfPath(path);
+          const candidate = parseDocumentFile(content, kind);
+          if (candidate.meta.id === documentId) {
+            file = { ...candidate, kind };
+            break;
+          }
+        } catch {
+          continue;
+        }
+      }
     }
   }
   if (!file) return null;
@@ -434,21 +450,46 @@ export async function validateSourceLocators(
           if (!id) break;
           const entity = locator.entityId
             ? await db.graphEntity.findFirst({
-                where: { id, projectId: locator.projectId },
-                select: { canonicalName: true },
+                where: {
+                  id,
+                  projectId: locator.projectId,
+                  generation: {
+                    projectId: locator.projectId,
+                    status: "active",
+                  },
+                  mentions: { some: { invalidatedAt: null } },
+                },
+                select: { canonicalName: true, generationId: true },
               })
             : null;
           const relation =
             locator.relationId && !locator.entityId
               ? await db.graphRelation.findFirst({
-                  where: { id, projectId: locator.projectId },
-                  select: { relationType: true },
+                  where: {
+                    id,
+                    projectId: locator.projectId,
+                    generation: {
+                      projectId: locator.projectId,
+                      status: "active",
+                    },
+                    sourceEntity: {
+                      projectId: locator.projectId,
+                      generation: { status: "active" },
+                    },
+                    targetEntity: {
+                      projectId: locator.projectId,
+                      generation: { status: "active" },
+                    },
+                  },
+                  select: { relationType: true, generationId: true },
                 })
               : null;
           const label = entity?.canonicalName ?? relation?.relationType;
           if (!label) break;
           const where = {
             projectId: locator.projectId,
+            generationId: entity?.generationId ?? relation?.generationId,
+            invalidatedAt: null,
             ...(locator.documentId ? { documentId: locator.documentId } : {}),
             ...(locator.commitSha
               ? { sourceCommitSha: locator.commitSha }
@@ -465,7 +506,7 @@ export async function validateSourceLocators(
                 orderBy: [{ recordedAt: "desc" }, { id: "asc" }],
                 select: { documentId: true, sourceCommitSha: true },
               });
-          if ((locator.documentId || locator.commitSha) && !provenance) break;
+          if (!provenance) break;
           const source = provenance
             ? await documentSource(
                 db,

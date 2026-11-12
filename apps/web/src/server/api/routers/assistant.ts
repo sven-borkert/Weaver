@@ -1,10 +1,12 @@
-import { z } from "zod";
+import { actorOf } from "~/server/api/actor";
 import { authedProcedure, createTRPCRouter } from "~/server/api/trpc";
 import {
   conversationIdInput,
   getConversationInput,
   createConversationInput,
   listConversationsInput,
+  listCitationsInput,
+  listScopeFoldersInput,
   pinConversationInput,
   proposalIdInput,
   renameConversationInput,
@@ -21,16 +23,6 @@ import * as runs from "@weaver/core/services/assistantRuns";
 import { getConversationUsage } from "@weaver/core/services/assistantUsage";
 import { listContentFolders } from "@weaver/core/services/folders";
 import { resolveLlmRoute } from "@weaver/core/services/llmRoutes";
-import type { UserSecurityContext } from "@weaver/core/security/context";
-
-const actorOf = (ctx: {
-  security: UserSecurityContext;
-  session: { user: { email?: string | null; name?: string | null } };
-}) => ({
-  ...ctx.security,
-  name: ctx.session.user.name ?? null,
-  email: ctx.session.user.email ?? "unknown@local",
-});
 
 export const assistantRouter = createTRPCRouter({
   availability: authedProcedure.query(async ({ ctx }) => {
@@ -67,7 +59,7 @@ export const assistantRouter = createTRPCRouter({
       getConversationUsage(ctx.db, ctx.security, input.conversationId),
     ),
   listScopeFolders: authedProcedure
-    .input(z.object({ projectId: z.uuid() }))
+    .input(listScopeFoldersInput)
     .query(async ({ ctx, input }) => {
       const listing = await listContentFolders(ctx.db, input, ctx.security);
       return listing.folders;
@@ -141,7 +133,7 @@ export const assistantRouter = createTRPCRouter({
       proposals.getProposal(ctx.db, ctx.security, input.proposalId),
     ),
   listCitations: authedProcedure
-    .input(conversationIdInput.extend({ messageId: z.uuid().optional() }))
+    .input(listCitationsInput)
     .query(({ ctx, input }) =>
       citations.listCitations(ctx.db, ctx.security, input),
     ),

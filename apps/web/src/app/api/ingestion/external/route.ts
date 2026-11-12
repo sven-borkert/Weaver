@@ -5,7 +5,7 @@ import { db } from "@weaver/db";
 import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { isCoreError } from "@weaver/core/errors";
 import { normalizeMimeType } from "@weaver/core/ingestion/mimeTypes";
-import { requestKnowledgeJob } from "@weaver/core/jobs/queue";
+import { publishKnowledgeJob } from "@weaver/core/jobs/queue";
 import { parseKnowledgeConfig } from "@weaver/core/knowledge/config";
 import { resolveApiKeySecurityContext } from "@weaver/core/security/bearer";
 import {
@@ -180,13 +180,14 @@ export async function POST(req: NextRequest): Promise<Response> {
       byteSize: staged.byteSize,
     };
     try {
-      const jobId = await requestKnowledgeJob("ingestion.parse", {
+      const publication = await publishKnowledgeJob("ingestion.parse", {
         fileId: stored.id,
         projectId: finalized.projectId,
         contentDigest: stored.contentDigest,
         baseAttemptCount: 0,
       });
-      if (!jobId) throw new Error("queue did not accept ingestion.parse");
+      if (publication.status === "disabled")
+        throw new Error("ingestion jobs are disabled");
     } catch {
       emitDiagnostic({
         ...principal,

@@ -881,7 +881,7 @@ describe("content appearance", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: { field: "backgroundColor" },
+      cause: { details: { field: "backgroundColor" } },
     });
     await withProjectRepo(f.project.id, async (repo) =>
       expect(

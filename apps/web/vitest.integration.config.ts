@@ -13,6 +13,8 @@ export default defineConfig({
     setupFiles: ["tests/integration/_setup.ts"],
     globals: false,
     testTimeout: 30_000,
+    // A reset must finish before the next test can truncate the same database.
+    hookTimeout: 60_000,
     pool: "forks",
     // Vitest 4 removed test.poolOptions; singleFork is now the top-level
     // pair maxWorkers: 1 + isolate: false. Keeps every spec file serial

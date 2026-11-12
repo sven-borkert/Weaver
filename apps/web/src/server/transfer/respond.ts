@@ -21,10 +21,18 @@ export function transferError(error: unknown): Response {
     if (detail(error.details, "reason") === "PAYLOAD_TOO_LARGE")
       return problem(413, error.message);
     const field = detail(error.details, "field");
+    const retryAfter = error.details?.retryAfterSeconds;
     return problem(
       statusForCoreError(error.code),
       error.message,
       field ? { field } : {},
+      error.code === "TOO_MANY_REQUESTS"
+        ? {
+            "retry-after": String(
+              typeof retryAfter === "number" ? retryAfter : 60,
+            ),
+          }
+        : undefined,
     );
   }
   throw error;

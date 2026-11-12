@@ -87,7 +87,7 @@ export const serverEnvShape = {
     ),
 
   DATABASE_POOL_MAX: boundedInt(1, 1_000, 10),
-  DATABASE_STATEMENT_TIMEOUT_MS: boundedInt(0, 86_400_000, 0),
+  DATABASE_STATEMENT_TIMEOUT_MS: boundedInt(0, 86_400_000, 30_000),
   WEAVER_DATA_DIR: z.string().min(1).transform(resolveDataDir),
   WEAVER_GIT_LOCK_TIMEOUT_MS: boundedInt(1, 120_000, 10_000),
   WEAVER_PROJECT_API_OPERATION_LOCK_POOL_MAX: boundedInt(1, 128, 2),

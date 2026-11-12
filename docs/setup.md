@@ -72,6 +72,12 @@ path>/api/mcp`; must be `https://` off loopback; it is the audience of MCP
 `.env.test` and `.env.e2e` are gitignored just like `.env`; only
 `.env.example` is committed.
 
+Destructive test commands accept only localhost or a loopback IP. For a test
+database in Docker, publish its port on `127.0.0.1`; the bare `postgres`
+hostname is refused because a DNS search domain could resolve it elsewhere.
+`DATABASE_STATEMENT_TIMEOUT_MS` defaults to 30,000 ms for application queries;
+set `0` only as a deliberate opt-out. Migration sessions use their own budget.
+
 ## 2. Start PostgreSQL
 
 **Option A — Docker container (recommended).** Fill the password in
@@ -82,7 +88,7 @@ container password from the URL), then:
 ./start-database.sh
 ```
 
-This starts a `weaver-postgres` container from `pgvector/pgvector:pg17`
+This starts a `weaver-postgres` container from `pgvector/pgvector:0.8.6-pg17-trixie`
 matching `DATABASE_URL` (password, port, DB name are parsed from `.env`). Note:
 
 - The container runs with `POSTGRES_USER=postgres`, so the URL's user part
@@ -127,6 +133,16 @@ The migration also adds stored generated search columns and non-concurrent
 indexes. On populated databases those DDL operations can lock their tables;
 preflight table sizes and lock/statement timeouts, then schedule a maintenance
 window instead of applying the migration during normal traffic.
+This rule applies to every upgrade that adds indexes or rewrites a populated
+table, not only the Phase 3 migration. Ordinary `CREATE INDEX` takes a `SHARE`
+lock and blocks writes while allowing ordinary reads. For a future index on a
+large live table, put one `CREATE INDEX CONCURRENTLY` in a new, dedicated
+migration without `BEGIN`/`COMMIT`, rehearse it with the pinned Prisma version,
+and monitor `pg_stat_progress_create_index`. After a failed build, inspect
+`pg_index.indisvalid` and remove only the failed new index before resolving and
+retrying that migration. Do not change already-applied migration SQL or assume
+`IF NOT EXISTS` repairs an invalid index. See
+[PostgreSQL's concurrent-build restrictions](https://www.postgresql.org/docs/17/sql-createindex.html#SQL-CREATEINDEX-CONCURRENTLY).
 `20260902090000_better_auth_organizations` deletes all pre-release users,
 credentials, and memberships (projects and content are kept); in development
 or test databases, re-run `pnpm db:seed` (or `pnpm db:e2e:seed`) afterwards.
@@ -415,6 +431,12 @@ login page. Any user authorized for this application at the identity provider
 can create a Weaver account by signing in. Restrict application access in
 Authentik to the intended users or groups.
 
+The provider is an account-linking trust boundary: a verified email matching a
+local account links that identity to the account. Enable this only for an IdP
+that proves ownership of every asserted email and prevents users from editing
+`email_verified` or asserting another user's address. Restrict IdP administration
+accordingly; Weaver cannot independently prove a provider's verified-email claim.
+
 1. In Authentik, create an application with an **OAuth2/OpenID Connect**
    provider and a **confidential** client. Enable the `openid`, `profile`, and
    `email` scope mappings and use a signing key. The ID token must contain a
@@ -589,7 +611,10 @@ The generic single-host example is
 [`deploy/examples/docker-compose.yml`](../deploy/examples/docker-compose.yml)
 with [`deploy/examples/web.env.example`](../deploy/examples/web.env.example):
 PostgreSQL, migrations, web on a published port, both workers and MCP, one
-`./data` directory, no reverse proxy. Copy `deploy/examples/docker-compose.yml`
+`./data` directory, no reverse proxy. The HTTP ports bind only `127.0.0.1`.
+Public access requires a TLS reverse proxy and `AUTH_URL` set to its public
+HTTPS origin; the example's localhost URL is only for local access.
+Copy `deploy/examples/docker-compose.yml`
 and `deploy/examples/web.env.example` (as `web.env`) from the repository into
 an empty directory, then:
 
@@ -615,6 +640,47 @@ Upgrade with `docker compose --env-file web.env pull && docker compose --env-fil
 pin a release with `WEAVER_IMAGE_TAG=<version>` in `web.env`. Local images are
 still built with `docker compose -f docker-compose.yml -f docker-compose.build.yml build` from
 a checkout.
+
+## Database operating budgets
+
+Project creation keeps initial Git metadata in its database transaction so a
+failed initialization cannot publish a half-created project. Key-policy changes
+hold the project Git lock before the membership transaction and may commit a
+legacy folder identity. Preserve these invariants; neither transaction performs
+network I/O. `database.transaction.slow` warns after five seconds with the
+operation, project ID, and elapsed time, including failures.
+
+Monitor transaction age and connection use alongside that event. Run the
+following as a database operator; it returns no query text or credentials:
+
+```sql
+SELECT state, count(*) AS connections,
+       max(clock_timestamp() - xact_start) AS oldest_transaction
+FROM pg_stat_activity
+WHERE datname = current_database()
+GROUP BY state;
+```
+
+Investigate sustained `idle in transaction`, lock waits, and connection counts
+approaching the configured budget before increasing pool sizes. The default
+four-process stack budgets 68 connections plus administration against 150 on
+PostgreSQL; each added replica consumes its own pools. Slow filesystem calls
+are bounded by the existing transaction timeouts and should be investigated at
+the storage layer.
+
+## Scheduled integration CI
+
+`.github/workflows/integration.yml` runs the guarded full integration suite at
+02:23 UTC daily and on manual workflow dispatch. Its isolated pgvector service
+publishes a localhost port, generates `.env.test`, applies test migrations and
+installs Chromium for PDF integration coverage. Ordinary PR pipelines retain
+Tier 1 checks. Local full-suite runs still require the repository consent gate.
+
+GitLab image builds require a TLS-enabled Docker executor with a per-job shared
+`/certs/client` volume between the build and dind containers. The job connects
+to port 2376 with certificate verification. Configure the runner volume before
+using the pipeline; do not revert to unauthenticated port 2375. See
+[GitLab's TLS runner setup](https://docs.gitlab.com/ci/docker/docker_in_docker/).
 
 ## Production (docker-compose parity)
 
@@ -758,6 +824,14 @@ canonical URL.
   the hard bound and exits unsuccessfully if a request cannot finish.
 
 Tune `WEAVER_MCP_*` in `.env.example` for limits and timeouts.
+
+Source, anonymous, transfer-credential, and external-feed rate windows live in
+each process. A deployment with multiple web/MCP replicas needs a shared edge
+rate limiter before traffic is split (including invalid-credential traffic), or
+a shared limiter implementation; adding replicas otherwise multiplies those
+limits. Project machine-key authenticated counters remain database-backed.
+Trust forwarded client addresses only from a private listener behind the
+configured proxy, and have that proxy overwrite the selected source header.
 
 The Phase 4F OAuth migration is a one-time full authority cutover, not an
 in-place preservation of existing grants. It locks the consent/access/refresh

@@ -8,10 +8,9 @@ export function toTRPCError(error: unknown): TRPCError {
       : new TRPCError({ code: "INTERNAL_SERVER_ERROR", cause: error });
   }
 
-  const mapped = new TRPCError({
+  return new TRPCError({
     code: error.code,
     message: error.message,
+    cause: error,
   });
-  Object.defineProperty(mapped, "cause", { value: error.details });
-  return mapped;
 }

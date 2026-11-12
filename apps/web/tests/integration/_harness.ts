@@ -377,7 +377,7 @@ export function callerWithSecurity(
     oidcFetch: overrides.oidcFetch ?? fetch,
     oidcFallback: overrides.oidcFallback,
     headers: overrides.headers ?? new Headers(),
-  } as never);
+  });
 }
 
 /** Build a tRPC caller authenticated as the given user's browser session. */

@@ -31,7 +31,7 @@ import {
   trainingRoleFor,
 } from "./projectTraining";
 import type { ProjectActor } from "./projectAccess";
-import { resolveProjectAccess } from "./projectAccess";
+import { notDeleted, resolveProjectAccess } from "./projectAccess";
 import {
   effectiveAttempt,
   traineeSummary,
@@ -407,44 +407,59 @@ export async function finalizeExpiredAttempts(
     if (n < 100) return { expired: count };
   }
 }
-async function listItem(
+const attemptTitleSchema = examSnapshotSchema.pick({ title: true });
+
+async function listItems(
   db: Db,
-  row: ExamAttempt,
+  rows: ExamAttempt[],
   now: Date,
-): Promise<AttemptListItem> {
-  const trainee = await db.user.findUniqueOrThrow({
-    where: { id: row.traineeId },
+): Promise<AttemptListItem[]> {
+  if (rows.length === 0) return [];
+  const users = await db.user.findMany({
+    where: { id: { in: [...new Set(rows.map((row) => row.traineeId))] } },
     select: { id: true, name: true, email: true },
   });
-  const project = await db.project.findUniqueOrThrow({
-    where: { id: row.projectId },
-    select: { name: true },
+  const projects = await db.project.findMany({
+    where: {
+      id: { in: [...new Set(rows.map((row) => row.projectId))] },
+      ...notDeleted,
+    },
+    select: { id: true, name: true },
   });
-  const r = effectiveAttempt(row, now);
-  return {
-    id: r.id,
-    examId: r.examId,
-    examTitle: examSnapshotSchema.parse(r.definitionSnapshot).title,
-    projectId: r.projectId,
-    projectName: project.name,
-    trainee,
-    attemptNumber: r.attemptNumber,
-    status: r.status,
-    startedAt: r.startedAt,
-    deadlineAt: r.deadlineAt,
-    submittedAt: r.submittedAt,
-    submissionKind: r.submissionKind,
-    gradedAt: r.gradedAt,
-    gradedByName: r.gradedByName,
-    gradedVia: r.gradedVia,
-    releasedAt: r.releasedAt,
-    releasedByName: r.releasedByName,
-    totalScore: r.totalScore,
-    maxScore: r.maxScore,
-    percent: r.percent,
-    passed: r.passed,
-    revision: r.revision,
-  };
+  const usersById = new Map(users.map((user) => [user.id, user]));
+  const projectsById = new Map(
+    projects.map((project) => [project.id, project]),
+  );
+  return rows.map((row) => {
+    const trainee = usersById.get(row.traineeId);
+    const project = projectsById.get(row.projectId);
+    if (!trainee || !project) throw new CoreError("NOT_FOUND");
+    const r = effectiveAttempt(row, now);
+    return {
+      id: r.id,
+      examId: r.examId,
+      examTitle: attemptTitleSchema.parse(r.definitionSnapshot).title,
+      projectId: r.projectId,
+      projectName: project.name,
+      trainee,
+      attemptNumber: r.attemptNumber,
+      status: r.status,
+      startedAt: r.startedAt,
+      deadlineAt: r.deadlineAt,
+      submittedAt: r.submittedAt,
+      submissionKind: r.submissionKind,
+      gradedAt: r.gradedAt,
+      gradedByName: r.gradedByName,
+      gradedVia: r.gradedVia,
+      releasedAt: r.releasedAt,
+      releasedByName: r.releasedByName,
+      totalScore: r.totalScore,
+      maxScore: r.maxScore,
+      percent: r.percent,
+      passed: r.passed,
+      revision: r.revision,
+    };
+  });
 }
 export async function listAttempts(
   db: Db,
@@ -502,9 +517,7 @@ export async function listAttempts(
     orderBy: [{ startedAt: "desc" }, { id: "desc" }],
     take: limit + 1,
   });
-  const items: AttemptListItem[] = [];
-  for (const row of rows.slice(0, limit))
-    items.push(await listItem(db, row, now));
+  const items = await listItems(db, rows.slice(0, limit), now);
   const last = items.at(-1);
   return {
     items,
@@ -535,7 +548,7 @@ async function reviewView(
   });
   const snapshot = examSnapshotSchema.parse(row.definitionSnapshot);
   return {
-    ...(await listItem(db, row, now)),
+    ...(await listItems(db, [row], now))[0]!,
     snapshot,
     overallFeedback: row.overallFeedback,
     answers: snapshot.questions.map((q) => {

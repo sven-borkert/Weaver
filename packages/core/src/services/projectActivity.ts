@@ -69,20 +69,26 @@ export async function projectChangesSince(
   }
   let entries: GitChangeEntry[];
   let fallback: ProjectChangesResult["fallback"] = "none";
-  try {
-    entries = input.fromSha
-      ? await repo.logSince(input.fromSha, { limit: input.limit + 1 })
-      : await repo.logSince(null, {
-          limit: input.limit + 1,
-          sinceDate: input.sinceDate,
-        });
-  } catch {
-    // The recorded head is gone (repository recreated): use the date window.
-    fallback = "since_date";
-    entries = await repo.logSince(null, {
-      limit: input.limit + 1,
-      sinceDate: input.sinceDate,
+  const dateWindow = async () => {
+    const boundary = await repo.firstParentTrustedBefore(
+      headSha,
+      input.sinceDate,
+    );
+    const shas = await repo.listCommitShas(headSha, {
+      exclude: boundary,
+      maxCount: input.limit + 1,
     });
+    return repo.logChangesForShas(shas);
+  };
+  if (input.fromSha && (await repo.isAncestor(input.fromSha, headSha))) {
+    const shas = await repo.listCommitShas(headSha, {
+      exclude: input.fromSha,
+      maxCount: input.limit + 1,
+    });
+    entries = await repo.logChangesForShas(shas);
+  } else {
+    if (input.fromSha) fallback = "since_date";
+    entries = await dateWindow();
   }
   const truncated = entries.length > input.limit;
   const window = entries.slice(0, input.limit);

@@ -28,7 +28,7 @@ export const GIT_PUSH_ERROR_MESSAGES: Record<string, string> = {
   MERGE_FAILED:
     "Merging the remote branch failed. Resolve the conflict manually, then try again.",
   UNSUPPORTED_REMOTE_CONTENT:
-    "The remote branch contains symbolic links or submodules. Remove them from the branch, then pull again.",
+    "The pull contains symbolic links, submodules, or paths that collide by letter case or Unicode spelling. Remove unsupported entries and normalize paths, then pull again.",
 };
 // A pull is always Owner-initiated, so its copy never promises a retry the
 // pull scheduler would not perform.

@@ -32,7 +32,8 @@ import {
 import { api, usePrincipalId } from "~/trpc/react";
 
 export type LiveRun = { runId: string; conversationId: string };
-export type LiveStatus = "streaming" | "ended" | "unavailable" | "error";
+export type LiveStatus =
+  "streaming" | "ended" | "unavailable" | "error" | "unconfirmed";
 
 type AssistantContextValue = {
   open: boolean;
@@ -45,6 +46,15 @@ type AssistantContextValue = {
   isActiveConversation: (id: string | null) => boolean;
   live: LiveMessage | null;
   liveStatus: LiveStatus | null;
+  retryRunOutcome: () => void;
+  composerDrafts: Readonly<Record<string, string>>;
+  composerDraftRevisions: Readonly<Record<string, number>>;
+  setComposerDraft: (conversationId: string, text: string) => void;
+  clearComposerDraft: (
+    conversationId: string,
+    submittedText: string,
+    submittedRevision: number,
+  ) => void;
   unseenCompletion: boolean;
   markSeen: () => void;
   /** Set by the mounted Composer's textarea; lets the panel focus it on open (spec §10.1). */
@@ -74,6 +84,74 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
   const liveRunRef = useRef<LiveRun | null>(null);
   const [live, setLive] = useState<LiveMessage | null>(null);
   const [liveStatus, setLiveStatus] = useState<LiveStatus | null>(null);
+  const cachedConversation = api.assistant.getConversation.useQuery(
+    { conversationId: liveRun?.conversationId ?? "" },
+    { enabled: false },
+  );
+  const clearLiveRun = useCallback((runId: string) => {
+    if (liveRunRef.current?.runId !== runId) return;
+    liveRunRef.current = null;
+    setLiveRun(null);
+    setLive(null);
+    setLiveStatus(null);
+  }, []);
+  useEffect(() => {
+    if (
+      liveStatus === "unconfirmed" &&
+      liveRun &&
+      cachedConversation.data &&
+      hasPersistedRunOutcome(liveRun.runId, cachedConversation.data.messages)
+    )
+      clearLiveRun(liveRun.runId);
+  }, [cachedConversation.data, liveRun, liveStatus, clearLiveRun]);
+  const [composerState, setComposerState] = useState<{
+    drafts: Record<string, string>;
+    revisions: Record<string, number>;
+  }>({ drafts: {}, revisions: {} });
+  const composerDrafts = composerState.drafts;
+  const composerDraftRevisions = composerState.revisions;
+  const setComposerDraft = useCallback(
+    (conversationId: string, text: string) => {
+      setComposerState((current) => {
+        const next = { ...current.drafts };
+        if (text) next[conversationId] = text;
+        else delete next[conversationId];
+        return {
+          drafts: next,
+          revisions: {
+            ...current.revisions,
+            [conversationId]: (current.revisions[conversationId] ?? 0) + 1,
+          },
+        };
+      });
+    },
+    [],
+  );
+  const clearComposerDraft = useCallback(
+    (
+      conversationId: string,
+      submittedText: string,
+      submittedRevision: number,
+    ) => {
+      setComposerState((current) => {
+        if (
+          current.revisions[conversationId] !== submittedRevision ||
+          current.drafts[conversationId]?.trim() !== submittedText
+        )
+          return current;
+        const next = { ...current.drafts };
+        delete next[conversationId];
+        return {
+          drafts: next,
+          revisions: {
+            ...current.revisions,
+            [conversationId]: submittedRevision + 1,
+          },
+        };
+      });
+    },
+    [],
+  );
   const [unseenCompletion, setUnseen] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingComposerFocusRef = useRef(false);
@@ -196,10 +274,18 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
 
   // A persisted outcome, rather than elapsed time, acknowledges the live text.
   useEffect(() => {
-    if (!liveStatus || liveStatus === "streaming" || !liveRun) return;
+    if (
+      !liveStatus ||
+      liveStatus === "streaming" ||
+      liveStatus === "unconfirmed" ||
+      !liveRun
+    )
+      return;
     let disposed = false;
+    let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const refresh = async () => {
+      attempts += 1;
       let acknowledged = false;
       try {
         const conversation = await utils.assistant.getConversation.fetch(
@@ -215,12 +301,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       }
       if (disposed || liveRunRef.current?.runId !== liveRun.runId) return;
       if (acknowledged) {
-        liveRunRef.current = null;
-        setLiveRun(null);
-        setLive(null);
-        setLiveStatus(null);
+        clearLiveRun(liveRun.runId);
+      } else if (attempts < 6) {
+        timer = setTimeout(() => void refresh(), 1_000 * 2 ** (attempts - 1));
       } else {
-        timer = setTimeout(() => void refresh(), 1_000);
+        setLiveStatus("unconfirmed");
       }
     };
     void refresh();
@@ -228,7 +313,9 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       disposed = true;
       clearTimeout(timer);
     };
-  }, [liveStatus, liveRun, utils]);
+  }, [liveStatus, liveRun, utils, clearLiveRun]);
+
+  const retryRunOutcome = useCallback(() => setLiveStatus("ended"), []);
 
   const markSeen = useCallback(() => setUnseen(false), []);
   const requestComposerFocus = useCallback(() => {
@@ -252,6 +339,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       isActiveConversation,
       live,
       liveStatus,
+      retryRunOutcome,
+      composerDrafts,
+      composerDraftRevisions,
+      setComposerDraft,
+      clearComposerDraft,
       unseenCompletion,
       markSeen,
       composerRef,
@@ -269,6 +361,11 @@ export function AssistantProvider({ children }: { children: React.ReactNode }) {
       isActiveConversation,
       live,
       liveStatus,
+      retryRunOutcome,
+      composerDrafts,
+      composerDraftRevisions,
+      setComposerDraft,
+      clearComposerDraft,
       unseenCompletion,
       markSeen,
       composerRef,

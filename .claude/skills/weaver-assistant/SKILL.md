@@ -377,6 +377,8 @@ state-transition transaction. Every terminal path updates the same row, includin
 abandonment and provider failure; bounded persistence retries never duplicate billing.
 Transient Prisma connection failures P1001/P1008/P1017 may retry the run under the
 existing no-replay-after-write rules. Tool event emission flushes pending text first.
+Final usage persistence remains best-effort after its bounded retries, so accounting
+failure cannot replace an already committed run outcome.
 
 ## Transport
 
@@ -404,6 +406,15 @@ poll until the run settles.
   viewport width, up to 72rem wide and 56rem tall with viewport margins. Closing
   hides chat and restores trigger focus; it never cancels a run. The shell-owned
   provider keeps the SSE subscription and unseen-completion state alive.
+- **Drafts and reading position.** The provider retains unsent text per conversation
+  across panel/page switches; accepted sends clear only the matching submitted text
+  and draft revision. Revisions increase on edits and clears, including edits back
+  to identical text, and are captured at submit time in mutation context.
+  `useStickToBottom` follows streamed text only while the reader stays near the end.
+  Settled approvals stop polling. Unacknowledged run outcomes retry six times with
+  exponential backoff, then retain received text and offer an explicit Retry.
+  Later cached outcomes acknowledge only their matching live run without restarting
+  polling; the transcript suppresses its stale fallback as soon as that outcome arrives.
 - **Settled vs. live rendering.** A completed message never replays from the
   event stream — it renders from `MessageView.text` plus
   `assistant.listCitations`/`assistant.listProposals` (`Transcript.tsx`). Only

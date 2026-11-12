@@ -1,6 +1,6 @@
-import { PrismaPg } from "@prisma/adapter-pg";
+import { parseServerEnv } from "@weaver/config/server";
 import { bootstrapAdmin, createWeaverAuth } from "@weaver/auth";
-import { PrismaClient } from "../generated/prisma/client";
+import { createPrismaClient } from "../src/factory";
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
@@ -23,7 +23,13 @@ const name =
     ? "Administrator"
     : trimmedName;
 
-const db = new PrismaClient({ adapter: new PrismaPg({ connectionString }) });
+const env = parseServerEnv(process.env);
+const db = createPrismaClient({
+  connectionString,
+  max: env.DATABASE_POOL_MAX,
+  statementTimeoutMs: env.DATABASE_STATEMENT_TIMEOUT_MS,
+  log: ["error"],
+});
 const auth = createWeaverAuth({
   db,
   secret,

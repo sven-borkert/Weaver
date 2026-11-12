@@ -1,9 +1,9 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import {
-  appendFile,
   lstat,
   mkdir,
+  open,
   readFile,
   readdir,
   realpath,
@@ -136,9 +136,7 @@ function batchCatFile(
     const child = spawn("git", ["cat-file", "--batch", "-z"], {
       cwd: dir,
       env: {
-        ...COMMITTER,
-        NODE_ENV: process.env.NODE_ENV ?? "production",
-        GIT_CEILING_DIRECTORIES: serverEnv().WEAVER_DATA_DIR,
+        ...localGitEnvironment(dir),
       },
       timeout: 60_000,
     });
@@ -228,7 +226,9 @@ function isSafeRepoRelativePath(relPath: string): boolean {
     relPath.length > 0 &&
     !relPath.includes("\0") &&
     !relPath.startsWith("/") &&
-    !relPath.split("/").includes("..")
+    !relPath
+      .split("/")
+      .some((part) => part === ".." || part.toLowerCase() === ".git")
   );
 }
 
@@ -250,7 +250,7 @@ async function worktreePathState(
     relPath.includes("\0") ||
     relPath.startsWith("/") ||
     segments.includes("..") ||
-    segments[0] === ".git"
+    segments.some((segment) => segment.toLowerCase() === ".git")
   )
     throw new WorktreePathError(relPath);
   let current = await realpath(dir);
@@ -274,6 +274,20 @@ function trailerValue(field: string | undefined, valueRe: RegExp) {
   return valueRe.test(value) ? value : null;
 }
 
+const PATH_LOG_FORMAT =
+  "%x00WEAVER-COMMIT%x00%H%x00%an%x00%ae%x00%aI%x00" +
+  "%(trailers:key=Weaver-User-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Operation-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-MCP-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-MCP-Tool,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Run-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Project-Key-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-API-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-API-Operation,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Wiki-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
+  "%B%x00";
+
 const CHANGE_LOG_FORMAT =
   "%x00WEAVER-COMMIT%x00%H%x00%an%x00%ae%x00%aI%x00" +
   "%(trailers:key=Weaver-User-Id,valueonly,separator=%x1f,unfold)%x00" +
@@ -283,54 +297,126 @@ const CHANGE_LOG_FORMAT =
   "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
   "%B%x00";
 
-function parseChangeLog(raw: string): GitChangeEntry[] {
-  return raw
-    .split("\0WEAVER-COMMIT\0")
-    .map((block) => block.trim())
-    .filter(
-      (block) =>
-        block.split("\0").length === 11 && /^[0-9a-f]{40}\0/.test(block),
-    )
-    .map((block) => {
-      const [
-        sha,
-        an,
-        ae,
-        aI,
-        userField,
-        operationField,
-        runField,
-        keyField,
-        wikiAgentField,
-        body,
-        tail,
-      ] = block.split("\0");
-      const changes = (tail ?? "")
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => /^[AMDRC]/.test(line))
-        .map((line) => {
-          const cols = line.split("\t");
-          const status =
-            cols[0]![0] as GitChangeEntry["changes"][number]["status"];
-          return cols.length === 3
-            ? { status, path: cols[2]!, oldPath: cols[1]! }
-            : { status, path: cols[1] ?? "", oldPath: null };
-        });
-      return {
-        sha: sha!.trim(),
-        authorName: an ?? "",
-        authorEmail: ae ?? "",
-        userId: trailerValue(userField, USER_ID_VALUE_RE),
-        projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
-        wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
-        operationId: trailerValue(operationField, OPERATION_ID_RE),
-        runId: trailerValue(runField, RUN_ID_RE),
-        date: new Date(aI ?? 0),
-        message: (body ?? "").split("\n")[0] ?? "",
-        changes,
-      };
+function parseNameStatus(tokens: string[]): GitChangeEntry["changes"] {
+  const changes: GitChangeEntry["changes"] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const status = tokens[i]!.replace(/^\n+/, "");
+    if (!/^[ACDMRTUXB][0-9]*$/.test(status)) continue;
+    const first = tokens[++i];
+    if (first === undefined) break;
+    const renamed = /^[RC]/.test(status);
+    const next = renamed ? tokens[++i] : first;
+    if (next === undefined) break;
+    if (!/^[AMDRC]/.test(status)) continue;
+    changes.push({
+      status: status[0] as GitChangeEntry["changes"][number]["status"],
+      path: next,
+      oldPath: renamed ? first : null,
     });
+  }
+  return changes;
+}
+
+function parseLogRecords(raw: string, fieldCount: number) {
+  const tokens = raw.split("\0");
+  const records: Array<{
+    fields: string[];
+    changes: GitChangeEntry["changes"];
+  }> = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] !== "WEAVER-COMMIT" || !GIT_SHA_RE.test(tokens[i + 1] ?? ""))
+      continue;
+    const fields = tokens.slice(i + 1, i + 1 + fieldCount);
+    i += fieldCount;
+    const status: string[] = [];
+    while (i + 1 < tokens.length && tokens[i + 1] !== "WEAVER-COMMIT") {
+      const token = tokens[++i]!;
+      status.push(token);
+      if (/^[ACDMRTUXB][0-9]*$/.test(token.replace(/^\n+/, ""))) {
+        status.push(tokens[++i] ?? "");
+        if (/^[RC]/.test(token.replace(/^\n+/, "")))
+          status.push(tokens[++i] ?? "");
+      }
+    }
+    records.push({ fields, changes: parseNameStatus(status) });
+  }
+  return records;
+}
+
+function parseChangeLog(raw: string): GitChangeEntry[] {
+  return parseLogRecords(raw, 10).map(({ fields, changes }) => {
+    const [
+      sha,
+      an,
+      ae,
+      aI,
+      userField,
+      operationField,
+      runField,
+      keyField,
+      wikiAgentField,
+      body,
+    ] = fields;
+    return {
+      sha: sha!,
+      authorName: an ?? "",
+      authorEmail: ae ?? "",
+      userId: trailerValue(userField, USER_ID_VALUE_RE),
+      projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
+      wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
+      operationId: trailerValue(operationField, OPERATION_ID_RE),
+      runId: trailerValue(runField, RUN_ID_RE),
+      date: new Date(aI ?? 0),
+      message: (body ?? "").split("\n")[0] ?? "",
+      changes,
+    };
+  });
+}
+
+function parsePathLog(
+  raw: string,
+  trusted: Set<string>,
+  relPath: string,
+): GitLogEntry[] {
+  return parseLogRecords(raw, 15).map(({ fields, changes }) => {
+    const [
+      sha,
+      an,
+      ae,
+      aI,
+      userField,
+      operationField,
+      mcpRequestHashField,
+      mcpToolNameField,
+      runField,
+      keyField,
+      apiHashField,
+      apiOperationField,
+      wikiAgentField,
+      wikiRequestHashField,
+      body,
+    ] = fields;
+    const pathAtSha = changes[0]?.path ?? relPath;
+    return {
+      sha: sha!.trim(),
+      authorName: an ?? "",
+      authorEmail: ae ?? "",
+      trustedAuthor: trusted.has(sha!),
+      date: new Date(aI ?? 0),
+      message: (body ?? "").split("\n")[0] ?? "",
+      userId: trailerValue(userField, USER_ID_VALUE_RE),
+      projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
+      wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
+      wikiRequestHash: trailerValue(wikiRequestHashField, MCP_REQUEST_HASH_RE),
+      apiRequestHash: trailerValue(apiHashField, MCP_REQUEST_HASH_RE),
+      apiOperation: trailerValue(apiOperationField, API_OPERATION_RE),
+      operationId: trailerValue(operationField, OPERATION_ID_RE),
+      mcpRequestHash: trailerValue(mcpRequestHashField, MCP_REQUEST_HASH_RE),
+      mcpToolName: trailerValue(mcpToolNameField, MCP_TOOL_NAME_RE),
+      runId: trailerValue(runField, RUN_ID_RE),
+      pathAtSha,
+    };
+  });
 }
 
 export function repoDir(projectId: string): string {
@@ -447,6 +533,20 @@ function isWikiAgentAuthor(author: CommitAuthor): boolean {
   return author.kind === "machine" && author.machineKind === "wikiAgent";
 }
 
+function localGitEnvironment(dir: string): NodeJS.ProcessEnv {
+  return {
+    NODE_ENV: process.env.NODE_ENV ?? "production",
+    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    HOME: dir,
+    XDG_CONFIG_HOME: dir,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+    ...COMMITTER,
+    GIT_CEILING_DIRECTORIES: serverEnv().WEAVER_DATA_DIR,
+  };
+}
+
 function gitFor(dir: string, author?: CommitAuthor): SimpleGit {
   const authorEnv = author
     ? {
@@ -462,12 +562,13 @@ function gitFor(dir: string, author?: CommitAuthor): SimpleGit {
   currentProjectLock()?.signal.throwIfAborted();
   return simpleGit({
     baseDir: dir,
+    // The only custom config path is the fixed /dev/null global-config opt-out.
+    unsafe: { allowUnsafeConfigPaths: true },
     timeout: { block: 60_000 },
     ...(currentProjectLock() ? { abort: currentProjectLock()!.signal } : {}),
   }).env({
-    ...COMMITTER,
+    ...localGitEnvironment(dir),
     ...authorEnv,
-    GIT_CEILING_DIRECTORIES: serverEnv().WEAVER_DATA_DIR,
   });
 }
 
@@ -490,9 +591,7 @@ async function resolveCommit(
       {
         cwd: dir,
         env: {
-          ...COMMITTER,
-          NODE_ENV: process.env.NODE_ENV ?? "production",
-          GIT_CEILING_DIRECTORIES: serverEnv().WEAVER_DATA_DIR,
+          ...localGitEnvironment(dir),
         },
         timeout: 60_000,
         maxBuffer: 4_096,
@@ -606,46 +705,198 @@ async function recover(dir: string): Promise<void> {
   await git.raw(["clean", "-fdx"]);
 }
 
-async function readTrustLedger(dir: string, name: string): Promise<string> {
+async function readTrustLedger(
+  dir: string,
+  name: string,
+): Promise<string | null> {
   try {
     return await readFile(path.join(dir, ".git", name), "utf8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT")
-      console.warn("Unable to read local commit attribution ledger");
-    return "";
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    console.warn("Unable to read local commit attribution ledger");
+    return null;
   }
 }
+const TRUST_CACHE_LIMIT = 32;
+const trustCache = new Map<
+  string,
+  { signature: string; commits: Set<string> }
+>();
+
+async function trustSignature(dir: string): Promise<string | null> {
+  try {
+    return (
+      await Promise.all(
+        ["weaver-trusted-commits", "weaver-trusted-commits.pending"].map(
+          async (name) => {
+            const info = await stat(path.join(dir, ".git", name), {
+              bigint: true,
+            }).catch((error: NodeJS.ErrnoException) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            });
+            return info
+              ? `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+              : "missing";
+          },
+        ),
+      )
+    ).join("/");
+  } catch {
+    return null;
+  }
+}
+
 async function trustedCommits(dir: string): Promise<Set<string>> {
+  const signature = await trustSignature(dir);
+  const cached = trustCache.get(dir);
+  if (signature !== null && cached?.signature === signature) {
+    trustCache.delete(dir);
+    trustCache.set(dir, cached);
+    return cached.commits;
+  }
+  trustCache.delete(dir);
   const ledgers = await Promise.all([
     readTrustLedger(dir, "weaver-trusted-commits"),
     readTrustLedger(dir, "weaver-trusted-commits.pending"),
   ]);
-  return new Set(
+  const commits = new Set(
     ledgers
       .join("\n")
       .split("\n")
       .filter((sha) => GIT_SHA_RE.test(sha)),
   );
+  if (
+    ledgers.every((ledger) => ledger !== null) &&
+    signature !== null &&
+    signature === (await trustSignature(dir))
+  ) {
+    trustCache.set(dir, { signature, commits });
+    if (trustCache.size > TRUST_CACHE_LIMIT)
+      trustCache.delete(trustCache.keys().next().value!);
+  }
+  return commits;
 }
+
+async function appendDurably(file: string, text: string) {
+  const handle = await open(file, "a", 0o600);
+  try {
+    await handle.writeFile(text);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncGitDirectory(dir: string) {
+  const directory = await open(path.join(dir, ".git"), "r");
+  try {
+    await directory.sync();
+  } finally {
+    await directory.close();
+  }
+}
+
+async function prepareTrustedCommit(dir: string, sha: string) {
+  const commits = await trustedCommits(dir);
+  const cacheable = trustCache.get(dir)?.commits === commits;
+  await appendDurably(
+    path.join(dir, ".git", "weaver-trusted-commits.pending"),
+    `\n${sha}\n`,
+  );
+  await syncGitDirectory(dir);
+  commits.add(sha);
+  const signature = await trustSignature(dir);
+  if (cacheable && signature !== null)
+    trustCache.set(dir, { signature, commits });
+}
+
 async function rememberTrustedCommit(dir: string, sha: string) {
+  const commits = await trustedCommits(dir);
+  const cacheable = trustCache.get(dir)?.commits === commits;
   const pendingPath = path.join(dir, ".git", "weaver-trusted-commits.pending");
   const pending = await readTrustLedger(dir, "weaver-trusted-commits.pending");
+  if (pending === null) return;
   try {
-    await appendFile(
+    await appendDurably(
       path.join(dir, ".git", "weaver-trusted-commits"),
-      `${pending}${sha}\n`,
-      { mode: 0o600 },
+      `\n${[...new Set([...pending.split("\n").filter((entry) => GIT_SHA_RE.test(entry)), sha])].join("\n")}\n`,
     );
+    await syncGitDirectory(dir);
     await rmFile(pendingPath, { force: true });
   } catch {
-    // HEAD is already published; attribution repair must not reject the write.
+    // Published commits remain trusted through the durable pending ledger.
     console.warn("Local commit attribution requires reconciliation");
-    try {
-      await appendFile(pendingPath, `${sha}\n`, { mode: 0o600 });
-    } catch {
-      console.warn("Unable to persist pending local commit attribution");
-    }
   }
+  const signature = await trustSignature(dir);
+  if (cacheable && signature !== null)
+    trustCache.set(dir, { signature, commits });
+}
+
+const operationCache = new Map<
+  string,
+  { head: string; byId: Map<string, string[]> }
+>();
+const operationRefreshes = new Map<string, Promise<void>>();
+function operationCommits(dir: string, head: string, operationId: string) {
+  const previous = operationRefreshes.get(dir) ?? Promise.resolve();
+  const result = previous.then(() =>
+    refreshOperationCommits(dir, head, operationId),
+  );
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  operationRefreshes.set(dir, settled);
+  return result.finally(() => {
+    if (operationRefreshes.get(dir) === settled) operationRefreshes.delete(dir);
+  });
+}
+
+async function refreshOperationCommits(
+  dir: string,
+  head: string,
+  operationId: string,
+) {
+  let cached = operationCache.get(dir);
+  if (cached?.head !== head) {
+    let append = false;
+    if (cached) {
+      append =
+        (
+          await gitFor(dir)
+            .raw(["merge-base", cached.head, head])
+            .catch(() => "")
+        ).trim() === cached.head;
+    }
+    const byId = append ? cached!.byId : new Map<string, string[]>();
+    const raw = await gitFor(dir).raw([
+      "log",
+      "-z",
+      "--format=%x00WEAVER-COMMIT%x00%H%x00%(trailers:key=Weaver-Operation-Id,valueonly,separator=%x1f,unfold)%x00",
+      head,
+      ...(append ? ["--not", cached!.head] : []),
+      "--",
+    ]);
+    const additions = new Map<string, string[]>();
+    for (const {
+      fields: [sha, operation],
+    } of parseLogRecords(raw, 2)) {
+      const id = trailerValue(operation, OPERATION_ID_RE);
+      if (id && sha) {
+        const shas = additions.get(id) ?? [];
+        shas.push(sha);
+        additions.set(id, shas);
+      }
+    }
+    for (const [id, shas] of additions)
+      byId.set(id, [...shas, ...(byId.get(id) ?? [])]);
+    cached = { head, byId };
+    operationCache.set(dir, cached);
+    if (operationCache.size > TRUST_CACHE_LIMIT)
+      operationCache.delete(operationCache.keys().next().value!);
+  }
+  return cached.byId.get(operationId) ?? [];
 }
 function makeRepo(dir: string) {
   return {
@@ -671,7 +922,12 @@ function makeRepo(dir: string) {
     async removeUntrackedFile(relPath: string) {
       if (!isSafeRepoRelativePath(relPath)) throw new Error("invalid path");
       await worktreePathState(dir, relPath);
-      const tracked = await gitFor(dir).raw(["ls-files", "--", relPath]);
+      const tracked = await gitFor(dir).raw([
+        "--literal-pathspecs",
+        "ls-files",
+        "--",
+        relPath,
+      ]);
       if (tracked.trim()) throw new Error("cannot remove a tracked file");
       await rmFile(path.join(dir, relPath), { force: true });
     },
@@ -685,13 +941,22 @@ function makeRepo(dir: string) {
       await worktreePathState(dir, from);
       await worktreePathState(dir, to);
       await mkdir(path.dirname(path.join(dir, to)), { recursive: true });
-      await gitFor(dir).raw(["mv", from, to]);
+      await gitFor(dir).raw(["--literal-pathspecs", "mv", "--", from, to]);
     },
     async rm(relPath: string) {
-      await gitFor(dir).raw(["rm", "-q", relPath]);
+      await worktreePathState(dir, relPath);
+      await gitFor(dir).raw(["--literal-pathspecs", "rm", "-q", "--", relPath]);
     },
     async rmDir(folderRel: string) {
-      await gitFor(dir).raw(["rm", "-r", "-q", folderRel]);
+      await worktreePathState(dir, folderRel);
+      await gitFor(dir).raw([
+        "--literal-pathspecs",
+        "rm",
+        "-r",
+        "-q",
+        "--",
+        folderRel,
+      ]);
     },
     async commitAll(
       message: string,
@@ -811,10 +1076,32 @@ function makeRepo(dir: string) {
           `Weaver-Metadata-Override: ${overridden.join(",")}`,
         );
       }
+      const parent = (await git.revparse(["HEAD"])).trim();
+      const tree = (await git.raw(["write-tree"])).trim();
+      if (tree === (await git.revparse(["HEAD^{tree}"])).trim()) {
+        await currentProjectLock()?.assertHeld();
+        await options?.beforeCommit?.();
+        await currentProjectLock()?.assertHeld();
+        return parent;
+      }
+      const trailers = args.flatMap((arg, index) =>
+        arg === "--trailer" ? [args[index + 1]!] : [],
+      );
+      const sha = (
+        await git.raw([
+          "commit-tree",
+          tree,
+          "-p",
+          parent,
+          "-m",
+          `${sanitizeCommitMessage(message)}\n\n${trailers.join("\n")}`,
+        ])
+      ).trim();
+      await prepareTrustedCommit(dir, sha);
       await currentProjectLock()?.assertHeld();
       await options?.beforeCommit?.();
-      await git.raw(args);
-      const sha = (await git.revparse(["HEAD"])).trim();
+      await currentProjectLock()?.assertHeld();
+      await git.raw(["update-ref", "HEAD", sha, parent]);
       await rememberTrustedCommit(dir, sha);
       return sha;
     },
@@ -832,6 +1119,7 @@ function makeRepo(dir: string) {
     },
     async lastCommitForPath(relPath: string) {
       const out = await gitFor(dir).raw([
+        "--literal-pathspecs",
         "log",
         "-1",
         "--format=%H",
@@ -869,20 +1157,23 @@ function makeRepo(dir: string) {
     },
     async listHistoricalPaths(prefix = "") {
       const out = await gitFor(dir).raw([
+        "--literal-pathspecs",
         "log",
         "--format=",
-        "--name-only",
-        "--diff-filter=D",
+        "--name-status",
+        "-z",
+        "--diff-merges=first-parent",
+        "--find-renames",
+        "--diff-filter=DR",
         "-z",
         "--",
         ...(prefix ? [prefix] : []),
       ]);
       return [
         ...new Set(
-          out
-            .split("\0")
-            .map((file) => file.replace(/^\n+/, ""))
-            .filter(Boolean),
+          parseNameStatus(out.split("\0")).map(
+            (change) => change.oldPath ?? change.path,
+          ),
         ),
       ];
     },
@@ -974,14 +1265,16 @@ function makeRepo(dir: string) {
         const out = await gitFor(dir).raw([
           "diff",
           "--name-status",
+          "-z",
+          "-z",
           "--find-renames",
           fromCommitish,
           toCommitish,
           "--",
         ]);
-        for (const line of out.split("\n")) {
-          const [status, from, to] = line.split("\t");
-          if (status?.startsWith("R") && from === relPath && to) return to;
+        for (const change of parseNameStatus(out.split("\0"))) {
+          if (change.status === "R" && change.oldPath === relPath)
+            return change.path;
         }
         return null;
       } catch {
@@ -1110,91 +1403,96 @@ function makeRepo(dir: string) {
         operationId?: string;
       },
     ) {
+      const operationShas =
+        operationId && relPath === "."
+          ? await operationCommits(
+              dir,
+              (await resolveCommit(dir, commitish)) ?? commitish,
+              operationId,
+            )
+          : null;
+      if (operationShas?.length === 0) return [];
       const raw = await gitFor(dir).raw([
+        "--literal-pathspecs",
         "log",
-        "--follow",
+        ...(operationShas ? ["--no-walk=unsorted"] : ["--follow"]),
         "--name-status",
+        "-z",
         "-n",
         String(skip + limit),
         ...(operationId
           ? ["--fixed-strings", `--grep=Weaver-Operation-Id: ${operationId}`]
           : []),
-        "--format=%x00WEAVER-COMMIT%x00%H%x00%an%x00%ae%x00%aI%x00" +
-          "%(trailers:key=Weaver-User-Id,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-Operation-Id,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-MCP-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-MCP-Tool,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-Run-Id,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-Project-Key-Id,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-API-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-API-Operation,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
-          "%(trailers:key=Weaver-Wiki-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
-          "%B%x00",
-        commitish,
+        `--format=${PATH_LOG_FORMAT}`,
+        ...(operationShas?.slice(0, skip + limit) ?? [commitish]),
         "--",
         relPath,
       ]);
       const trusted = await trustedCommits(dir);
-      return raw
-        .split("\0WEAVER-COMMIT\0")
-        .map((block) => block.trim())
-        .filter(
-          (block) =>
-            block.split("\0").length === 16 && /^[0-9a-f]{40}\0/.test(block),
-        )
-        .map((block) => {
-          const [
-            sha,
-            an,
-            ae,
-            aI,
-            userField,
-            operationField,
-            mcpRequestHashField,
-            mcpToolNameField,
-            runField,
-            keyField,
-            apiHashField,
-            apiOperationField,
-            wikiAgentField,
-            wikiRequestHashField,
-            body,
-            tail,
-          ] = block.split("\0");
-          const statusLine = (tail ?? "")
-            .split("\n")
-            .map((line) => line.trim())
-            .find((line) => /^[AMDR]/.test(line));
-          const cols = statusLine?.split("\t") ?? [];
-          const pathAtSha = cols.length === 3 ? cols[2]! : (cols[1] ?? relPath);
-          return {
-            sha: sha!.trim(),
-            authorName: an ?? "",
-            authorEmail: ae ?? "",
-            trustedAuthor: trusted.has(sha!),
-            date: new Date(aI ?? 0),
-            message: (body ?? "").split("\n")[0] ?? "",
-            userId: trailerValue(userField, USER_ID_VALUE_RE),
-            projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
-            wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
-            wikiRequestHash: trailerValue(
-              wikiRequestHashField,
-              MCP_REQUEST_HASH_RE,
-            ),
-            apiRequestHash: trailerValue(apiHashField, MCP_REQUEST_HASH_RE),
-            apiOperation: trailerValue(apiOperationField, API_OPERATION_RE),
-            operationId: trailerValue(operationField, OPERATION_ID_RE),
-            mcpRequestHash: trailerValue(
-              mcpRequestHashField,
-              MCP_REQUEST_HASH_RE,
-            ),
-            mcpToolName: trailerValue(mcpToolNameField, MCP_TOOL_NAME_RE),
-            runId: trailerValue(runField, RUN_ID_RE),
-            pathAtSha,
-          };
-        })
-        .slice(skip, skip + limit);
+      return parsePathLog(raw, trusted, relPath).slice(skip, skip + limit);
+    },
+    async latestLogForPaths(paths: string[], commitish: string) {
+      assertCommitish(commitish);
+      if (paths.length === 0) return new Map<string, GitLogEntry>();
+      const wanted = new Set(paths);
+      const ancestry = (
+        await gitFor(dir).raw([
+          "rev-list",
+          "--parents",
+          "--topo-order",
+          commitish,
+          "--",
+        ])
+      )
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => line.split(" "));
+      if (ancestry.some((entry) => entry.length > 2)) {
+        // Merge simplification must follow the same path history as ordinary reads.
+        const latest = new Map<string, GitLogEntry>();
+        for (const relPath of wanted) {
+          const [entry] = await this.logForPath(relPath, {
+            skip: 0,
+            limit: 1,
+            commitish,
+          });
+          if (entry) latest.set(relPath, entry);
+        }
+        return latest;
+      }
+      const shas = ancestry
+        .map(([sha]) => sha!)
+        .filter((sha) => GIT_SHA_RE.test(sha));
+      const trusted = await trustedCommits(dir);
+      const latest = new Map<string, GitLogEntry>();
+      for (
+        let offset = 0;
+        offset < shas.length && latest.size < wanted.size;
+        offset += 200
+      ) {
+        const raw = await gitFor(dir).raw([
+          "log",
+          "--no-walk=unsorted",
+          "--name-status",
+          "-z",
+          "--diff-merges=first-parent",
+          `--format=${PATH_LOG_FORMAT}`,
+          ...shas.slice(offset, offset + 200),
+          "--",
+        ]);
+        const records = parseLogRecords(raw, 15);
+        const entries = parsePathLog(raw, trusted, "");
+        for (const [index, record] of records.entries()) {
+          for (const change of record.changes) {
+            if (wanted.has(change.path) && !latest.has(change.path))
+              latest.set(change.path, {
+                ...entries[index]!,
+                pathAtSha: change.path,
+              });
+          }
+        }
+      }
+      return latest;
     },
     async logSince(
       fromSha: string | null,
@@ -1203,6 +1501,8 @@ function makeRepo(dir: string) {
       const raw = await gitFor(dir).raw([
         "log",
         "--name-status",
+        "-z",
+        "--diff-merges=first-parent",
         "-n",
         String(options.limit),
         ...(options.sinceDate
@@ -1227,6 +1527,8 @@ function makeRepo(dir: string) {
         raw = await gitFor(dir).raw([
           "log",
           "--name-status",
+          "-z",
+          "--diff-merges=first-parent",
           "-n",
           String(options.limit),
           `--format=${CHANGE_LOG_FORMAT}`,
@@ -1292,6 +1594,7 @@ function makeRepo(dir: string) {
         "log",
         "--no-walk=unsorted",
         "--name-status",
+        "-z",
         "--diff-merges=first-parent",
         `--format=${CHANGE_LOG_FORMAT}`,
         ...shas,
@@ -1370,6 +1673,7 @@ function makeRepo(dir: string) {
       for (const parent of parents) args.push("-p", parent);
       args.push("-m", message_);
       const sha = (await git.raw(args)).trim();
+      await prepareTrustedCommit(dir, sha);
       await currentProjectLock()?.assertHeld();
       await git.raw(["update-ref", "HEAD", sha]);
       await git.raw(["reset", "--hard", sha]);
@@ -1397,6 +1701,7 @@ const READER_KEYS = [
   "readBlob",
   "readBlobsAt",
   "logForPath",
+  "latestLogForPaths",
   "logChangesBefore",
   "logChangesForShas",
   "logSince",

@@ -3,7 +3,7 @@ name: weaver-testing
 description: Use when writing or running tests in the Weaver workspace — app/package Vitest tests, apps/web integration or browser specs, worker/package boundaries, cross-process Git locking, or the RUN_FULL_TESTS consent gate.
 ---
 
-Wiki runner specs: `wikiRunner.spec.ts` (scripted `MockLanguageModelV4` over real tools), `wikiBudget.spec.ts`, `wikiRevert.spec.ts`, sharing `_wikiRunHarness.ts`; `resetDb` hooks there take 60 s because a timed-out TRUNCATE keeps running and blocks the next. Mock wiki persona: `mock-ai-server.mjs` (`pnpm test:mock-ai`).
+Wiki runner specs: `wikiRunner.spec.ts` (scripted `MockLanguageModelV4` over real tools), `wikiBudget.spec.ts`, `wikiRevert.spec.ts`, sharing `_wikiRunHarness.ts`; integration hooks have a 60-second default because a timed-out TRUNCATE keeps running and blocks the next reset. Mock wiki persona: `mock-ai-server.mjs` (`pnpm test:mock-ai`).
 Wiki queue specs: `wikiInputs.spec.ts`, `wikiSources.spec.ts`, `wikiBridge.spec.ts` (in `test:integration:ingestion`) and `wikiAiExempt.spec.ts`
 (in `test:integration:knowledge`). `makeWikiInputItem` gives a real target for the `wikiSourceItemId` FK.
 
@@ -406,3 +406,9 @@ Exam coverage: `exams.spec.ts`, `examAttempts.spec.ts`, `examTools.spec.ts`, plu
 ## Wiki lint, classify and Save as page specs
 
 `wikiLint.spec.ts` (ancestry range, schedule, claims, failure streak, manual start, scripted lint runs, lint reads) and `wikiClassify.spec.ts` share `_wikiScript.ts` (`scripted` tool-call model, `seedWikiRoute`, `deps`). A tool-less call such as the classify preview needs a `doGenerate` mock, not the scripted `doStream` one. Backdated Git commits need both author and committer dates (`GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE`, passed through `execFileSync` with `process.env`), because `git log` orders by committer date. Never run integration specs in two processes, including a command the harness moved to the background: a second run on `weaver_test` makes the first one time out in `resetDb`. Pure Save as page mapping is unit-tested in `lib/assistant/saveAsPage.test.ts`.
+
+The nightly/manual `.github/workflows/integration.yml` runs the full integration
+suite on isolated pgvector with guarded `.env.test` and Chromium. Local Tier 3
+consent is unchanged. Both test guards reject bare `postgres` DNS names; publish
+container ports on loopback. The tRPC integration caller is type-checked directly
+against the inferred real context, without an `as never` escape hatch.

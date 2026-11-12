@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { keepPreviousData } from "@tanstack/react-query";
 import { Button } from "~/components/ui/button";
 import {
@@ -247,6 +247,14 @@ function EventDetailDialog({
 }
 
 export function EventsPanel() {
+  return (
+    <Suspense fallback={<p role="status">Loading events…</p>}>
+      <EventsPanelWithParams />
+    </Suspense>
+  );
+}
+
+function EventsPanelWithParams() {
   const params = useSearchParams();
   return <EventsPanelContent key={params.toString()} />;
 }

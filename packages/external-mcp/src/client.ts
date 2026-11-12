@@ -8,6 +8,7 @@ import {
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
 import { ExternalMcpError } from "./errors";
+import { boundExternalResult } from "./result";
 import { createBoundedFetch, endpointUrl } from "./http";
 import {
   isObject,
@@ -16,12 +17,7 @@ import {
   validateArguments,
   validateOutput,
 } from "./schemas";
-import type {
-  ExternalMcpTransport,
-  JsonObject,
-  JsonValue,
-  RemoteCatalog,
-} from "./types";
+import type { ExternalMcpTransport, JsonObject, RemoteCatalog } from "./types";
 
 export function createExternalMcpTransport({
   fetchImpl,
@@ -235,32 +231,14 @@ export function createExternalMcpTransport({
               timeout: timeoutMs,
             });
             if (!result.isError) validateOutput(tool, result.structuredContent);
-            let remaining = 16000;
-            let truncated = false;
-            const content: JsonValue[] = [];
-            for (const item of result.content) {
-              if (item.type !== "text") {
-                truncated = true;
-                continue;
-              }
-              const text = item.text.slice(0, remaining);
-              if (text.length < item.text.length) truncated = true;
-              remaining -= text.length;
-              if (text) content.push({ type: "text", text });
-            }
-            let structuredContent: JsonObject | undefined;
-            if (result.structuredContent !== undefined) {
-              if (!isObject(result.structuredContent))
-                throw new ExternalMcpError("INVALID_RESULT");
-              if (JSON.stringify(result.structuredContent).length <= remaining)
-                structuredContent = result.structuredContent;
-              else truncated = true;
-            }
+            if (
+              result.structuredContent !== undefined &&
+              !isObject(result.structuredContent)
+            )
+              throw new ExternalMcpError("INVALID_RESULT");
             return {
               isError: result.isError ?? false,
-              content,
-              ...(structuredContent ? { structuredContent } : {}),
-              truncated,
+              ...boundExternalResult(result.content, result.structuredContent),
               responseBytes: http.bytes,
             };
           });

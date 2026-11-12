@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, usePathname, useSearchParams } from "next/navigation";
-import { Fragment } from "react";
+import { Fragment, Suspense } from "react";
 
 import {
   Breadcrumb,
@@ -92,6 +92,14 @@ function cachedDataUnlessAccessFailed<T>(
 }
 
 export function WorkspaceBreadcrumbs() {
+  return (
+    <Suspense fallback={null}>
+      <WorkspaceBreadcrumbsContent />
+    </Suspense>
+  );
+}
+
+function WorkspaceBreadcrumbsContent() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const folderFromQuery = parseFolderParam(

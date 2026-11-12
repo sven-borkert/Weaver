@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleTrpcFetchRequest } from "./http-transport";
 import { authedProcedure, createTRPCRouter, publicProcedure } from "./trpc";
+import { toTRPCError } from "./coreError";
 
 vi.mock("~/server/auth", () => ({ getSessionUser: vi.fn() }));
 vi.mock("@weaver/db", () => ({ db: {} }));
@@ -16,6 +17,15 @@ const HEAD_COMMIT_SHA = "a".repeat(40);
 const conflicts = [{ kind: "cell", rowId: "row-1", columnId: "column-1" }];
 
 const router = createTRPCRouter({
+  withCoreMetadata: publicProcedure.query(() => {
+    throw toTRPCError(
+      new CoreError("CONFLICT", "Conflicting edit", {
+        field: "title",
+        conflicts,
+        headCommitSha: HEAD_COMMIT_SHA,
+      }),
+    );
+  }),
   coreFailure: authedProcedure.query(() => {
     throw new CoreError("NOT_FOUND");
   }),
@@ -56,6 +66,19 @@ const client = createTRPCClient<typeof router>({
 });
 
 describe("tRPC error metadata", () => {
+  it("lifts field and conflict metadata from the retained CoreError", async () => {
+    const error = await client.withCoreMetadata
+      .query()
+      .catch((cause: unknown) => {
+        if (!(cause instanceof Error)) throw cause;
+        return TRPCClientError.from(cause);
+      });
+    expect(error.data).toMatchObject({
+      field: "title",
+      conflicts,
+      headCommitSha: HEAD_COMMIT_SHA,
+    });
+  });
   it("maps a core service failure through the authenticated procedure", async () => {
     const caller = router.createCaller({
       session: {

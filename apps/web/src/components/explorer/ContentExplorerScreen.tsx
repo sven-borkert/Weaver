@@ -40,6 +40,7 @@ import {
   readExplorerIconSize,
 } from "~/lib/explorer/entries";
 import { cn } from "~/lib/utils";
+import { isQueryAccessError } from "~/lib/query-presentation";
 import { api } from "~/trpc/react";
 import {
   WorkspaceEmpty,
@@ -401,11 +402,14 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
 
   const sortPrefix = adapter.searchInputId.replace(/-search$/, "");
 
+  if (
+    isQueryAccessError(projectQuery.error) ||
+    isQueryAccessError(treeQuery.error)
+  )
+    return <WorkspaceNotFound />;
   if (projectQuery.isLoading) return <WorkspaceLoading />;
   if (projectQuery.error) {
-    return projectQuery.error.data?.code === "NOT_FOUND" ? (
-      <WorkspaceNotFound />
-    ) : (
+    return (
       <WorkspaceError
         title="Could not load project"
         description="Refresh the page to try loading this project again."

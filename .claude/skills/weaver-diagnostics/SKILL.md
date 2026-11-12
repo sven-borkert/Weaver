@@ -92,6 +92,8 @@ See `weaver-admin` for the operational insight services and shared paging contra
   (`RetentionCard.tsx`) and the MCP tools `get_retention_settings`/
   `set_retention_settings` are the only writers; the Processing card's
   retention sentence only reads the live values.
+  Browser reads call `getRetentionSettingsAsAdmin`, which rechecks system
+  administration; background cleanup keeps using the actor-free runtime reader.
 
 ## Complete admin tool registry
 
@@ -159,3 +161,8 @@ from the cause code. Failed discovery emits after its failure summary commits.
 ## Wiki lint events
 
 A started lint run emits `wiki.run.started` (details `runId`, `kind`, `trigger`); a skipped scheduled slot emits `wiki.settings.changed` with `change: lint_skipped` and a `reason` from a closed list; clearing the pause emits `change: lint-pause-cleared`. Details carry ids and codes only.
+
+`diagnostics/transactionTiming.ts` emits `database.transaction.slow` (runtime,
+warn) after five seconds for project creation/key-policy transactions, with
+operation, project and duration only. It preserves transaction results and errors.
+`withReference` counts message caps in Unicode code points, preserving astral text.

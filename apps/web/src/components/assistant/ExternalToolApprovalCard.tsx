@@ -77,7 +77,10 @@ export function ExternalApproval({
   const locked = useRef(false);
   const detail = api.externalMcp.getApproval.useQuery(
     { id },
-    { refetchInterval: 5_000 },
+    {
+      refetchInterval: (query) =>
+        query.state.data?.status === "pending" ? 5_000 : false,
+    },
   );
   const refresh = () => {
     locked.current = false;

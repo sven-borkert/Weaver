@@ -7,12 +7,15 @@ import { resolveTransferActor } from "~/server/transfer/actor";
 import { readBoundedJson } from "~/server/transfer/body";
 import { transferError } from "~/server/transfer/respond";
 import { transferTableInput } from "~/server/transfer/schemas";
+import { acquireTransferSlot } from "~/server/transfer/admission";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<Response> {
+  let release: (() => void) | undefined;
   try {
     const actor = await resolveTransferActor(req);
+    release = acquireTransferSlot(actor.userId);
     const parsed = transferTableInput.safeParse(await readBoundedJson(req));
     if (!parsed.success)
       return problem(
@@ -33,5 +36,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   } catch (error) {
     return transferError(error);
+  } finally {
+    release?.();
   }
 }

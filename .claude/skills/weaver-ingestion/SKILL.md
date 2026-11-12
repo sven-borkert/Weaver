@@ -180,10 +180,10 @@ errors; other fields and unknown errors need a visible toast. Table links
 are navigable, read-only suggestions because tables have no matching field.
 
 Every failure path, including validation on an accepting retry, must prove no
-matching operation commit exists before releasing to ready. Git's operation filter
-matches message text, so release scans up to ten candidates plus one overflow
-sentinel and checks parsed trailers. Overflow or unreadable history retains
-accepting; an unrelated matching summary must never hide a real commit.
+matching operation commit exists before releasing to ready. The complete-history
+operation index matches exact terminal trailers and ignores summary lookalikes;
+release reads up to ten candidates plus one overflow sentinel. Overflow or
+unreadable history retains accepting; unrelated summaries cannot hide a real commit.
 A committed failure stays accepting for retry. Finalization requires one conditional accepting update
 inside the same transaction as both acknowledgement fields. Batch deletion locks
 its file rows in id order under the lifecycle lock and refuses accepting
@@ -439,3 +439,10 @@ retain 409/412/500 semantics, with 413 for payload/read limits.
 ## Review hardening invariants
 
 Retention treats blocked_configuration as terminal in both candidate selection and the locked fresh-snapshot delete recheck. Shared ZIP validation bounds actual decompression before DOCX/XLSX parsing.
+
+Ingestion publication treats an existing singleton as success; only disabled jobs
+or thrown queue failures trigger publication errors. Reconciliation counts only
+newly accepted deliveries. Docling HTTP error bodies are cancelled before returning.
+The child RSS watchdog tolerates two consecutive unavailable samples, resets the
+count on a successful sample, and fails closed on the third; measured over-budget
+RSS still stops the child immediately.

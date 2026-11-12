@@ -23,6 +23,7 @@ import {
   getDocument,
   moveDocument,
   rebuildIndex,
+  resolveAttribution,
   repairDocumentProjectionInRepo,
   writeDocumentInRepo,
 } from "@weaver/core/services/documents";
@@ -2200,7 +2201,7 @@ describe("document router", () => {
       );
     });
 
-    it("pins one HEAD snapshot when a commit lands during the scan", async () => {
+    it("rejects a stale rebuild when an external commit lands during the scan", async () => {
       const { project, caller, ownerCaller, actor } = await setupProjectWith(
         "Maintainer",
         "ri-snapshot",
@@ -2216,57 +2217,52 @@ describe("document router", () => {
         orderBy: { path: "asc" },
       });
       const repo = (await gitStore.openProjectRepo(project.id))!;
-      const originalWithExistingProjectRepoReader =
-        gitStore.withExistingProjectRepoReader;
+      const originalOpen = gitStore.openProjectRepo;
       let advanced = false;
       const existingSpy = vi
-        .spyOn(gitStore, "withExistingProjectRepoReader")
-        .mockImplementation((projectId, fn) => {
-          return originalWithExistingProjectRepoReader(
-            projectId,
-            async (lockedRepo) => {
-              if (projectId !== project.id) return fn(lockedRepo);
-              return fn({
-                ...lockedRepo,
-                listTrackedFiles: async (commitish = "HEAD") => {
-                  const files = await lockedRepo.listTrackedFiles(commitish);
-                  if (!advanced) {
-                    advanced = true;
-                    const projectRepoDir = repoDir(project.id);
-                    await writeFile(
-                      path.join(projectRepoDir, original.path),
-                      externalFile(original.id, "Changed", "new body"),
-                    );
-                    await writeFile(
-                      path.join(projectRepoDir, "new.md"),
-                      externalFile(randomUUID(), "New", "new file"),
-                    );
-                    const git = simpleGit({ baseDir: projectRepoDir }).env({
-                      GIT_AUTHOR_NAME: "Maintainer",
-                      GIT_AUTHOR_EMAIL: actor.email,
-                      GIT_COMMITTER_NAME: "Weaver",
-                      GIT_COMMITTER_EMAIL: "weaver@local",
-                    });
-                    await git.raw(["add", "-A"]);
-                    await git.raw([
-                      "commit",
-                      "-m",
-                      "external concurrent commit",
-                      "--trailer",
-                      `Weaver-User-Id: ${actor.id}`,
-                    ]);
-                  }
-                  return files;
-                },
-              });
+        .spyOn(gitStore, "openProjectRepo")
+        .mockImplementation(async (projectId) => {
+          const snapshot = await originalOpen(projectId);
+          if (!snapshot || projectId !== project.id) return snapshot;
+          return {
+            ...snapshot,
+            listTrackedBlobs: async (commitish = "HEAD") => {
+              const files = await snapshot.listTrackedBlobs(commitish);
+              if (!advanced) {
+                advanced = true;
+                const projectRepoDir = repoDir(project.id);
+                await writeFile(
+                  path.join(projectRepoDir, original.path),
+                  externalFile(original.id, "Changed", "new body"),
+                );
+                await writeFile(
+                  path.join(projectRepoDir, "new.md"),
+                  externalFile(randomUUID(), "New", "new file"),
+                );
+                const git = simpleGit({ baseDir: projectRepoDir }).env({
+                  GIT_AUTHOR_NAME: "Maintainer",
+                  GIT_AUTHOR_EMAIL: actor.email,
+                  GIT_COMMITTER_NAME: "Weaver",
+                  GIT_COMMITTER_EMAIL: "weaver@local",
+                });
+                await git.raw(["add", "-A"]);
+                await git.raw([
+                  "commit",
+                  "-m",
+                  "external concurrent commit",
+                  "--trailer",
+                  `Weaver-User-Id: ${actor.id}`,
+                ]);
+              }
+              return files;
             },
-          );
+          };
         });
 
       try {
         await expect(
           caller.document.rebuildIndex({ projectId: project.id }),
-        ).resolves.toEqual({ indexed: 1, skipped: [] });
+        ).rejects.toMatchObject({ code: "CONFLICT" });
       } finally {
         existingSpy.mockRestore();
       }
@@ -2278,6 +2274,75 @@ describe("document router", () => {
         }),
       ).toEqual(before);
       expect(await repo.listTrackedFiles()).toEqual(["new.md", original.path]);
+    });
+
+    it("lets a writer finish during rebuild scanning and rejects the stale projection", async () => {
+      const { project, ownerCaller, actor } = await setupProjectWith(
+        "Maintainer",
+        "ri-scan",
+      );
+      const original = await ownerCaller.document.create({
+        projectId: project.id,
+        folderPath: [],
+        title: "Original",
+        contentJson: PARA("old body"),
+      });
+      let resume!: () => void;
+      let reached!: () => void;
+      const paused = new Promise<void>((resolve) => {
+        reached = resolve;
+      });
+      const released = new Promise<void>((resolve) => {
+        resume = resolve;
+      });
+      const open = gitStore.openProjectRepo;
+      const spy = vi
+        .spyOn(gitStore, "openProjectRepo")
+        .mockImplementation(async (projectId) => {
+          const repo = await open(projectId);
+          if (!repo) return repo;
+          const read = repo.readBlobsAt.bind(repo);
+          repo.readBlobsAt = async (...args) => {
+            reached();
+            await released;
+            return read(...args);
+          };
+          return repo;
+        });
+      const rebuild = rebuildIndex(
+        getPrisma(),
+        { projectId: project.id },
+        securityContextFor(actor),
+      );
+      const result = rebuild.then(
+        () => null,
+        (error: unknown) => error,
+      );
+      try {
+        await paused;
+        spy.mockRestore();
+        const saved = await ownerCaller.document.update({
+          projectId: project.id,
+          documentId: original.id,
+          baseCommitSha: original.headCommitSha,
+          content: { kind: "markdown", contentJson: PARA("new body") },
+          changeSummary: "Concurrent save",
+        });
+        resume();
+        expect(await result).toMatchObject({ code: "CONFLICT" });
+        expect(
+          await getPrisma().document.findUniqueOrThrow({
+            where: { id: original.id },
+          }),
+        ).toMatchObject({
+          headCommitSha: saved.headCommitSha,
+          excerpt: "new body",
+        });
+      } finally {
+        spy.mockRestore();
+        resume();
+        await result;
+      }
     });
 
     it("serializes a normal save behind snapshot rebuild and preserves the newer projection", async () => {
@@ -2871,4 +2936,32 @@ it("rejects restore and diff of a different document at a reused historical path
       expectedHeadCommitSha: current.baseCommitSha,
     }),
   ).rejects.toMatchObject({ code: "NOT_FOUND" });
+});
+
+describe("explicit local attribution trust", () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+  it("does not resolve omitted trust through user, email or machine trailers", async () => {
+    const user = await makeUser("User", "trust-required");
+    const entry = {
+      userId: user.id,
+      authorEmail: user.email,
+      authorName: "Claimed author",
+    };
+    expect(
+      await resolveAttribution(getPrisma(), [
+        entry,
+        { ...entry, projectKeyId: randomUUID() },
+        { ...entry, wikiAgentId: randomUUID() },
+      ]),
+    ).toEqual([null, null, null]);
+    expect(
+      (
+        await resolveAttribution(getPrisma(), [
+          { ...entry, trustedAuthor: true },
+        ])
+      )[0]?.id,
+    ).toBe(user.id);
+  });
 });

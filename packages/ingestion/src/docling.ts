@@ -95,6 +95,7 @@ export function createDoclingParser(options: {
         });
       }
       if (!response.ok) {
+        await response.body?.cancel().catch(() => undefined);
         return {
           failureKind: "parser",
           message: `docling-serve answered ${response.status}`,

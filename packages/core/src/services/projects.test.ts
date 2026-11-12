@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@weaver/db/client";
 import type { Capability, UserSecurityContext } from "../security/context";
 import { createProject, listProjectsForUser } from "./projects";
@@ -26,6 +26,25 @@ describe("createProject", () => {
 });
 
 describe("listProjectsForUser", () => {
+  it("bounds public listings without truncating internal authorization enumeration", async () => {
+    const records = Array.from({ length: 1005 }, (_, i) => ({
+      id: String(i),
+      organization: { members: [{ role: "viewer" }] },
+    }));
+    const findMany = vi.fn(async (args: { take?: number }) =>
+      records.slice(0, args.take),
+    );
+    const db = { project: { findMany } } as unknown as PrismaClient;
+    const actor = {
+      ...restrictedActor(),
+      capabilities: new Set<Capability>(["content:read"]),
+      allowedProjectIds: "all-accessible" as const,
+    };
+    expect(await listProjectsForUser(db, actor, { limit: 1000 })).toHaveLength(
+      1000,
+    );
+    expect(await listProjectsForUser(db, actor)).toHaveLength(1005);
+  });
   it("rejects a credential without content:read before touching the database", async () => {
     const actor = Object.freeze({
       ...restrictedActor(),

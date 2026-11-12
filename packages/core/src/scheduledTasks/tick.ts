@@ -13,13 +13,31 @@ export async function runTaskTick(
   db: PrismaClient,
   now: Date = new Date(),
 ): Promise<{ claimed: number; redispatched: number; expired: number }> {
-  const claimed = await claimDueTasks(db, now);
-  for (const run of claimed) await dispatchTaskRun(db, run);
-  const stale = await listStaleQueuedRuns(
-    db,
-    new Date(now.getTime() - STALE_QUEUED_MS),
+  const errors: unknown[] = [];
+  const attempt = async <T>(
+    work: () => Promise<T>,
+    fallback: T,
+  ): Promise<T> => {
+    try {
+      return await work();
+    } catch (error) {
+      errors.push(error);
+      return fallback;
+    }
+  };
+  const claimed = await attempt(() => claimDueTasks(db, now), []);
+  for (const run of claimed)
+    await attempt(() => dispatchTaskRun(db, run), null);
+  const stale = await attempt(
+    () => listStaleQueuedRuns(db, new Date(now.getTime() - STALE_QUEUED_MS)),
+    [],
   );
-  for (const run of stale) await dispatchTaskRun(db, run);
-  const expired = await expireAbandonedRuns(db, now);
+  for (const run of stale) await attempt(() => dispatchTaskRun(db, run), null);
+  const expired = await attempt(() => expireAbandonedRuns(db, now), 0);
+  if (errors.length)
+    throw new AggregateError(
+      errors,
+      "Scheduled task tick failed for some tasks",
+    );
   return { claimed: claimed.length, redispatched: stale.length, expired };
 }

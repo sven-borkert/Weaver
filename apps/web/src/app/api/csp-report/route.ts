@@ -1,11 +1,20 @@
 import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { createSlidingWindowLimiter } from "@weaver/core/security/rateLimit";
+import { env } from "~/env";
+import { requestClientAddress } from "~/server/clientAddress";
 
 const reports = createSlidingWindowLimiter({ limit: 60, windowMs: 60_000 });
 const MAX_REPORT_BYTES = 8192;
 
 export async function POST(req: Request) {
-  if (!reports.check("csp").allowed) return new Response(null, { status: 429 });
+  const decision = reports.check(
+    requestClientAddress(req.headers, env.WEAVER_AUTH_TRUST_PROXY),
+  );
+  if (!decision.allowed)
+    return new Response(null, {
+      status: 429,
+      headers: { "Retry-After": String(decision.retryAfterSeconds) },
+    });
   if (!req.body) return new Response(null, { status: 400 });
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];

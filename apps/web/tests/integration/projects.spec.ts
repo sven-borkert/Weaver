@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { stat } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import * as metadata from "@weaver/core/services/projectMetadata";
 import { TRPCError } from "@trpc/server";
 import { fromOrganizationRole } from "@weaver/core/roles";
@@ -118,6 +119,33 @@ describe("project router", () => {
   });
 
   describe("project.list", () => {
+    it("caps the public project list at 1000 in stable order", async () => {
+      const user = await makeUser("User", "list-cap");
+      const db = getPrisma();
+      const ids = Array.from({ length: 1005 }, () => randomUUID()).sort();
+      const at = new Date("2026-11-01T00:00:00Z");
+      await db.organization.createMany({
+        data: ids.map((id) => ({ id, name: id, slug: id })),
+      });
+      await db.project.createMany({
+        data: ids.map((id) => ({
+          id,
+          name: id,
+          organizationId: id,
+          updatedAt: at,
+        })),
+      });
+      await db.member.createMany({
+        data: ids.map((organizationId) => ({
+          organizationId,
+          userId: user.id,
+          role: "viewer",
+        })),
+      });
+      expect(
+        (await callerFor(user).project.list()).map((project) => project.id),
+      ).toEqual(ids.slice(0, 1000));
+    });
     it("lists only projects the caller is a member of, with their role", async () => {
       const member = await makeUser("User", "l1");
       const stranger = await makeUser("User", "l2");

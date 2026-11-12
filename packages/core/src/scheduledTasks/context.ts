@@ -3,7 +3,7 @@ import { openProjectRepo } from "@weaver/git-store";
 import type { ScopeSnapshot } from "../assistant/scopeSchema";
 import { changeSummaryMessage } from "../documents/changeSummaryMessage";
 import { CoreError } from "../errors";
-import type { ProjectActor } from "../services/projectAccess";
+import { notDeleted, type ProjectActor } from "../services/projectAccess";
 import {
   documentContentText,
   getDiff,
@@ -287,8 +287,8 @@ export async function assembleTaskContext(
   let periodFrom: Date | null = null;
 
   for (const projectId of input.scope.projectIds) {
-    const project = await db.project.findUnique({
-      where: { id: projectId },
+    const project = await db.project.findFirst({
+      where: { id: projectId, ...notDeleted },
       select: { name: true },
     });
     const fromSha = input.period

@@ -124,6 +124,49 @@ afterEach(() => {
 });
 
 describe("listDeletedContent", () => {
+  it("finds a document deleted by a two-parent merge", async () => {
+    const { db, project, actor } = await ownerProject("merge-deletion");
+    const doc = await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Deleted by merge",
+        content: {
+          kind: "markdown",
+          contentJson: parseDocumentBody("saved body"),
+        },
+      },
+      actor,
+    );
+    const deletedAtSha = await projectRepo.withProjectRepo(
+      project.id,
+      async (repo) => {
+        const first = await repo.resolveHead();
+        await repo.writeFileAtomic("side.txt", "side");
+        const side = await repo.commitAll("side branch", {
+          ...AUTHOR,
+          userId: actor.userId,
+        });
+        await repo.rm(doc.path);
+        return repo.commitTreeWithParents(
+          "merge deleting document",
+          { ...AUTHOR, userId: actor.userId },
+          [first, side],
+        );
+      },
+    );
+    await db.document.delete({ where: { id: doc.id } });
+    const deleted = await listDeletedContent(
+      db,
+      { projectId: project.id, limit: 20 },
+      actor,
+    );
+    expect(deleted.items).toContainEqual(
+      expect.objectContaining({ id: doc.id, path: doc.path, deletedAtSha }),
+    );
+  });
+
   it("finds a deleted document and a deleted table with their identity and source revision", async () => {
     const { db, project, actor, viewerActor } = await ownerProject("basic");
     const doc = await createDocument(

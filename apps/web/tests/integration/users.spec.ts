@@ -276,7 +276,10 @@ describe("user administration", () => {
         role: "User",
         password: "initial-password-1",
       }),
-    ).rejects.toMatchObject({ code: "CONFLICT", cause: { field: "email" } });
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: { details: { field: "email" } },
+    });
 
     await expect(
       callerFor(admin).user.create({

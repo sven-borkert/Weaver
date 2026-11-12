@@ -15,7 +15,8 @@ export async function createWorkerHealthServer(
 ) {
   const roles = options.roles ?? [];
   const serve = async (request: IncomingMessage, response: ServerResponse) => {
-    if (request.url !== "/health" && request.url !== "/ready") {
+    const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (pathname !== "/health" && pathname !== "/ready") {
       response.writeHead(404).end();
       return;
     }
@@ -31,7 +32,7 @@ export async function createWorkerHealthServer(
       return;
     }
     if (
-      request.url === "/ready" &&
+      pathname === "/ready" &&
       options.checkDependencies &&
       !(await options.checkDependencies().catch(() => false))
     ) {

@@ -37,6 +37,9 @@ primitives, and `weaver-database` when changing schema or migrations.
   lock and pauses active scheduled tasks with `nextRunAt: null`. Administrative
   project views currently inspect live projects; they do not implement a
   restoration or purge workflow.
+- The public `project.list` response is capped at 1,000 projects in updated/id
+  order. Internal membership and assistant/search scope enumeration keeps its
+  complete authorized set; never apply the public list cap to authorization.
 - `personalOwnerId` uniqueness also covers soft-deleted rows. Clear a deleted
   holder's ownership before claiming a replacement. The advisory transaction
   ends before `createProject`; the later unique ownership claim chooses the

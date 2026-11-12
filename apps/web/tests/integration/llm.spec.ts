@@ -134,7 +134,9 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "embeddingDimensions" }),
+      cause: expect.objectContaining({
+        details: { field: "embeddingDimensions" },
+      }),
     });
   });
 
@@ -199,7 +201,9 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "upstreamProvider" }),
+      cause: expect.objectContaining({
+        details: { field: "upstreamProvider" },
+      }),
     });
   });
 
@@ -579,7 +583,7 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "CONFLICT",
-      cause: expect.objectContaining({ field: "name" }),
+      cause: expect.objectContaining({ details: { field: "name" } }),
     });
 
     const openai = await caller.llm.createConnection({
@@ -599,7 +603,7 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "endpoint" }),
+      cause: expect.objectContaining({ details: { field: "endpoint" } }),
     });
     for (const [name, endpoint] of [
       ["Bad query", "https://models.example/v1?tenant=other"],
@@ -615,7 +619,7 @@ describe("llm connections", () => {
         }),
       ).rejects.toMatchObject({
         code: "BAD_REQUEST",
-        cause: expect.objectContaining({ field: "endpoint" }),
+        cause: expect.objectContaining({ details: { field: "endpoint" } }),
       });
     }
 
@@ -668,7 +672,7 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "CONFLICT",
-      cause: expect.objectContaining({ field: "providerModelId" }),
+      cause: expect.objectContaining({ details: { field: "providerModelId" } }),
     });
     await expect(
       caller.llm.createModel({
@@ -679,7 +683,9 @@ describe("llm connections", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "embeddingDimensions" }),
+      cause: expect.objectContaining({
+        details: { field: "embeddingDimensions" },
+      }),
     });
     const embed = await caller.llm.createModel({
       connectionId: connection.id,
@@ -879,7 +885,7 @@ describe("llm connections", () => {
         }),
       ).rejects.toMatchObject({
         code: "BAD_REQUEST",
-        cause: expect.objectContaining({ field: "credential" }),
+        cause: expect.objectContaining({ details: { field: "credential" } }),
       });
     }
   });
@@ -1407,7 +1413,7 @@ describe("llm routes", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "reasoningMode" }),
+      cause: expect.objectContaining({ details: { field: "reasoningMode" } }),
     });
   });
 
@@ -1489,7 +1495,7 @@ describe("llm routes", () => {
       caller.llm.setRoute({ purpose: "knowledge_embedding", modelId: chat.id }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "modelId" }),
+      cause: expect.objectContaining({ details: { field: "modelId" } }),
     });
     await expect(
       caller.llm.setRoute({
@@ -1498,7 +1504,7 @@ describe("llm routes", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: expect.objectContaining({ field: "modelId" }),
+      cause: expect.objectContaining({ details: { field: "modelId" } }),
     });
 
     await caller.llm.setRoute({

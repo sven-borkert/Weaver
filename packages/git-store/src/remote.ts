@@ -44,7 +44,7 @@ const messages = {
   MERGE_FAILED:
     "The fetched remote branch could not be merged into the project repository.",
   UNSUPPORTED_REMOTE_CONTENT:
-    "The remote branch contains symbolic links or submodules, which Weaver does not support.",
+    "The pull contains symbolic links, submodules, or paths that collide by letter case or Unicode spelling. Normalize those paths before pulling.",
 } as const;
 export type GitRemoteErrorCode = keyof typeof messages;
 

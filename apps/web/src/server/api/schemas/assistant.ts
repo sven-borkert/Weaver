@@ -2,6 +2,10 @@ import { z } from "zod";
 import { scopeRequestSchema } from "@weaver/core/assistant/scope";
 
 export const conversationIdInput = z.object({ conversationId: z.uuid() });
+export const listScopeFoldersInput = z.object({ projectId: z.uuid() });
+export const listCitationsInput = conversationIdInput.extend({
+  messageId: z.uuid().optional(),
+});
 export const getConversationInput = conversationIdInput.extend({
   beforePosition: z.number().int().min(0).max(2_147_483_647).optional(),
 });

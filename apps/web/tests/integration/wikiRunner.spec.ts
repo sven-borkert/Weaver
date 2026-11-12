@@ -1,13 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { simulateReadableStream } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import simpleGit from "simple-git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { executeWikiRun, type WikiRunnerDeps } from "@weaver/ai/wikiRunner";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeWikiRun } from "@weaver/ai/wikiRunner";
 import { currentDiagnosticContext } from "@weaver/core/diagnostics/context";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
-import { createLlmModel } from "@weaver/core/services/llmConnections";
-import { setLlmRoute } from "@weaver/core/services/llmRoutes";
 import { withProjectRepo } from "@weaver/core/services/projectRepo";
 import {
   applyWikiOperation,
@@ -21,13 +18,7 @@ import {
   wikiWriteGuardsFor,
 } from "@weaver/core/services/wikiSettings";
 import { reapWikiRuns } from "@weaver/core/services/wikiTick";
-import {
-  getPrisma,
-  resetDb,
-  securityContextFor,
-  seedTestLlmRouting,
-  testEncryptionKeys,
-} from "./_harness";
+import { getPrisma, resetDb } from "./_harness";
 import {
   deps,
   scripted,
@@ -36,9 +27,7 @@ import {
   resultsOf,
   toolParts,
   type Call,
-  type PromptMessage,
   type PromptPart,
-  type ScriptContext,
   type Step,
 } from "./_wikiScript";
 import {
@@ -46,7 +35,6 @@ import {
   humanPage,
   queuedRun,
   wikiProject,
-  type ToolOutput,
   type WikiProject,
 } from "./_wikiRunHarness";
 
@@ -435,9 +423,8 @@ describe("wiki runner", () => {
         "wikiRun",
         "updateMany",
         (args) =>
-          when() &&
           (args as { data?: { leaseExpiresAt?: unknown } }).data
-            ?.leaseExpiresAt !== undefined,
+            ?.leaseExpiresAt !== undefined && when(),
         new Error("connection reset"),
       );
 
@@ -446,6 +433,7 @@ describe("wiki runner", () => {
       const p = await wikiProject();
       const { run } = await queuedRun(p);
       let failing = false;
+      let failedHeartbeats = 0;
       let started!: () => void;
       const inCall = new Promise<void>((resolve) => {
         started = resolve;
@@ -453,15 +441,28 @@ describe("wiki runner", () => {
       const execution = executeWikiRun(
         {
           ...deps(stallingModel(started), { heartbeatMs: 50 }),
-          db: heartbeatOnly(() => failing),
+          db: heartbeatOnly(() => {
+            if (failing) failedHeartbeats += 1;
+            return failing;
+          }),
         },
         run.id,
       );
       await inCall;
       failing = true;
-      await new Promise((resolve) => setTimeout(resolve, 400));
+      await vi.waitFor(
+        () => expect(failedHeartbeats).toBeGreaterThanOrEqual(2),
+        { timeout: 5000 },
+      );
+      const previousLease = (await runRow(p, run.id)).leaseExpiresAt!;
       failing = false;
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await runRow(p, run.id)).leaseExpiresAt!.getTime(),
+          ).toBeGreaterThan(previousLease.getTime()),
+        { timeout: 5000 },
+      );
       expect(await runRow(p, run.id)).toMatchObject({ status: "running" });
       await p.db.wikiRun.update({
         where: { id: run.id },

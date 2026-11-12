@@ -4,13 +4,17 @@ import { toTRPCError } from "./coreError";
 
 describe("toTRPCError", () => {
   it("maps core failures without losing details", () => {
-    const mapped = toTRPCError(
-      new CoreError("PRECONDITION_FAILED", "folder is not empty", {
+    const original = new CoreError(
+      "PRECONDITION_FAILED",
+      "folder is not empty",
+      {
         field: "path",
-      }),
+      },
     );
+    const mapped = toTRPCError(original);
 
     expect(mapped.code).toBe("PRECONDITION_FAILED");
-    expect(mapped.cause).toEqual({ field: "path" });
+    expect(mapped.cause).toBe(original);
+    expect(mapped.cause?.stack).toBe(original.stack);
   });
 });

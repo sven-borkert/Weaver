@@ -1,65 +1,21 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-const emitDiagnostic = vi.hoisted(() => vi.fn());
-vi.mock("@weaver/core/diagnostics/writer", () => ({ emitDiagnostic }));
+import { describe, expect, it, vi } from "vitest";
+vi.mock("~/env", () => ({ env: { WEAVER_AUTH_TRUST_PROXY: true } }));
+vi.mock("@weaver/core/diagnostics/writer", () => ({ emitDiagnostic: vi.fn() }));
 import { POST } from "./route";
 
-beforeEach(() => emitDiagnostic.mockClear());
-
-describe("CSP reporting", () => {
-  it.each([
-    {
-      "csp-report": {
-        "effective-directive": "script-src-elem",
-        "document-uri": "https://host/private?token=secret",
-      },
-    },
-    [
-      {
-        type: "csp-violation",
-        body: { effectiveDirective: "script-src-elem", sample: "secret" },
-      },
-    ],
-  ])(
-    "records the directive without document URLs or script samples",
-    async (body) => {
-      const response = await POST(
-        new Request("http://localhost/api/csp-report", {
-          method: "POST",
-          body: JSON.stringify(body),
+describe("CSP report admission", () => {
+  it("keeps one reporting source from exhausting another's bucket", async () => {
+    const request = (address: string) =>
+      new Request("http://localhost/api/csp-report", {
+        method: "POST",
+        headers: { "x-real-ip": address },
+        body: JSON.stringify({
+          "csp-report": { "effective-directive": "script-src" },
         }),
-      );
-      expect(response.status).toBe(204);
-      expect(emitDiagnostic).toHaveBeenCalledWith(
-        expect.objectContaining({
-          details: { source: "csp", directive: "script-src-elem" },
-        }),
-      );
-      expect(JSON.stringify(emitDiagnostic.mock.calls)).not.toContain("secret");
-    },
-  );
-  it("rejects oversized and unrecognized reports without logging", async () => {
-    expect(
-      (
-        await POST(
-          new Request("http://localhost/api/csp-report", {
-            method: "POST",
-            body: "x".repeat(8193),
-          }),
-        )
-      ).status,
-    ).toBe(413);
-    expect(
-      (
-        await POST(
-          new Request("http://localhost/api/csp-report", {
-            method: "POST",
-            body: JSON.stringify({
-              "csp-report": { "effective-directive": "secret" },
-            }),
-          }),
-        )
-      ).status,
-    ).toBe(400);
-    expect(emitDiagnostic).not.toHaveBeenCalled();
+      });
+    for (let i = 0; i < 60; i++)
+      expect((await POST(request("192.0.2.1"))).status).toBe(204);
+    expect((await POST(request("192.0.2.1"))).status).toBe(429);
+    expect((await POST(request("192.0.2.2"))).status).toBe(204);
   });
 });

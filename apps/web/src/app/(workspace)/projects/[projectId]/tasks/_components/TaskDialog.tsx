@@ -1,7 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Controller, useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import type { ExternalInput } from "@weaver/core/externalMcp/types";
@@ -154,13 +154,21 @@ function TaskDialogForm({
     task?.outputMode ?? "replace",
   );
   const [documentSearch, setDocumentSearch] = useState("");
+  const [debouncedDocumentSearch, setDebouncedDocumentSearch] = useState("");
+  useEffect(() => {
+    const timer = setTimeout(
+      () => setDebouncedDocumentSearch(documentSearch.trim()),
+      250,
+    );
+    return () => clearTimeout(timer);
+  }, [documentSearch]);
   const documents = api.document.list.useQuery(
     {
       projectId,
       pageSize: 100,
       sort: "title",
       dir: "asc",
-      ...(documentSearch.trim() ? { search: documentSearch.trim() } : {}),
+      ...(debouncedDocumentSearch ? { search: debouncedDocumentSearch } : {}),
     },
     { enabled: open && target === "existing" },
   );

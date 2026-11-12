@@ -109,7 +109,7 @@ describe("account password", () => {
       }),
     ).rejects.toMatchObject({
       code: "BAD_REQUEST",
-      cause: { field: "currentPassword" },
+      cause: { details: { field: "currentPassword" } },
     });
   });
 

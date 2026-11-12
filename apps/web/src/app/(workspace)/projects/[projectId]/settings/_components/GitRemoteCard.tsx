@@ -78,7 +78,17 @@ function timestamp(value: Date | string | null) {
 export function GitRemoteCard({ projectId }: { projectId: string }) {
   const query = api.projectGitRemote.get.useQuery(
     { projectId },
-    { refetchInterval: 5000 },
+    {
+      refetchInterval: (query) => {
+        const remote = query.state.data;
+        return remote?.queued ||
+          remote?.pushing ||
+          remote?.pullQueued ||
+          remote?.pulling
+          ? 5_000
+          : false;
+      },
+    },
   );
   const [reload, setReload] = useState(0);
   const region = useRef<HTMLDivElement>(null);

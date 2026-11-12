@@ -311,11 +311,11 @@ test("the generic example runs every service from registry images on one host", 
   assert.doesNotMatch(example, /build:|traefik|external: true|ollama/);
   assert.match(
     mappingBlock(services, "web", 2),
-    /ports:\s*\n\s+- "\$\{WEAVER_WEB_PORT:-3000\}:3000"/,
+    /ports:\s*\n\s+- "127\.0\.0\.1:\$\{WEAVER_WEB_PORT:-3000\}:3000"/,
   );
   assert.match(
     mappingBlock(services, "mcp-server", 2),
-    /ports:\s*\n\s+- "\$\{WEAVER_MCP_PORT:-3200\}:3200"/,
+    /ports:\s*\n\s+- "127\.0\.0\.1:\$\{WEAVER_MCP_PORT:-3200\}:3200"/,
   );
   assert.equal((example.match(/WEAVER_IMAGE_PREFIX:-/g) ?? []).length, 5);
   assert.match(

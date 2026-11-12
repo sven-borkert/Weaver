@@ -15,7 +15,7 @@ import {
 } from "@weaver/core/services/diagnosticsSettings";
 import { listDocumentChangeSummaries } from "@weaver/core/services/documentChangeSummaryInspection";
 import {
-  getRetentionSettings,
+  getRetentionSettingsAsAdmin,
   setRetentionSettings,
 } from "@weaver/core/services/retentionSettings";
 
@@ -68,7 +68,7 @@ export const diagnosticsRouter = createTRPCRouter({
       listDocumentChangeSummaries(ctx.db, ctx.security, input),
     ),
   getRetentionSettings: adminProcedure.query(async ({ ctx }) => ({
-    settings: await getRetentionSettings(ctx.db),
+    settings: await getRetentionSettingsAsAdmin(ctx.db, ctx.security),
   })),
   setRetentionSettings: adminProcedure
     .input(setRetentionSettingsInput)

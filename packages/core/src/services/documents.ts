@@ -600,7 +600,7 @@ export async function resolveAttribution(
 ): Promise<Array<ResolvedContentAuthor | null>> {
   const parsed = entries.map((entry) => {
     const trailer =
-      entry.trustedAuthor !== false &&
+      entry.trustedAuthor === true &&
       !entry.projectKeyId &&
       !entry.wikiAgentId &&
       entry.userId
@@ -625,7 +625,7 @@ export async function resolveAttribution(
         .filter((_, index) => {
           const trailerId = parsed[index];
           return (
-            entries[index]!.trustedAuthor !== false &&
+            entries[index]!.trustedAuthor === true &&
             !entries[index]!.projectKeyId &&
             !entries[index]!.wikiAgentId &&
             (!trailerId || !byTrailer.has(trailerId))
@@ -643,7 +643,7 @@ export async function resolveAttribution(
       : [];
   const byEmail = new Map(fallbackUsers.map((user) => [user.email, user]));
   return entries.map((entry, index) => {
-    if (entry.trustedAuthor === false) return null;
+    if (entry.trustedAuthor !== true) return null;
     // Only the ledger vouches for the agent: unset trust is not trust here.
     if (entry.wikiAgentId) {
       if (
@@ -2010,237 +2010,265 @@ export async function rebuildIndex(
 }> {
   await assertProjectRole(db, input.projectId, actor, "Maintainer");
   let flips: string[] = [];
-  const report = await withExistingProjectRepoReader(
-    input.projectId,
-    async (repo) => {
-      const snapshotSha = await repo.resolveHead();
-      const files = (await repo.listTrackedFiles(snapshotSha))
-        .filter(isDocumentFilePath)
-        .sort();
-      const skipped: Array<{ path: string; reason: string }> = [];
-      const candidates: Array<{
-        id: string;
-        path: string;
-        slug: string;
-        title: string;
-        excerpt: string;
-        head: GitLogEntry;
-        meta: DocumentMeta;
-        targets: CrossrefTarget[];
-      }> = [];
-      for (const file of files) {
-        try {
-          const { slug, meta, body } = await readDocumentProjectionCandidate(
-            repo,
+  const repo = await openProjectRepo(input.projectId);
+  const report = repo
+    ? await (async () => {
+        const snapshotSha = await repo.resolveHead();
+        const tracked = await repo.listTrackedBlobs(snapshotSha);
+        const files = tracked
+          .map((entry) => entry.path)
+          .filter(isDocumentFilePath)
+          .sort();
+        const sizes = new Map(tracked.map((entry) => [entry.path, entry.size]));
+        const heads = await repo.latestLogForPaths(files, snapshotSha);
+        const skipped: Array<{ path: string; reason: string }> = [];
+        const candidates: Array<{
+          id: string;
+          path: string;
+          slug: string;
+          title: string;
+          excerpt: string;
+          head: GitLogEntry;
+          meta: DocumentMeta;
+          targets: CrossrefTarget[];
+        }> = [];
+        for (let offset = 0; offset < files.length; offset += 50) {
+          const batch = files.slice(offset, offset + 50);
+          const contents = await repo.readBlobsAt(
             snapshotSha,
-            file,
+            batch.filter((file) => sizes.get(file)! <= MAX_FILE_BYTES),
+            MAX_FILE_BYTES,
           );
-          const { excerpt, targets } = projectionContent(
-            documentKindOfPath(file),
-            body,
-          );
-          const [head] = await repo.logForPath(file, {
-            skip: 0,
-            limit: 1,
-            commitish: snapshotSha,
-          });
-          if (!head) {
-            skipped.push({ path: file, reason: "no commit found" });
-            continue;
+          for (const file of batch) {
+            try {
+              const slug = documentSlugFromPath(file);
+              if (sizes.get(file)! > MAX_FILE_BYTES)
+                throw new Error("document too large");
+              const content = contents.get(file);
+              if (content === undefined) throw new Error("blob not found");
+              const { meta, body } = parseDocumentFile(
+                content,
+                documentKindOfPath(file),
+              );
+              assertDocumentTitle(meta.title);
+              const { excerpt, targets } = projectionContent(
+                documentKindOfPath(file),
+                body,
+              );
+              const head = heads.get(file);
+              if (!head) {
+                skipped.push({ path: file, reason: "no commit found" });
+                continue;
+              }
+              candidates.push({
+                id: meta.id,
+                path: file,
+                slug,
+                title: meta.title,
+                excerpt,
+                head,
+                meta,
+                targets,
+              });
+            } catch (error) {
+              skipped.push({
+                path: file,
+                reason: error instanceof Error ? error.message : String(error),
+              });
+            }
           }
-          candidates.push({
-            id: meta.id,
-            path: file,
-            slug,
-            title: meta.title,
-            excerpt,
-            head,
-            meta,
-            targets,
-          });
-        } catch (error) {
-          skipped.push({
-            path: file,
-            reason: error instanceof Error ? error.message : String(error),
-          });
         }
-      }
 
-      const existing =
-        candidates.length > 0
-          ? await db.document.findMany({
-              where: {
-                id: { in: candidates.map((candidate) => candidate.id) },
-              },
-              select: { id: true, projectId: true },
-            })
-          : [];
-      const ownerById = new Map(existing.map((row) => [row.id, row.projectId]));
-      const seenIds = new Set<string>();
-      const seenPaths = new Set<string>();
-      const seenSlugs = new Set<string>();
-      const rows = candidates.filter((candidate) => {
-        if (seenIds.has(candidate.id)) {
-          skipped.push({
-            path: candidate.path,
-            reason: `duplicate id ${candidate.id} (first file by path order wins)`,
-          });
-          return false;
-        }
-        seenIds.add(candidate.id);
-        const ownerProjectId = ownerById.get(candidate.id);
-        if (ownerProjectId && ownerProjectId !== input.projectId) {
-          skipped.push({
-            path: candidate.path,
-            reason: `id ${candidate.id} belongs to another project`,
-          });
-          return false;
-        }
-        if (seenPaths.has(candidate.path)) {
-          skipped.push({
-            path: candidate.path,
-            reason: `duplicate path ${candidate.path} (first file by path order wins)`,
-          });
-          return false;
-        }
-        if (seenSlugs.has(candidate.slug)) {
-          skipped.push({
-            path: candidate.path,
-            reason: `duplicate slug ${candidate.slug} (first file by path order wins)`,
-          });
-          return false;
-        }
-        seenPaths.add(candidate.path);
-        seenSlugs.add(candidate.slug);
-        return true;
-      });
-      const attribution = await resolveAttribution(
-        db,
-        rows.map((row) => row.head),
-      );
-      const metadata = await documentMetadataColumns(
-        db,
-        rows.map((row) => row.meta),
-      );
-      const sourceItems = await wikiSourceItemIds(
-        db,
-        input.projectId,
-        rows.map((row) => row.id),
-      );
-      const linkBefore = new Map(
-        (
-          await db.document.findMany({
-            where: { id: { in: rows.map((row) => row.id) } },
-            select: { id: true, wikiSourceItemId: true },
-          })
-        ).map((row) => [row.id, row.wikiSourceItemId]),
-      );
-      flips = rows
-        .filter(
-          (row) =>
-            linkBefore.has(row.id) &&
-            (linkBefore.get(row.id) ?? null) !==
-              (sourceItems.get(row.id) ?? null),
-        )
-        .map((row) => row.id);
-      const ownership: OwnershipDecision[] = [];
-      for (const [index, row] of rows.entries())
-        ownership.push(
-          await deriveOwnership(db, repo, {
-            projectId: input.projectId,
-            documentId: row.id,
-            path: row.path,
-            sha: row.head.sha,
-            headIsAgent: attribution[index]?.kind === "machine",
-          }),
+        const existing =
+          candidates.length > 0
+            ? await db.document.findMany({
+                where: {
+                  id: { in: candidates.map((candidate) => candidate.id) },
+                },
+                select: { id: true, projectId: true },
+              })
+            : [];
+        const ownerById = new Map(
+          existing.map((row) => [row.id, row.projectId]),
         );
-
-      await db.$transaction(async (tx) => {
-        await tx.document.deleteMany({
-          where: {
-            projectId: input.projectId,
-            id: { notIn: rows.map((row) => row.id) },
-          },
-        });
-        const current = await tx.document.findMany({
-          where: { projectId: input.projectId },
-          select: { id: true, path: true, slug: true },
-        });
-        const currentById = new Map(current.map((row) => [row.id, row]));
-        const temporaryPrefix = `.weaver-rebuild-${randomUUID()}`;
-        for (const row of rows) {
-          const previous = currentById.get(row.id);
-          if (
-            previous &&
-            (previous.path !== row.path || previous.slug !== row.slug)
-          ) {
-            await tx.document.update({
-              where: { id: row.id, projectId: input.projectId },
-              data: {
-                path: `${temporaryPrefix}/${row.id}`,
-                slug: `${temporaryPrefix}-${row.id}`,
-              },
+        const seenIds = new Set<string>();
+        const seenPaths = new Set<string>();
+        const seenSlugs = new Set<string>();
+        const rows = candidates.filter((candidate) => {
+          if (seenIds.has(candidate.id)) {
+            skipped.push({
+              path: candidate.path,
+              reason: `duplicate id ${candidate.id} (first file by path order wins)`,
             });
+            return false;
           }
-        }
-        for (const [index, row] of rows.entries()) {
-          const data = {
-            id: row.id,
-            projectId: input.projectId,
-            path: row.path,
-            kind: documentKindOfPath(row.path),
-            slug: row.slug,
-            title: row.title,
-            excerpt: row.excerpt,
-            headCommitSha: row.head.sha,
-            lastEditedById: attribution[index]?.id ?? null,
-            ...machineEditorColumns(machineRefOf(attribution[index])),
-            lastEditedByName: row.head.authorName,
-            lastEditedAt: row.head.date,
-            wikiSourceItemId: sourceItems.get(row.id) ?? null,
-            ...metadata[index]!,
-          };
-          await tx.document.upsert({
-            where: { id: row.id, projectId: input.projectId },
-            create: data,
-            update: data,
-          });
-          await applyOwnershipDecision(
-            tx,
-            { projectId: input.projectId, documentId: row.id },
-            ownership[index]!,
-          );
-        }
-        await tx.documentIndexState.updateMany({
-          where: {
-            projectId: input.projectId,
-            documentId: {
-              in: rows
-                .filter((row) => !currentById.has(row.id))
-                .map((row) => row.id),
-            },
-          },
-          data: {
-            keywordIndexedSha: null,
-            status: "pending",
-            completedAt: null,
-          },
+          seenIds.add(candidate.id);
+          const ownerProjectId = ownerById.get(candidate.id);
+          if (ownerProjectId && ownerProjectId !== input.projectId) {
+            skipped.push({
+              path: candidate.path,
+              reason: `id ${candidate.id} belongs to another project`,
+            });
+            return false;
+          }
+          if (seenPaths.has(candidate.path)) {
+            skipped.push({
+              path: candidate.path,
+              reason: `duplicate path ${candidate.path} (first file by path order wins)`,
+            });
+            return false;
+          }
+          if (seenSlugs.has(candidate.slug)) {
+            skipped.push({
+              path: candidate.path,
+              reason: `duplicate slug ${candidate.slug} (first file by path order wins)`,
+            });
+            return false;
+          }
+          seenPaths.add(candidate.path);
+          seenSlugs.add(candidate.slug);
+          return true;
         });
-        for (const row of rows) await syncLinks(tx, row.id, row.targets);
-        await syncDocumentsReviewers(
-          tx,
-          input.projectId,
-          rows.map((row) => ({ documentId: row.id, review: row.meta.review })),
+        const attribution = await resolveAttribution(
+          db,
+          rows.map((row) => row.head),
         );
-      });
-      return { indexed: rows.length, skipped };
-    },
-  );
+        const metadata = await documentMetadataColumns(
+          db,
+          rows.map((row) => row.meta),
+        );
+        const sourceItems = await wikiSourceItemIds(
+          db,
+          input.projectId,
+          rows.map((row) => row.id),
+        );
+        const linkBefore = new Map(
+          (
+            await db.document.findMany({
+              where: { id: { in: rows.map((row) => row.id) } },
+              select: { id: true, wikiSourceItemId: true },
+            })
+          ).map((row) => [row.id, row.wikiSourceItemId]),
+        );
+        flips = rows
+          .filter(
+            (row) =>
+              linkBefore.has(row.id) &&
+              (linkBefore.get(row.id) ?? null) !==
+                (sourceItems.get(row.id) ?? null),
+          )
+          .map((row) => row.id);
+        const ownership: OwnershipDecision[] = [];
+        for (const [index, row] of rows.entries())
+          ownership.push(
+            await deriveOwnership(db, repo, {
+              projectId: input.projectId,
+              documentId: row.id,
+              path: row.path,
+              sha: row.head.sha,
+              headIsAgent: attribution[index]?.kind === "machine",
+            }),
+          );
+
+        return withExistingProjectRepoReader(
+          input.projectId,
+          async (locked) => {
+            if ((await locked.resolveHead()) !== snapshotSha)
+              throw new CoreError(
+                "CONFLICT",
+                "Project changed during rebuild; retry the rebuild",
+              );
+            await db.$transaction(async (tx) => {
+              await tx.document.deleteMany({
+                where: {
+                  projectId: input.projectId,
+                  id: { notIn: rows.map((row) => row.id) },
+                },
+              });
+              const current = await tx.document.findMany({
+                where: { projectId: input.projectId },
+                select: { id: true, path: true, slug: true },
+              });
+              const currentById = new Map(current.map((row) => [row.id, row]));
+              const temporaryPrefix = `.weaver-rebuild-${randomUUID()}`;
+              for (const row of rows) {
+                const previous = currentById.get(row.id);
+                if (
+                  previous &&
+                  (previous.path !== row.path || previous.slug !== row.slug)
+                ) {
+                  await tx.document.update({
+                    where: { id: row.id, projectId: input.projectId },
+                    data: {
+                      path: `${temporaryPrefix}/${row.id}`,
+                      slug: `${temporaryPrefix}-${row.id}`,
+                    },
+                  });
+                }
+              }
+              for (const [index, row] of rows.entries()) {
+                const data = {
+                  id: row.id,
+                  projectId: input.projectId,
+                  path: row.path,
+                  kind: documentKindOfPath(row.path),
+                  slug: row.slug,
+                  title: row.title,
+                  excerpt: row.excerpt,
+                  headCommitSha: row.head.sha,
+                  lastEditedById: attribution[index]?.id ?? null,
+                  ...machineEditorColumns(machineRefOf(attribution[index])),
+                  lastEditedByName: row.head.authorName,
+                  lastEditedAt: row.head.date,
+                  wikiSourceItemId: sourceItems.get(row.id) ?? null,
+                  ...metadata[index]!,
+                };
+                await tx.document.upsert({
+                  where: { id: row.id, projectId: input.projectId },
+                  create: data,
+                  update: data,
+                });
+                await applyOwnershipDecision(
+                  tx,
+                  { projectId: input.projectId, documentId: row.id },
+                  ownership[index]!,
+                );
+              }
+              await tx.documentIndexState.updateMany({
+                where: {
+                  projectId: input.projectId,
+                  documentId: {
+                    in: rows
+                      .filter((row) => !currentById.has(row.id))
+                      .map((row) => row.id),
+                  },
+                },
+                data: {
+                  keywordIndexedSha: null,
+                  status: "pending",
+                  completedAt: null,
+                },
+              });
+              for (const row of rows) await syncLinks(tx, row.id, row.targets);
+              await syncDocumentsReviewers(
+                tx,
+                input.projectId,
+                rows.map((row) => ({
+                  documentId: row.id,
+                  review: row.meta.review,
+                })),
+              );
+            });
+            return { indexed: rows.length, skipped };
+          },
+        );
+      })()
+    : null;
   const result = report ?? {
     indexed: 0,
     skipped: [{ path: "", reason: "project repository not found" }],
   };
-  for (const documentId of flips)
+  for (const documentId of report ? flips : [])
     await flipDocumentAiExempt(createKnowledgeSystemContextForRuntime(), db, {
       projectId: input.projectId,
       documentId,

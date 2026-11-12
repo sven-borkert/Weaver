@@ -5,8 +5,10 @@ import type { ScopeSnapshot } from "@weaver/core/assistant/scopeSchema";
 import type { RouterOutputs } from "~/trpc/react";
 import { api } from "~/trpc/react";
 import { useMounted } from "~/lib/use-mounted";
+import { useStickToBottom } from "~/lib/use-stick-to-bottom";
 import { isConversationUnavailable } from "~/lib/assistant/conversationErrors";
 import { liveAnnouncement } from "~/lib/assistant/liveAnnouncement";
+import { hasPersistedRunOutcome } from "~/lib/assistant/persistedRun";
 import {
   clientNow,
   pendingProposalCount,
@@ -139,7 +141,8 @@ export function Transcript({
   } | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [olderError, setOlderError] = useState(false);
-  const { live, liveRun, startLiveRun } = useAssistant();
+  const { live, liveRun, liveStatus, retryRunOutcome, startLiveRun } =
+    useAssistant();
   const query = api.assistant.getConversation.useQuery({ conversationId });
   const status = api.assistant.getConversationStatus.useQuery(
     { conversationId },
@@ -164,8 +167,6 @@ export function Transcript({
     { conversationId },
     { enabled: Boolean(query.data) },
   );
-  const endRef = useRef<HTMLDivElement>(null);
-  const scrollRef = useRef<HTMLDivElement>(null);
   const conversation = isConversationUnavailable(query.error)
     ? undefined
     : query.data;
@@ -174,9 +175,9 @@ export function Transcript({
     clientNow(mounted),
   );
 
-  useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" });
-  }, [conversation?.messages.length, live?.text.length]);
+  const { scrollRef, onScroll, following, jumpToLatest } = useStickToBottom(
+    `${conversationId}:${conversation?.messages.length}:${live?.text.length}`,
+  );
 
   const activeRun = conversation?.activeRun ?? null;
   // The approvals list stops polling once the run ends; a card created after
@@ -206,6 +207,10 @@ export function Transcript({
   }, [activeRun, conversationId, liveRun?.runId, startLiveRun]);
   // Keep streamed content until the persisted run outcome arrives.
   const liveForThis = liveRun?.conversationId === conversationId ? live : null;
+  const outcomeUnconfirmed =
+    liveRun?.conversationId === conversationId &&
+    liveStatus === "unconfirmed" &&
+    !hasPersistedRunOutcome(liveRun.runId, conversation?.messages ?? []);
   const queuedForMs = useMemo(() => {
     if (!mounted) return 0;
     const pending = conversation?.messages.find(
@@ -262,6 +267,7 @@ export function Transcript({
   return (
     <div
       ref={scrollRef}
+      onScroll={onScroll}
       className="scrollarea min-h-0 flex-1 overflow-y-auto px-4 py-3"
     >
       {/*
@@ -283,6 +289,14 @@ export function Transcript({
             : null,
         })}
       </div>
+      {outcomeUnconfirmed ? (
+        <p role="alert" className="text-danger mb-3 text-[12px]">
+          Couldn’t confirm the saved reply. Your received text is preserved.{" "}
+          <button type="button" onClick={retryRunOutcome} className="underline">
+            Retry
+          </button>
+        </p>
+      ) : null}
       {pendingCount > 0 ? (
         <button
           type="button"
@@ -388,6 +402,11 @@ export function Transcript({
             </AssistantBubble>
           ),
         )}
+        {!activeRun && outcomeUnconfirmed && liveForThis?.text ? (
+          <AssistantBubble>
+            <AssistantMarkdown text={liveForThis.text} />
+          </AssistantBubble>
+        ) : null}
         {!activeRun && approvalRunId ? (
           <AssistantBubble>
             {(approvals.error ? [] : (approvals.data ?? [])).map((approval) => (
@@ -479,7 +498,15 @@ export function Transcript({
           </AssistantBubble>
         ) : null}
       </ol>
-      <div ref={endRef} />
+      {!following ? (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="bg-surface text-brand-text border-line sticky bottom-0 rounded border px-3 py-1 text-[12px]"
+        >
+          Jump to latest
+        </button>
+      ) : null}
     </div>
   );
 }

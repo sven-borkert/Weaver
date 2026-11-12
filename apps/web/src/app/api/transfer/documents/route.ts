@@ -10,12 +10,15 @@ import { resolveTransferActor } from "~/server/transfer/actor";
 import { readBoundedJson } from "~/server/transfer/body";
 import { transferError } from "~/server/transfer/respond";
 import { transferDocumentInput } from "~/server/transfer/schemas";
+import { acquireTransferSlot } from "~/server/transfer/admission";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request): Promise<Response> {
+  let release: (() => void) | undefined;
   try {
     const actor = await resolveTransferActor(req);
+    release = acquireTransferSlot(actor.userId);
     const raw = (await readBoundedJson(req)) as { images?: unknown } | null;
     if (Array.isArray(raw?.images) && raw.images.length > TRANSFER_MAX_IMAGES)
       return problem(413, `at most ${TRANSFER_MAX_IMAGES} images per document`);
@@ -50,5 +53,7 @@ export async function POST(req: Request): Promise<Response> {
     );
   } catch (error) {
     return transferError(error);
+  } finally {
+    release?.();
   }
 }

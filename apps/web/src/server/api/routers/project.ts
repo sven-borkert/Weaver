@@ -14,7 +14,7 @@ import {
 
 export const projectRouter = createTRPCRouter({
   list: authedProcedure.query(({ ctx }) =>
-    listProjectsForUser(ctx.db, ctx.security),
+    listProjectsForUser(ctx.db, ctx.security, { limit: 1000 }),
   ),
 
   get: authedProcedure

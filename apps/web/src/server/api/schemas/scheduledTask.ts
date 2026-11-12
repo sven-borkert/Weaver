@@ -1,6 +1,7 @@
 import { externalInputSchema } from "@weaver/core/externalMcp/schema";
 import { z } from "zod";
 import { scopeRequestSchema } from "@weaver/core/assistant/scopeSchema";
+import { folderPathSchema } from "./folder";
 import {
   TASK_INSTRUCTION_MAX_LENGTH,
   TASK_NAME_MAX_LENGTH,
@@ -15,7 +16,7 @@ const definition = {
   instruction: z.string().trim().min(1).max(TASK_INSTRUCTION_MAX_LENGTH),
   scope: scopeRequestSchema,
   outputProjectId: z.uuid(),
-  outputFolderPath: z.array(z.string().min(1).max(80)).max(10),
+  outputFolderPath: folderPathSchema,
   outputDocumentId: z.uuid().nullable().optional(),
   outputTitle: z.string().trim().max(200).nullable().optional(),
   outputMode: z.enum(["replace", "update"]).optional(),
@@ -34,7 +35,7 @@ export const updateTaskInput = z.object({
 });
 export const listTaskRunsInput = z.object({
   taskId: z.uuid(),
-  cursor: z.string().optional(),
+  cursor: z.string().max(2048).optional(),
   limit: z.number().int().min(1).max(100).optional(),
 });
 export const taskByOutputDocumentInput = z.object({

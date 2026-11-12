@@ -1,7 +1,7 @@
 import { checkUploadRateLimit } from "@weaver/core/ingestion/rateLimit";
 import { db } from "@weaver/db";
 import { MAX_INGESTION_UPLOAD_FILES } from "@weaver/core/ingestion/limits";
-import { requestKnowledgeJob } from "@weaver/core/jobs/queue";
+import { publishKnowledgeJob } from "@weaver/core/jobs/queue";
 import { parseKnowledgeConfig } from "@weaver/core/knowledge/config";
 import { createSessionSecurityContext } from "@weaver/core/security/context";
 import {
@@ -88,13 +88,14 @@ export async function POST(req: NextRequest): Promise<Response> {
     );
     try {
       for (const file of finalized.files) {
-        const jobId = await requestKnowledgeJob("ingestion.parse", {
+        const publication = await publishKnowledgeJob("ingestion.parse", {
           fileId: file.id,
           projectId: finalized.projectId,
           contentDigest: file.contentDigest,
           baseAttemptCount: 0,
         });
-        if (!jobId) throw new Error("queue did not accept ingestion.parse");
+        if (publication.status === "disabled")
+          throw new Error("ingestion jobs are disabled");
       }
     } catch {
       return problem(503, "files stored but parse job publication failed", {

@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import * as fsPromises from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import {
   mkdir,
@@ -35,6 +37,11 @@ const lockDoubles = vi.hoisted(() => ({
     ) => fn(),
   ),
 }));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof fsPromises>();
+  return { ...actual, readFile: vi.fn(actual.readFile) };
+});
 
 vi.mock("pg", () => ({
   Pool: class {
@@ -123,6 +130,7 @@ describe("Git-store contracts", () => {
       "firstParentTrustedBefore",
       "isAncestor",
       "lastCommitForPath",
+      "latestLogForPaths",
       "listCommitShas",
       "listHistoricalPaths",
       "listTrackedBlobs",
@@ -373,6 +381,7 @@ describe("Git-store contracts", () => {
       "firstParentTrustedBefore",
       "isAncestor",
       "lastCommitForPath",
+      "latestLogForPaths",
       "listCommitShas",
       "listHistoricalPaths",
       "listTrackedBlobs",
@@ -1638,5 +1647,504 @@ describe("machine commit authors", () => {
         wikiAgentId: agentId,
       });
     });
+  });
+});
+
+describe("review history and path regressions", () => {
+  const author = {
+    name: "Writer",
+    email: "writer@example.test",
+    userId: randomUUID(),
+  };
+
+  it("deletes and moves only literal paths and reserves rename sources", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      for (const name of [
+        "foo[1].md",
+        "foo1.md",
+        "dir[1]/a.md",
+        "dir1/a.md",
+        "-old.md",
+      ])
+        await repo.writeFileAtomic(name, name);
+      const first = await repo.commitAll("create", author);
+      await repo.writeFileAtomic("foo1.md", "changed");
+      await repo.commitAll("sibling", author);
+      expect(await repo.lastCommitForPath("foo[1].md")).toBe(first);
+      expect(
+        (await repo.logForPath("foo[1].md", { skip: 0, limit: 10 })).map(
+          (entry) => entry.sha,
+        ),
+      ).toEqual([first]);
+      await repo.rm("foo[1].md");
+      await repo.rmDir("dir[1]");
+      await repo.mv("-old.md", "-new.md");
+      await repo.commitAll("remove and move", author);
+      expect((await repo.listTrackedFiles()).sort()).toEqual([
+        "-new.md",
+        "dir1/a.md",
+        "foo1.md",
+      ]);
+      expect(await repo.listHistoricalPaths()).toEqual(
+        expect.arrayContaining(["foo[1].md", "dir[1]/a.md", "-old.md"]),
+      );
+    });
+  });
+
+  it("preserves every filename byte in change history and rename tracking", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const names = [
+        "café.md",
+        " space .md ",
+        "tab\tfile.md",
+        "line\nfile.md",
+        "WEAVER-COMMIT",
+      ];
+      for (const name of names) await repo.writeFileAtomic(name, name);
+      const first = await repo.commitAll("unusual names", author);
+      for (const entries of [
+        await repo.logSince(null, { limit: 1 }),
+        await repo.logChangesBefore(first, { limit: 1 }),
+        await repo.logChangesForShas([first]),
+      ])
+        expect(entries[0]?.changes.map((change) => change.path).sort()).toEqual(
+          [...names].sort(),
+        );
+      await repo.mv("café.md", "renamed café.md");
+      const second = await repo.commitAll("rename", author);
+      expect(await repo.renamedPathBetween(first, second, "café.md")).toBe(
+        "renamed café.md",
+      );
+      expect(
+        (await repo.logForPath("renamed café.md", { skip: 0, limit: 10 })).map(
+          (entry) => entry.pathAtSha,
+        ),
+      ).toEqual(["renamed café.md", "café.md"]);
+    });
+  });
+
+  it("reports merge deletions against the first parent", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("deleted.md", "deleted");
+      const first = await repo.commitAll("create", author);
+      await repo.writeFileAtomic("other.md", "other");
+      const side = await repo.commitAll("side", author);
+      await repo.rm("deleted.md");
+      const merge = await repo.commitTreeWithParents("merge delete", author, [
+        first,
+        side,
+      ]);
+      for (const entries of [
+        await repo.logSince(first, { limit: 10 }),
+        await repo.logChangesBefore(merge, { limit: 1 }),
+      ])
+        expect(
+          entries.find((entry) => entry.sha === merge)?.changes,
+        ).toContainEqual({ status: "D", path: "deleted.md", oldPath: null });
+    });
+  });
+
+  it("rejects nested Git metadata writes", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await expect(
+        repo.writeFileAtomic("nested/.git/config", "unsafe"),
+      ).rejects.toThrow("path leaves");
+      await expect(repo.ensureFolder("nested/.GiT")).rejects.toThrow(
+        "path leaves",
+      );
+    });
+  });
+});
+
+describe("history indexes and durable attribution", () => {
+  const author = {
+    name: "Writer",
+    email: "writer@example.test",
+    userId: randomUUID(),
+  };
+
+  it("records durable pending trust before publishing either commit path", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const head = await repo.resolveHead();
+      await repo.writeFileAtomic("one.md", "one");
+      let prepared = "";
+      const sha = await repo.commitAll("one", author, {
+        beforeCommit: async () => {
+          expect(await repo.resolveHead()).toBe(head);
+          prepared = (
+            await readFile(
+              path.join(repo.dir, ".git/weaver-trusted-commits.pending"),
+              "utf8",
+            )
+          ).trim();
+          expect(prepared).toMatch(/^[0-9a-f]{40}$/);
+          expect(await repo.showFileAt(prepared, "one.md")).toBe("one");
+        },
+      });
+      expect(sha).toBe(prepared);
+      await mkdir(path.join(repo.dir, ".git/weaver-trusted-commits.pending"));
+      await repo.writeFileAtomic("two.md", "two");
+      await expect(
+        repo.commitTreeWithParents("two", author, [sha]),
+      ).rejects.toThrow();
+      expect(await repo.resolveHead()).toBe(sha);
+    });
+  });
+
+  it("invalidates cached trust on external ledger changes and separates torn lines", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("one.md", "one");
+      const first = await repo.commitAll("one", author);
+      const ledger = path.join(repo.dir, ".git/weaver-trusted-commits");
+      expect(
+        (await repo.logForPath("one.md", { skip: 0, limit: 1 }))[0]
+          ?.trustedAuthor,
+      ).toBe(true);
+      await writeFile(ledger, "");
+      expect(
+        (await repo.logForPath("one.md", { skip: 0, limit: 1 }))[0]
+          ?.trustedAuthor,
+      ).toBe(false);
+      await writeFile(ledger, first);
+      await repo.writeFileAtomic("two.md", "two");
+      await repo.commitAll("two", author);
+      expect(
+        (await repo.logForPath("one.md", { skip: 0, limit: 1 }))[0]
+          ?.trustedAuthor,
+      ).toBe(true);
+    });
+  });
+
+  it("indexes old operations without an age cutoff and refreshes after new or rewritten history", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const root = await repo.resolveHead();
+      await repo.writeFileAtomic("one.md", "one");
+      const first = await repo.commitAll("one", author, {
+        operationId: "old-operation",
+      });
+      expect(
+        await repo.logForPath(".", {
+          skip: 0,
+          limit: 11,
+          operationId: "fresh-operation",
+        }),
+      ).toEqual([]);
+      await repo.writeFileAtomic("two.md", "two");
+      const second = await repo.commitAll("two", author, {
+        operationId: "new-operation",
+      });
+      expect(
+        (
+          await repo.logForPath(".", {
+            skip: 0,
+            limit: 11,
+            operationId: "old-operation",
+          })
+        )[0]?.sha,
+      ).toBe(first);
+      expect(
+        (
+          await repo.logForPath(".", {
+            skip: 0,
+            limit: 11,
+            operationId: "new-operation",
+          })
+        )[0]?.sha,
+      ).toBe(second);
+      await simpleGit(repo.dir).raw(["reset", "--hard", root]);
+      expect(
+        await repo.logForPath(".", {
+          skip: 0,
+          limit: 11,
+          operationId: "old-operation",
+        }),
+      ).toEqual([]);
+    });
+  });
+
+  it("batches each current path's last change at the pinned snapshot", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      await repo.writeFileAtomic("one.md", "one");
+      await repo.writeFileAtomic("two.md", "two");
+      const first = await repo.commitAll("both", author);
+      await repo.mv("one.md", "renamed.md");
+      const second = await repo.commitAll("rename", author);
+      await repo.writeFileAtomic("two.md", "changed");
+      await repo.commitAll("later", author);
+      const heads = await repo.latestLogForPaths(
+        ["renamed.md", "two.md"],
+        second,
+      );
+      expect(heads.get("renamed.md")?.sha).toBe(second);
+      expect(heads.get("two.md")?.sha).toBe(first);
+      expect(heads.get("two.md")?.trustedAuthor).toBe(true);
+      const merge = await repo.commitTreeWithParents("merge", author, [
+        first,
+        await repo.resolveHead(),
+      ]);
+      const merged = await repo.latestLogForPaths(
+        ["renamed.md", "two.md"],
+        merge,
+      );
+      for (const file of ["renamed.md", "two.md"]) {
+        const [head] = await repo.logForPath(file, {
+          skip: 0,
+          limit: 1,
+          commitish: merge,
+        });
+        expect(merged.get(file)?.sha).toBe(head?.sha);
+      }
+    });
+  });
+});
+
+it("reuses trusted-ledger contents while file signatures stay unchanged", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  await withProjectRepo(randomUUID(), async (repo) => {
+    await repo.writeFileAtomic("cached.md", "cached");
+    await repo.commitAll("cached", {
+      name: "Writer",
+      email: "writer@test",
+      userId: randomUUID(),
+    });
+    const read = vi.spyOn(fsPromises, "readFile");
+    read.mockClear();
+    try {
+      for (let i = 0; i < 3; i++)
+        await repo.logForPath("cached.md", { skip: 0, limit: 1 });
+      expect(
+        read.mock.calls.filter(
+          ([file]) =>
+            typeof file === "string" && file.includes("weaver-trusted-commits"),
+        ),
+      ).toHaveLength(0);
+    } finally {
+      read.mockRestore();
+    }
+  });
+});
+
+it("uses the runtime PATH for local Git subprocesses", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  const binary = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const wrapper = await mkdtemp(path.join(tmpdir(), "weaver-git-path-"));
+  const marker = path.join(wrapper, "called");
+  const quote = (value: string) => "'" + value.replaceAll("'", "'\"'\"'") + "'";
+  await writeFile(
+    path.join(wrapper, "git"),
+    `#!/bin/sh\nprintf x >> ${quote(marker)}\nexec ${quote(binary)} "$@"\n`,
+    { mode: 0o755 },
+  );
+  const originalPath = process.env.PATH!;
+  vi.stubEnv("PATH", `${wrapper}:${originalPath}`);
+  try {
+    await withProjectRepo(randomUUID(), async (repo) => {
+      expect(await repo.resolveHead()).toMatch(/^[0-9a-f]{40}$/);
+    });
+    expect(await readFile(marker, "utf8")).not.toBe("");
+  } finally {
+    vi.stubEnv("PATH", originalPath);
+    await rm(wrapper, { recursive: true, force: true });
+  }
+});
+
+it("keeps concurrent operation indexes bound to their own divergent snapshots", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  const author = { name: "Writer", email: "writer@test", userId: randomUUID() };
+  await withProjectRepo(randomUUID(), async (repo) => {
+    const root = await repo.resolveHead();
+    await repo.writeFileAtomic("a.md", "a");
+    const a = await repo.commitAll("a", author, { operationId: "branch-a" });
+    await simpleGit(repo.dir).raw(["reset", "--hard", root]);
+    await repo.writeFileAtomic("b.md", "b");
+    const b = await repo.commitAll("b", author, { operationId: "branch-b" });
+    await repo.logForPath(".", {
+      skip: 0,
+      limit: 11,
+      commitish: root,
+      operationId: "absent",
+    });
+    const results = await Promise.all([
+      repo.logForPath(".", {
+        skip: 0,
+        limit: 11,
+        commitish: a,
+        operationId: "branch-b",
+      }),
+      repo.logForPath(".", {
+        skip: 0,
+        limit: 11,
+        commitish: b,
+        operationId: "branch-a",
+      }),
+    ]);
+    expect(results).toEqual([[], []]);
+  });
+});
+
+it("keeps rebuild heads on the retained merge lineage", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  const author = { name: "Writer", email: "writer@test", userId: randomUUID() };
+  await withProjectRepo(randomUUID(), async (repo) => {
+    const pinDate = async (day: number) => {
+      const date = `2026-01-${String(day).padStart(2, "0")}T12:00:00Z`;
+      await simpleGit(repo.dir)
+        .env({
+          GIT_AUTHOR_DATE: date,
+          GIT_COMMITTER_DATE: date,
+          GIT_COMMITTER_NAME: "Weaver",
+          GIT_COMMITTER_EMAIL: "weaver@local",
+        })
+        .raw(["commit", "--amend", "--no-edit", "--date", date]);
+      return repo.resolveHead();
+    };
+    await repo.writeFileAtomic("page.md", "base");
+    await repo.commitAll("base", author);
+    const base = await pinDate(1);
+    await repo.writeFileAtomic("page.md", "retained");
+    await repo.commitAll("retained first parent", author);
+    const retained = await pinDate(3);
+    await simpleGit(repo.dir).raw(["reset", "--hard", base]);
+    await repo.writeFileAtomic("page.md", "discarded side version");
+    await repo.writeFileAtomic("side.md", "adopted side content");
+    await repo.commitAll("side parent", author);
+    const side = await pinDate(2);
+    await repo.checkoutPathsFrom(retained, ["page.md"]);
+    await repo.commitTreeWithParents("merge", author, [retained, side]);
+    const merge = await pinDate(4);
+    const heads = await repo.latestLogForPaths(["page.md", "side.md"], merge);
+    expect(heads.get("page.md")?.sha).toBe(retained);
+    for (const file of ["page.md", "side.md"]) {
+      const [head] = await repo.logForPath(file, {
+        skip: 0,
+        limit: 1,
+        commitish: merge,
+      });
+      expect(heads.get(file)?.sha, file).toBe(head?.sha);
+    }
+  });
+});
+
+it("retries transient ledger read errors without caching partial trust", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  await withProjectRepo(randomUUID(), async (repo) => {
+    await repo.writeFileAtomic("trusted.md", "trusted");
+    await repo.commitAll("trusted", {
+      name: "Writer",
+      email: "writer@test",
+      userId: randomUUID(),
+    });
+    const ledger = path.join(repo.dir, ".git/weaver-trusted-commits");
+    await writeFile(ledger, `${await readFile(ledger, "utf8")}\n`);
+    const read = vi.spyOn(fsPromises, "readFile");
+    const warning = vi
+      .spyOn(console, "warn")
+      .mockImplementation(() => undefined);
+    read.mockRejectedValueOnce(
+      Object.assign(new Error("transient ledger read failure"), {
+        code: "EIO",
+      }),
+    );
+    try {
+      expect(
+        (await repo.logForPath("trusted.md", { skip: 0, limit: 1 }))[0]
+          ?.trustedAuthor,
+      ).toBe(false);
+      expect(
+        (await repo.logForPath("trusted.md", { skip: 0, limit: 1 }))[0]
+          ?.trustedAuthor,
+      ).toBe(true);
+    } finally {
+      read.mockRestore();
+      warning.mockRestore();
+    }
+  });
+});
+
+it("retains earlier pending attribution when reconciliation cannot read it", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  const author = { name: "Writer", email: "writer@test", userId: randomUUID() };
+  const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  const read = vi.spyOn(fsPromises, "readFile");
+  try {
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const ledger = path.join(repo.dir, ".git/weaver-trusted-commits");
+      const pending = `${ledger}.pending`;
+      await mkdir(ledger);
+      await repo.writeFileAtomic("a.md", "a");
+      const first = await repo.commitAll("a", author);
+      await rm(ledger, { recursive: true });
+      await repo.writeFileAtomic("b.md", "b");
+      const second = await repo.commitAll("b", author, {
+        beforeCommit: async () => {
+          read.mockRejectedValueOnce(
+            Object.assign(new Error("pending read unavailable"), {
+              code: "EIO",
+            }),
+          );
+        },
+      });
+      const retained = await readFile(pending, "utf8");
+      expect(retained).toContain(first);
+      expect(retained).toContain(second);
+      await repo.writeFileAtomic("c.md", "c");
+      await repo.commitAll("c", author);
+      const reconciled = await readFile(ledger, "utf8");
+      expect(reconciled).toContain(first);
+      expect(reconciled).toContain(second);
+    });
+  } finally {
+    read.mockRestore();
+    warning.mockRestore();
+  }
+});
+
+it("returns the existing commit for an identical staged tree without new provenance", async () => {
+  const { withProjectRepo } = await import("./gitStore");
+  const author = { name: "Writer", email: "writer@test", userId: randomUUID() };
+  await withProjectRepo(randomUUID(), async (repo) => {
+    await repo.writeFileAtomic("empty/.folder.json", '{"name":"Empty"}\n');
+    const head = await repo.commitAll("create folder", author);
+    const ledger = path.join(repo.dir, ".git/weaver-trusted-commits");
+    const trustBefore = await readFile(ledger, "utf8");
+    await repo.writeFileAtomic("empty/.folder.json", '{"name":"Empty"}\n');
+    const beforeCommit = vi.fn(async () => undefined);
+    const result = await repo.commitAll(
+      "repeat folder import",
+      { ...author, userId: randomUUID() },
+      { operationId: "no-op-import", beforeCommit },
+    );
+    expect(result).toBe(head);
+    expect(await repo.resolveHead()).toBe(head);
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(await readFile(ledger, "utf8")).toBe(trustBefore);
+    expect(
+      await repo.logForPath(".", {
+        skip: 0,
+        limit: 10,
+        operationId: "no-op-import",
+      }),
+    ).toEqual([]);
+    expect(
+      (await repo.logForPath("empty/.folder.json", { skip: 0, limit: 10 })).map(
+        (entry) => entry.sha,
+      ),
+    ).toEqual([head]);
+    await expect(
+      repo.commitAll("rejected no-op", author, {
+        beforeCommit: async () => {
+          throw new Error("guard rejected");
+        },
+      }),
+    ).rejects.toThrow("guard rejected");
+    expect(await repo.resolveHead()).toBe(head);
   });
 });

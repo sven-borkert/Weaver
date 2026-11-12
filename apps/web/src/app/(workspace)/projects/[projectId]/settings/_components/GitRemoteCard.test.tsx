@@ -255,9 +255,14 @@ describe("Git remote settings", () => {
     expect(mocked.mutations.save).toHaveBeenCalledWith(
       expect.objectContaining({ branch: "my-draft", expectedRevision: 1 }),
     );
-    expect(mocked.queryOptions).toEqual(
-      expect.objectContaining({ refetchInterval: 5000 }),
-    );
+    const { refetchInterval } = mocked.queryOptions as {
+      refetchInterval: (query: { state: { data: unknown } }) => number | false;
+    };
+    expect(refetchInterval({ state: { data: base } })).toBe(false);
+    for (const activity of ["queued", "pushing", "pullQueued", "pulling"])
+      expect(
+        refetchInterval({ state: { data: { ...base, [activity]: true } } }),
+      ).toBe(5000);
   });
 
   it("clears the accepted private key file and mutation variables after upload", async () => {

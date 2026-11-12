@@ -40,7 +40,11 @@ export async function resolveProjectMachineContext(
     where: { id: parsed.keyId },
     select: { digest: true },
   });
-  if (!key || !verifyProjectMachineDigest(parsed.token, key.digest))
+  const digestMatches = verifyProjectMachineDigest(
+    parsed.token,
+    key?.digest ?? "0".repeat(64),
+  );
+  if (!key || !digestMatches)
     throw new CoreError("UNAUTHORIZED", "Invalid project API credential");
   const live = await requireLiveProjectMachineKey(
     db,

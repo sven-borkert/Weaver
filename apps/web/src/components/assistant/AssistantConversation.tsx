@@ -105,6 +105,11 @@ export function AssistantConversation({
             className="flex flex-1 flex-col gap-0.5"
             onSubmit={(e) => {
               e.preventDefault();
+              if (rename.isPending) return;
+              if (!editingTitle.trim()) {
+                setTitleError("Enter a conversation title.");
+                return;
+              }
               rename.mutate({ conversationId, title: editingTitle });
             }}
           >
@@ -113,7 +118,7 @@ export function AssistantConversation({
               aria-invalid={Boolean(titleError)}
               autoFocus
               maxLength={MAX_TITLE_CHARS}
-              disabled={rename.isPending}
+              readOnly={rename.isPending}
               className={cn(
                 "text-text flex-1 bg-transparent text-[13px] font-semibold outline-none",
                 titleError && "text-danger",
@@ -123,7 +128,9 @@ export function AssistantConversation({
                 setEditingTitle(e.target.value);
                 if (titleError) setTitleError(null);
               }}
-              onBlur={() => setEditingTitle(null)}
+              onBlur={() => {
+                if (!rename.isPending && !titleError) setEditingTitle(null);
+              }}
             />
             {titleError ? (
               <p className="text-danger text-[12px]">{titleError}</p>

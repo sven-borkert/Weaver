@@ -272,7 +272,8 @@ browsing stays read-only, and folder deletion still requires an empty folder.
   a per-navigation confirm, since the breadcrumb link is plain. The
   breadcrumb "Tables" link from a table goes to the tables root; folder
   crumbs above the title link to that table's own folder, same as documents.
-  Other list filters/paging stay local; All is `-1`.
+  Other explorer list filters/paging stay local; All is `-1`. The server's legacy
+  `table.list` All mode is capped at 200 and returns truthful continuation pages.
 - Collapsed desktop context occupies a dedicated 3rem grid column; never float
   its expand button over the editor toolbar. Empty lists omit the page counter
   when the server returns zero pages.

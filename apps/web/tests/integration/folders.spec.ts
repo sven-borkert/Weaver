@@ -332,7 +332,10 @@ describe("folder router", () => {
           parentPath: [],
           name: "foo-bar",
         }),
-      ).rejects.toMatchObject({ code: "CONFLICT", cause: { field: "name" } });
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        cause: { details: { field: "name" } },
+      });
     });
 
     it("rejects depth beyond 10 with BAD_REQUEST", async () => {

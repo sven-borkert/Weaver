@@ -1,3 +1,4 @@
+import { observeContentTransaction } from "../diagnostics/transactionTiming";
 import { randomUUID } from "node:crypto";
 import { appPublicUrl, type PublicUrlEnv } from "@weaver/config/publicUrls";
 import type {
@@ -317,11 +318,13 @@ function withKeyPolicyLock<T>(
   fn: (tx: Prisma.TransactionClient, repo: ProjectRepoWriter) => Promise<T>,
 ): Promise<T> {
   return withProjectRepo(projectId, (repo) =>
-    db.$transaction(async (tx) => {
-      await lockProjectMembershipWrites(tx, projectId);
-      await assertKeyManager(tx, actor, projectId);
-      return fn(tx, repo);
-    }, POLICY_TRANSACTION),
+    observeContentTransaction("project.key-policy", projectId, () =>
+      db.$transaction(async (tx) => {
+        await lockProjectMembershipWrites(tx, projectId);
+        await assertKeyManager(tx, actor, projectId);
+        return fn(tx, repo);
+      }, POLICY_TRANSACTION),
+    ),
   );
 }
 

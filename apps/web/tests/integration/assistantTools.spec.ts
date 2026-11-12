@@ -1441,6 +1441,104 @@ describe("assistant tools", () => {
     expect(await validateSourceLocators(db, stranger, [good])).toEqual([]);
   });
 
+  it("validates graph citations only with active generations and live source evidence", async () => {
+    const { db, actor, project, doc } = await fixture();
+    const generation =
+      (await db.knowledgeGeneration.findFirst({
+        where: { projectId: project.id, status: "active" },
+      })) ??
+      (await db.knowledgeGeneration.create({
+        data: {
+          projectId: project.id,
+          configFingerprint: "citation-test",
+          embeddingModel: "test",
+          embeddingDimensions: 3,
+          extractionSchemaVersion: 1,
+          promptVersion: "test",
+          status: "active",
+        },
+      }));
+    const entity = await db.graphEntity.create({
+      data: {
+        projectId: project.id,
+        generationId: generation.id,
+        entityType: "Concept",
+        canonicalName: "Assistant",
+        normalizedName: "assistant",
+      },
+    });
+    const target = await db.graphEntity.create({
+      data: {
+        projectId: project.id,
+        generationId: generation.id,
+        entityType: "Concept",
+        canonicalName: "Roadmap",
+        normalizedName: "roadmap",
+      },
+    });
+    const relation = await db.graphRelation.create({
+      data: {
+        projectId: project.id,
+        generationId: generation.id,
+        sourceEntityId: entity.id,
+        targetEntityId: target.id,
+        relationType: "planned in",
+        normalizedType: "planned in",
+      },
+    });
+    const source = {
+      projectId: project.id,
+      generationId: generation.id,
+      documentId: doc.id,
+      sourceChunkId: "citation-source",
+      sourceCommitSha: doc.headCommitSha,
+      confidence: 1,
+    };
+    const mention = await db.entityMention.create({
+      data: { ...source, entityId: entity.id, mentionText: "assistant" },
+    });
+    const evidence = await db.relationEvidence.create({
+      data: {
+        ...source,
+        relationId: relation.id,
+        evidenceText: "assistant in roadmap",
+      },
+    });
+    const locators = [
+      { kind: "graph", projectId: project.id, entityId: entity.id },
+      { kind: "graph", projectId: project.id, relationId: relation.id },
+    ];
+    expect(await validateSourceLocators(db, actor, locators)).toHaveLength(2);
+    await db.entityMention.update({
+      where: { id: mention.id },
+      data: { invalidatedAt: new Date() },
+    });
+    await db.relationEvidence.update({
+      where: { id: evidence.id },
+      data: { invalidatedAt: new Date() },
+    });
+    expect(await validateSourceLocators(db, actor, locators)).toEqual([]);
+    await db.entityMention.update({
+      where: { id: mention.id },
+      data: { invalidatedAt: null },
+    });
+    await db.relationEvidence.update({
+      where: { id: evidence.id },
+      data: { invalidatedAt: null },
+    });
+    await db.knowledgeGeneration.update({
+      where: { id: generation.id },
+      data: { status: "superseded" },
+    });
+    expect(await validateSourceLocators(db, actor, locators)).toEqual([]);
+    await db.knowledgeGeneration.update({
+      where: { id: generation.id },
+      data: { status: "active" },
+    });
+    await db.document.delete({ where: { id: doc.id } });
+    expect(await validateSourceLocators(db, actor, locators)).toEqual([]);
+  });
+
   it("binds citations to the resource at its revision and derives excerpts from Git", async () => {
     const { db, actor, project, doc, table } = await fixture();
     const later = await createDocument(

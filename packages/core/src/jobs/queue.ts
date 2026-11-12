@@ -135,16 +135,32 @@ export async function requestKnowledgeJob<N extends KnowledgeJobName>(
   name: N,
   data: KnowledgeJobPayloads[N],
 ): Promise<string | null> {
+  const result = await publishKnowledgeJob(name, data);
+  return result.status === "accepted" ? result.jobId : null;
+}
+
+export type JobPublication =
+  | { status: "accepted"; jobId: string }
+  | { status: "deduped" }
+  | { status: "disabled" };
+
+/** A null pg-boss send means an equivalent job is already queued; failures throw. */
+export async function publishKnowledgeJob<N extends KnowledgeJobName>(
+  name: N,
+  data: KnowledgeJobPayloads[N],
+): Promise<JobPublication> {
   const config = parseKnowledgeConfig(process.env);
-  if (!config.jobsEnabled) return null;
+  if (!config.jobsEnabled) return { status: "disabled" };
 
   const options = knowledgeJobSendOptions(name, data);
-  if (jobQueueForTests) return jobQueueForTests.send(name, data, options);
-  if (processJobQueue) return processJobQueue.send(name, data, options);
-  if (processJobsStopped) {
+  const queue = jobQueueForTests ?? processJobQueue;
+  if (!queue && processJobsStopped) {
     throw new Error(
       `Knowledge job ${name} requested after the worker runtime stopped`,
     );
   }
-  return sendKnowledgePublisherJob(name, data, options);
+  const jobId = queue
+    ? await queue.send(name, data, options)
+    : await sendKnowledgePublisherJob(name, data, options);
+  return jobId === null ? { status: "deduped" } : { status: "accepted", jobId };
 }

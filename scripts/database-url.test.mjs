@@ -19,3 +19,13 @@ test("rejects a public placeholder", () => {
     /Replace/,
   );
 });
+
+test("rejects remote targets and host overrides for the local container", () => {
+  for (const url of [
+    "postgres://postgres:secret@remote.example/weaver",
+    "postgres://postgres:secret@localhost/weaver?host=remote.example",
+    "postgres://postgres:secret@localhost/weaver?hostaddr=192.0.2.1",
+  ]) {
+    assert.throws(() => parseDatabaseUrl(url), /loopback/);
+  }
+});

@@ -82,6 +82,10 @@ outbound network policy.
 - Bound the receiver's body while streaming, independent of `Content-Length`.
   `TRANSFER_BODY_MAX_BYTES` is currently 64 MiB. Validate image names,
   duplicates, count, per-image size and sniffed MIME before creating content.
+- All receiver endpoints share a verified-credential sliding window using the
+  MCP per-minute limit. Body-bearing transfers reserve a process-wide slot before
+  reading bytes (two per user, eight total) and release it after settlement.
+  A 429 response includes `Retry-After`; the 64 MiB compatibility cap remains.
 - Receiving creates new content. A lost response does not prove that the peer
   failed to commit; preserve explicit retry behavior rather than introducing
   automatic replay of a send.

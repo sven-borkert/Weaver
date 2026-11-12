@@ -18,9 +18,7 @@ export function assertTestEnvironment(
     ) {
       throw new Error("Test reset refused: noncanonical database URL");
     }
-    if (
-      !["localhost", "127.0.0.1", "[::1]", "postgres"].includes(url.hostname)
-    ) {
+    if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) {
       throw new Error("Test reset refused: database host must be local");
     }
     actualDatabase = decodeURIComponent(

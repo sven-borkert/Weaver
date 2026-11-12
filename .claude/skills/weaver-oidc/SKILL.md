@@ -76,6 +76,11 @@ query but render fixed, safe copy rather than provider error descriptions.
 
 ## Account lifecycle
 
+Deployment precondition: the configured issuer must verify email ownership and
+prevent users from asserting another person's address as verified. Weaver trusts
+its signed `email_verified: true` claim for matching-email account linking;
+compromise or misconfiguration of that authority can compromise local accounts.
+
 - First login creates a normal `User`, without a local password or shared-project
   membership. The usual personal workspace is created on entry. Ignore provider
   role/group/password-change claims.

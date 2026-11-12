@@ -1,3 +1,4 @@
+import { observeContentTransaction } from "../diagnostics/transactionTiming";
 import { trainingRoleFor } from "./projectTraining";
 import { withProjectRepo } from "./projectRepo";
 import { rm } from "node:fs/promises";
@@ -40,17 +41,19 @@ export function organizationSlugForProject(projectId: string): string {
 export async function listProjectsForUser(
   db: Db,
   actor: SecurityContext,
+  options?: { limit: number },
 ): Promise<Array<Project & { myRole: ProjectRoleName }>> {
   if (!hasCapability(actor, "content:read")) {
     throw new CoreError("FORBIDDEN");
   }
-  return listProjectMembershipsForActor(db, actor);
+  return listProjectMembershipsForActor(db, actor, options);
 }
 
 // Enumerate membership/restrictions without imposing an operation capability.
 export async function listProjectMembershipsForActor(
   db: Db,
   actor: SecurityContext,
+  options?: { limit: number },
 ): Promise<Array<Project & { myRole: ProjectRoleName }>> {
   if (actor.kind === "wikiAgent") {
     try {
@@ -76,7 +79,10 @@ export async function listProjectMembershipsForActor(
         },
       },
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+    ...(options
+      ? { take: Math.max(1, Math.min(1000, Math.trunc(options.limit))) }
+      : {}),
   });
   return projects.map(({ organization, ...project }) => {
     const member = organization.members[0];
@@ -131,37 +137,39 @@ export async function createProject(
     process.env,
   );
   try {
-    return await db.$transaction(
-      async (tx) => {
-        const organization = await tx.organization.create({
-          data: {
-            name: input.name,
-            slug: organizationSlugForProject(projectId),
-          },
-        });
-        const project = await tx.project.create({
-          data: {
-            id: projectId,
-            name: input.name,
-            description: input.description,
-            organizationId: organization.id,
-          },
-        });
-        await tx.member.create({
-          data: {
-            organizationId: organization.id,
-            userId: actor.userId,
-            role: toOrganizationRole("Owner"),
-          },
-        });
-        await tx.projectDefaultReviewer.create({
-          data: { projectId, userId: actor.userId },
-        });
-        // Git storage is part of creation: a failed init rolls the rows back.
-        await syncProjectMetadata(tx, projectId, actor, { dispatch: false });
-        return project;
-      },
-      { maxWait: lockTimeout, timeout: lockTimeout + 60_000 },
+    return await observeContentTransaction("project.create", projectId, () =>
+      db.$transaction(
+        async (tx) => {
+          const organization = await tx.organization.create({
+            data: {
+              name: input.name,
+              slug: organizationSlugForProject(projectId),
+            },
+          });
+          const project = await tx.project.create({
+            data: {
+              id: projectId,
+              name: input.name,
+              description: input.description,
+              organizationId: organization.id,
+            },
+          });
+          await tx.member.create({
+            data: {
+              organizationId: organization.id,
+              userId: actor.userId,
+              role: toOrganizationRole("Owner"),
+            },
+          });
+          await tx.projectDefaultReviewer.create({
+            data: { projectId, userId: actor.userId },
+          });
+          // Git storage is part of creation: a failed init rolls the rows back.
+          await syncProjectMetadata(tx, projectId, actor, { dispatch: false });
+          return project;
+        },
+        { maxWait: lockTimeout, timeout: lockTimeout + 60_000 },
+      ),
     );
   } catch (error) {
     // Preserve storage if a lost commit acknowledgement leaves the DB outcome uncertain.

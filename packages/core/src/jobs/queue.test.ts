@@ -4,6 +4,7 @@ import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import {
   FakeJobQueue,
   requestKnowledgeJob,
+  publishKnowledgeJob,
   setJobQueueForTests,
   setProcessJobQueue,
   setProcessJobsStopped,
@@ -34,6 +35,41 @@ afterEach(() => {
 });
 
 describe("knowledge queue", () => {
+  it("distinguishes accepted, deduplicated, and disabled publication", async () => {
+    const queue = new FakeJobQueue();
+    setJobQueueForTests(queue);
+    const payload = {
+      fileId: "file",
+      projectId: "project",
+      contentDigest: "digest",
+      baseAttemptCount: 0,
+    };
+    await expect(
+      publishKnowledgeJob("ingestion.parse", payload),
+    ).resolves.toEqual({ status: "accepted", jobId: "fake-job-1" });
+    await expect(
+      publishKnowledgeJob("ingestion.parse", payload),
+    ).resolves.toEqual({ status: "deduped" });
+    vi.stubEnv("WEAVER_JOBS_ENABLED", "false");
+    await expect(
+      publishKnowledgeJob("ingestion.parse", payload),
+    ).resolves.toEqual({ status: "disabled" });
+    expect(queue.jobs).toHaveLength(1);
+  });
+
+  it("allows a new run of a task while deduplicating the same run", async () => {
+    const queue = new FakeJobQueue();
+    setJobQueueForTests(queue);
+    expect(
+      await requestKnowledgeJob("task.run", { taskId: "task", runId: "old" }),
+    ).not.toBeNull();
+    expect(
+      await requestKnowledgeJob("task.run", { taskId: "task", runId: "new" }),
+    ).not.toBeNull();
+    expect(
+      await requestKnowledgeJob("task.run", { taskId: "task", runId: "new" }),
+    ).toBeNull();
+  });
   it("ends enrichment before its lease even when a call starts at the deadline", () => {
     // Paced requests make the call count unbounded, so the deadline bounds the job instead.
     expect(MAX_REQUEST_TIMEOUT_MS).toBe(120_000);

@@ -40,6 +40,19 @@ test("fails when the env file is missing", () => {
   assert.match(result.stderr, /missing/i);
 });
 
+test("refuses the ambiguous postgres service hostname", () => {
+  const { file, cleanup } = writeEnvFile(
+    'DATABASE_URL="postgresql://weaver:secret@postgres/weaver_test"\nWEAVER_DATA_DIR="./data-test"\n',
+  );
+  try {
+    const result = run([file, "weaver_test", "./data-test"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /local database host/);
+  } finally {
+    cleanup();
+  }
+});
+
 test("runs the command with the file's variables when the pair matches", () => {
   const { file, cleanup } = writeEnvFile(
     `DATABASE_URL="${TEST_DB_URL}"\nWEAVER_DATA_DIR="./data-test"\nREQUIRE_ENV_EXTRA="from-file"\n`,

@@ -99,3 +99,9 @@ absence of a second write.
 ## Review hardening invariants
 
 Rate-limit upserts only advance the stored time window. Delayed requests from an older window are limited and cannot reset accounting.
+
+HTTP admission limits unknown credentials by trusted source before database work.
+Only successfully verified exact token hashes earn a one-minute credential bucket;
+every request still revalidates live authority and charges the durable key limit.
+Source addresses use `x-real-ip` only with `WEAVER_AUTH_TRUST_PROXY`; without a
+trusted proxy, requests share the `direct` bucket. Never bucket unverified key IDs.

@@ -1,3 +1,4 @@
+import { captureError } from "../diagnostics/writer";
 import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@weaver/db/client";
 import type { CommitAuthor, ProjectRepoWriter } from "@weaver/git-store";
@@ -44,6 +45,21 @@ import {
   composeProjectMetadataFor,
   PROJECT_METADATA_PATH,
 } from "./projectMetadata";
+
+export function hasCaseCollidingPaths(paths: Iterable<string>): boolean {
+  const seen = new Map<string, string>();
+  for (const file of paths) {
+    const segments = file.split("/");
+    for (let end = 1; end <= segments.length; end++) {
+      const prefix = segments.slice(0, end).join("/");
+      const folded = prefix.normalize("NFC").toLowerCase();
+      const previous = seen.get(folded);
+      if (previous !== undefined && previous !== prefix) return true;
+      seen.set(folded, prefix);
+    }
+  }
+  return false;
+}
 
 /** Temporary ref the fetched remote branch is fetched into for the merge. */
 const PULL_REF = "refs/weaver/pull";
@@ -660,18 +676,24 @@ export async function mergeFetchedBranch(
   },
 ): Promise<MergeOutcome> {
   const localHead = await repo.resolveHead();
-  const fetched = await repo.fetchLocalRef(
-    input.bareDirectory,
-    `refs/heads/${input.branch}`,
-    PULL_REF,
-  );
   try {
+    const fetched = await repo.fetchLocalRef(
+      input.bareDirectory,
+      `refs/heads/${input.branch}`,
+      PULL_REF,
+    );
     if (fetched !== input.remoteHead) throw new GitRemoteError("MERGE_FAILED");
     // Symlinks and gitlinks would let later worktree writes leave the repository.
     const unsupported = (await repo.listTreeEntries(PULL_REF)).some(
       (entry) => entry.mode === "120000" || entry.mode === "160000",
     );
     if (unsupported) throw new GitRemoteError("UNSUPPORTED_REMOTE_CONTENT");
+    const paths = [
+      ...(await repo.listTrackedFiles(PULL_REF)),
+      ...(await repo.listTrackedFiles(localHead)),
+    ];
+    if (hasCaseCollidingPaths(paths))
+      throw new GitRemoteError("UNSUPPORTED_REMOTE_CONTENT");
 
     if (await repo.isAncestor(input.remoteHead, localHead)) {
       // Remote already contained: refresh project.json only. R4: a byte-
@@ -817,6 +839,13 @@ export async function mergeFetchedBranch(
     }
     throw error;
   } finally {
-    await repo.deleteRef(PULL_REF).catch(() => undefined);
+    await repo.deleteRef(PULL_REF).catch((error: unknown) => {
+      captureError({
+        event: "git.remote.pull_cleanup_failed",
+        message: "Could not remove the transient pull ref",
+        projectId: input.projectId,
+        error,
+      });
+    });
   }
 }

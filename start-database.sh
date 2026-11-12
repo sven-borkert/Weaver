@@ -13,12 +13,7 @@
 
 set -euo pipefail
 
-# import env variables from .env
-set -a
-source .env
-set +a
-
-DB_VALUES=$(node --input-type=module -e 'import {parseDatabaseUrl} from "./scripts/database-url.mjs"; try { const db=parseDatabaseUrl(process.env.DATABASE_URL); for (const key of ["password", "port", "name", "user"]) console.log(db[key]); } catch(error) { console.error(error.message); process.exit(1); }')
+DB_VALUES=$(node --input-type=module -e 'import {readFileSync} from "node:fs"; import {parseEnv} from "node:util"; import {parseDatabaseUrl} from "./scripts/database-url.mjs"; try { const db=parseDatabaseUrl(parseEnv(readFileSync(".env", "utf8")).DATABASE_URL); for (const key of ["password", "port", "name", "user"]) console.log(db[key]); } catch(error) { console.error(error.message); process.exit(1); }')
 { IFS= read -r DB_PASSWORD; IFS= read -r DB_PORT; IFS= read -r DB_NAME; IFS= read -r DB_USER; } <<< "$DB_VALUES"
 DB_CONTAINER_NAME="$DB_NAME-postgres"
 
@@ -51,7 +46,7 @@ if [ "$($DOCKER_CMD ps -q -a -f name=$DB_CONTAINER_NAME)" ]; then
 fi
 
 if command -v nc >/dev/null 2>&1; then
-  if nc -z localhost "$DB_PORT" 2>/dev/null; then
+  if nc -z 127.0.0.1 "$DB_PORT" 2>/dev/null; then
     echo "Port $DB_PORT is already in use."
     exit 1
   fi
@@ -71,4 +66,4 @@ $DOCKER_CMD run -d \
   -e POSTGRES_PASSWORD \
   -e POSTGRES_DB="$DB_NAME" \
   -p "127.0.0.1:$DB_PORT:5432" \
-  pgvector/pgvector:pg17 && echo "Database container '$DB_CONTAINER_NAME' was successfully created"
+  pgvector/pgvector:0.8.6-pg17-trixie && echo "Database container '$DB_CONTAINER_NAME' was successfully created"

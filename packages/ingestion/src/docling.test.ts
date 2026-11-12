@@ -16,6 +16,26 @@ const input = (
 const signal = new AbortController().signal;
 
 describe("createDoclingParser", () => {
+  it("cancels an HTTP error response body", async () => {
+    let cancelled = false;
+    const parser = createDoclingParser({
+      baseUrl: "http://d",
+      timeoutMs: 1000,
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream({
+            cancel() {
+              cancelled = true;
+            },
+          }),
+          { status: 503 },
+        ),
+    });
+    expect(await parser.parse(input("application/pdf"), signal)).toMatchObject({
+      failureKind: "parser",
+    });
+    expect(cancelled).toBe(true);
+  });
   it("ingestion review: cancels an oversized response while streaming", async () => {
     let reads = 0;
     let cancelled = false;

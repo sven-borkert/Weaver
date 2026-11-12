@@ -285,7 +285,7 @@ export async function acceptDraft(
         limit: RELEASE_HISTORY_LIMIT + 1,
         operationId,
       });
-      // Git filters message text; only complete history proves trailer absence.
+      // The operation index covers complete history and exact terminal trailers.
       if (
         candidates.length <= RELEASE_HISTORY_LIMIT &&
         !candidates.some((entry) => entry.operationId === operationId)

@@ -170,7 +170,7 @@ The Prisma pool pins its PostgreSQL session timezone to UTC. Review migrations
 createdAt defaults and create UploadRateLimit (per-user/channel fixed minute
 windows, cascading with User deletion). Preserve applied historical migrations;
 new fixes use forward migrations. Reset guards also restrict test DB hosts to
-loopback or the Compose postgres hostname.
+loopback; publish the test container port on 127.0.0.1 instead of using a DNS service alias.
 
 `ApiKeyProject.project` restricts hard project deletion until affected key grants
 are explicitly removed; cascading the final grant would widen a key.
@@ -218,3 +218,11 @@ Wrap dependent migration DDL/DML in BEGIN/COMMIT unless a specific operation for
 ## Wiki lint and classify columns
 
 `20261103130000_wiki_lint_classify` adds `WikiRun.plan` (classify's stored preview plan, re-validated and digest-checked before use) and `ProjectWikiSettings.lintSkippedAt`/`lintSkipReason` (the last scheduled lint slot that did not start). The lint schedule, streak (`lintConsecutiveFailures`) and pause (`lintPausedAt`) columns existed from the settings slice.
+
+Application statement timeouts default to 30 seconds; zero is an explicit opt-out.
+Bootstrap uses the same client factory/session settings as runtime clients.
+Keep Git-dependent creation/policy transactions minimal and observe the slow
+transaction diagnostic; do not move Git outside them without preserving rollback
+and policy-lock invariants. For future large-table indexes, use a dedicated
+transaction-free concurrent-build migration rehearsed with the pinned Prisma
+version, or a planned maintenance window; see docs/setup.md.

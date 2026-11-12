@@ -5,6 +5,19 @@ describe("worker health server", () => {
   let close: (() => Promise<void>) | undefined;
   afterEach(async () => close?.());
 
+  it("accepts probe query strings without skipping dependency checks", async () => {
+    const health = await createWorkerHealthServer(0, "127.0.0.1", () => true, {
+      checkDependencies: async () => false,
+    });
+    close = health.close;
+    expect(
+      (await fetch(`http://127.0.0.1:${health.port}/health?probe=1`)).status,
+    ).toBe(200);
+    expect(
+      (await fetch(`http://127.0.0.1:${health.port}/ready?probe=1`)).status,
+    ).toBe(503);
+  });
+
   it("reports process liveness without touching dependencies", async () => {
     const health = await createWorkerHealthServer(0);
     close = health.close;

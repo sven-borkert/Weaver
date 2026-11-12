@@ -49,6 +49,7 @@ export function monitorProcessMemory(
 ): () => void {
   let stopped = false;
   let pending = false;
+  let measurementFailures = 0;
   const sample = async () => {
     if (
       stopped ||
@@ -60,9 +61,17 @@ export function monitorProcessMemory(
       return;
     pending = true;
     try {
-      if ((await residentBytes(child.pid)) > maxBytes && !stopped) onLimit();
+      const bytes = await residentBytes(child.pid);
+      measurementFailures = 0;
+      if (bytes > maxBytes && !stopped) onLimit();
     } catch {
-      if (!stopped && child.exitCode === null && child.signalCode === null)
+      measurementFailures += 1;
+      if (
+        measurementFailures >= 3 &&
+        !stopped &&
+        child.exitCode === null &&
+        child.signalCode === null
+      )
         onLimit();
     } finally {
       pending = false;

@@ -83,8 +83,11 @@ maps it to the existing tRPC error contract. Prisma imports go through
 
 ## Git truth and cross-process consistency
 
-Commit success survives trust-ledger I/O failures; `gitStore.ts` keeps a pending
-ledger for reconciliation on the next write. Create recovery in
+Commit success survives trust-ledger I/O failures; `gitStore.ts` fsyncs a pending
+ledger before publishing the commit ref and reconciles it on the next write.
+History readers use literal pathspecs, NUL-framed changes, first-parent merge
+diffs, and a stat-keyed trust cache. An incremental operation-ID index preserves
+old idempotency receipts without repeating full-history scans. Create recovery in
 `services/contentOperations.ts` selects the canonical changed document by its
 operation-derived ID. Table historical reads require pinned-HEAD ancestry.
 
@@ -157,7 +160,9 @@ rebuildable projection state.
   repair delivery carrying document ids.
 
 Document rebuilds in [`documents.ts`](../packages/core/src/services/documents.ts)
-use an ownership-scoped upsert/diff, preserving unchanged chunk projections and
+batch immutable blob/history reads outside the shared lock (merged histories retain
+canonical per-path history), recheck HEAD when
+reacquiring the lock, and use an ownership-scoped upsert/diff, preserving unchanged chunk projections and
 invalidating keyword readiness for restored rows. The shared
 [`documents/title.ts`](../packages/core/src/documents/title.ts) schema enforces
 the same single-line title invariant in API, MCP, core writes, and rebuilds.
@@ -254,6 +259,14 @@ after release. If PostgreSQL rolls back after Git commits, the worker records th
 committed SHA, pauses pushes, and continues repair.
 
 ## Database and data model
+
+The shared client factory applies UTC sessions and a default 30-second statement
+timeout, including the bootstrap administrator command. Content transactions that
+must retain Git/DB atomicity emit `database.transaction.slow` after five seconds
+through [`transactionTiming.ts`](../packages/core/src/diagnostics/transactionTiming.ts).
+[Setup](setup.md#database-operating-budgets) documents pool monitoring and the
+maintenance procedure for blocking or concurrent index builds; applied migrations
+remain immutable.
 
 Dependent forward migrations use explicit transactions. The supported partial
 identity-migration repair is
@@ -451,6 +464,20 @@ cover event, severity, user, and connection filters.
 normalize live revocation timestamps independently of the database session timezone.
 
 ## Web adapters and UI
+
+API adapters preserve the original `CoreError` cause while exposing validated
+details through the tRPC formatter. Public project lists cap at 1,000; table
+“All” pages cap at 200 with continuation. [`clientAddress.ts`](../apps/web/src/server/clientAddress.ts)
+trusts proxy client addresses only when explicitly configured and supplies
+source buckets for CSP and machine API admission. Machine API
+[`admission.ts`](../apps/web/src/server/projectApi/admission.ts) runs before DB
+authentication; previously verified token hashes never bypass live key checks.
+
+Table detail screens remount by table ID. Assistant drafts live in the provider;
+[`use-stick-to-bottom.ts`](../apps/web/src/lib/use-stick-to-bottom.ts) preserves
+history reading during streaming. Settled approvals stop polling and terminal
+run acknowledgement has bounded backoff. Exam countdown announcements use
+milestones, and idle lists/cards avoid rapid polling.
 
 `lib/editor/link-base-path.ts` normalizes document and assistant link marks before
 static rendering. Local document image resolution deliberately rejects external
@@ -1462,6 +1489,13 @@ worker abort signal. System reconciliation has a 60-minute lease. Workers share
 must be a subset, and only globally disabled assistant/task/Git roles lose their
 cron schedules, so split workers preserve each other's schedules.
 
+[`jobs/queue.ts`](../packages/core/src/jobs/queue.ts) distinguishes accepted,
+deduplicated and disabled publication; queue exceptions remain failures.
+Ingestion treats a pending singleton as successful publication. Scheduled runs
+deduplicate by run ID, and each worker consumes `system.reconcile` serially;
+cross-worker maintenance retains its database fencing. The worker refuses to
+start with jobs disabled, and readiness probes accept URL query strings.
+
 Enrichment claims persist a token and pg-boss delivery identity. Newer retries
 replace the token; embedding, graph, and terminal-state writes fence stale owners.
 Cancellation releases its own claim immediately. A configuration-blocked shadow
@@ -1645,7 +1679,8 @@ IANA timezone, resolved to cron and next-occurrence by
 [`scheduledTasks/tick.ts`](../packages/core/src/scheduledTasks/tick.ts),
 claims due tasks with a conditional `nextRunAt` update so two workers never
 claim the same slot, re-dispatches stale-queued runs, and expires abandoned
-leases.
+leases. Claim and dispatch failures are isolated per task, and expiry still runs
+after earlier phases fail. Task context reads retain the live-project filter.
 [`scheduledTasks/context.ts`](../packages/core/src/scheduledTasks/context.ts)
 assembles a run's prompt: a change digest since the task's last successful
 `projectHeads`, from
@@ -1707,6 +1742,11 @@ falls back to parsed metadata. Ingestion and task accounting failures emit separ
 diagnostics without changing a successful provider result.
 
 ## Exams
+
+Attempt list pages batch trainee and live-project metadata once per page and
+validate only the snapshot title needed for the list. Historical attempt rows
+remain stored after project deletion, while existing access checks and metadata
+filters deny reads of deleted projects.
 
 `listExams` returns `{ items, nextCursor }`, ordered by updated time and ID, with
 bounded pages and grouped question/attempt aggregates. `loadExamDefinitionInTx`
@@ -2551,6 +2591,12 @@ exposes the same verify/clear pair.
 
 ## Assistant backend
 
+External tool [`result.ts`](../packages/external-mcp/src/result.ts) shares a
+16,000-byte UTF-8 budget across text and structured content. Citation validation
+uses active-generation/live graph evidence and bounded batched Git reads for
+historical path fallback. Final assistant usage persistence diagnoses failure
+without replacing a completed run outcome.
+
 `services/externalMcp/capacity.ts` serializes per-owner capacity changes and projects
 only reviewed runtime schemas (10 stored connections, 100 enabled tools, 2 MiB total).
 Loaded connections register tools into the shared execution map at acceptance time.
@@ -2867,6 +2913,11 @@ MCP proposal tools and the proposal inbox, and a bounded `resources/list`.
 
 ## Remote instances
 
+Receiving transfer routes share credential quotas through
+[`transfer/admission.ts`](../apps/web/src/server/transfer/admission.ts). Document
+and table body reads reserve two concurrent slots per user and eight per process
+before buffering the bounded payload, and release them on every exit path.
+
 Sending a document or table to another Weaver instance uses three models:
 `RemoteInstance` (the registry: name, `baseUrl`, `enabled`, revision, Test
 status), `RemoteInstanceConnection` (one user's encrypted tokens for one
@@ -3170,6 +3221,14 @@ Tier 3 and require fresh user consent plus `RUN_FULL_TESTS=1`. See
 [`weaver-testing` skill](../.claude/skills/weaver-testing/SKILL.md).
 
 ## Deployment
+
+The generic Compose example binds HTTP ports to loopback and probes worker
+readiness. Public deployments require a TLS proxy and the public HTTPS auth
+origin. Docker and CI Node images are patch-pinned; GitLab Docker-in-Docker uses
+TLS and needs the runner certificate-volume configuration in [setup](setup.md).
+[`integration.yml`](../.github/workflows/integration.yml) runs the guarded full
+database suite nightly and on manual dispatch against isolated loopback pgvector;
+local full-suite consent and destructive reset guards remain separate controls.
 
 Backup discovery includes restarting writers and checks for remaining running,
 restarting or paused writers before dumping. CI reserves all `latest` image aliases
