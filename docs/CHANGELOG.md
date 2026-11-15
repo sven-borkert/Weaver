@@ -4,6 +4,17 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.240] - 2026-11-15
+
+### Fixed
+
+- Document deletion rejects stale paths before removing another document or its images. Deleted-content pagination retains merged branch history, and recovery checks image counts and byte budgets before loading assets. MCP recovery requires locally trusted commits.
+- Personal API-key creation shares the credential-revocation lock and rechecks the live session, account state and role before issuing a key.
+- Scheduled update reports preserve the revision used for generation and report conflicts instead of overwriting concurrent edits. Folder focus restricts content and change digests to the chosen subtree and resource type. A database uniqueness constraint prevents multiple tasks from owning one output document.
+- Exam autosave recovery fetches fresh answers and validates their sequence. Wiki note submission preserves subsequent typing. Import review keeps form values bound to their reviewed revision and requires explicit reconciliation when a newer draft arrives.
+- Entity embedding repair serializes publication with description invalidation and rechecks generation and live provenance. Wiki classification scans past protected task outputs and cannot reap a preview whose lease was renewed or whose plan completed after the scan.
+- Backup and image-build script tests clean up temporary fixtures on success and failure.
+
 ## [0.1.239] - 2026-11-12
 
 ### Fixed

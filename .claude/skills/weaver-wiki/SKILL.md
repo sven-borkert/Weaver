@@ -206,6 +206,9 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
 `wiki/_components/WikiInputScreen.tsx` over `wiki.input.*` (`list`, `addText`, `addFiles`, `process`, `retry`, `confirm`, `remove`, `unlinkArtifact`) and
 `wiki.cancelRun`, session actors only. `uploadInputFiles` retries a name clash as `name-2.ext`, never replacing a file in Files.
 `wikiRunNotice` words `RUNNER_UNAVAILABLE` and `NO_WORKER` plainly; codes never reach the page.
+Note submission clears the textarea only when its value still matches the submitted
+text; typing while the request is pending survives success. Refresh the submitted
+project's queue from the mutation variables.
 
 ## Ownership and the run ledger
 
@@ -291,6 +294,8 @@ people, keeping id, kind, status, timestamps and the source link the guard needs
   minimum input at the 100,000 window 45,454 B (ingest) and 44,459 B (lint); pinned in `wikiAgentRegistry.test.ts` and `wikiRunner.test.ts`.
 
 ## Classify
+
+- Candidate selection keyset-scans past protected outputs until the eligible cap or project end. Lost-preview termination checks the observed token and still-expired lease atomically through `endRunInTx`; a renewed lease or completed plan must survive a stale reaper scan. Unanswered-plan expiry likewise rechecks its null lease and original age cutoff atomically.
 
 - `wikiClassify.ts`: Owner session actions `startClassify` (a `classify` run in `preparing`, no plan), `acceptClassifyPlan` (needs the run's `planDigest` as `expectedPlanDigest`;
   a mismatch is `PLAN_CHANGED` and nothing starts; moves the run to `queued`) and `rejectClassifyPlan` (cancels, `plan_rejected`). `cancelRun` on a classify run is Owner only.

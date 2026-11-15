@@ -1560,7 +1560,7 @@ model ScheduledTask {
   scopeSnapshot       Json
   outputProjectId     String                    @db.Uuid
   outputFolderPath    String[]
-  outputDocumentId    String?                   @db.Uuid
+  outputDocumentId    String?                   @unique @db.Uuid
   outputMode          ScheduledTaskOutputMode   @default(replace)
   outputTitle         String?                   @db.VarChar(200)
   schedule            Json
@@ -1583,7 +1583,6 @@ model ScheduledTask {
   @@index([ownerId])
   @@index([outputProjectId])
   @@index([status, nextRunAt])
-  @@index([outputDocumentId])
 }
 
 model ScheduledTaskRun {

@@ -47,9 +47,18 @@ export function autosaveReducer(
         attempts: 0,
       },
     };
-  if (s.sequence !== action.sequence) return state;
   if (action.type === "canonical")
-    return { ...state, [action.questionId]: action.slot };
+    return {
+      ...state,
+      [action.questionId]:
+        s.sequence === action.sequence
+          ? action.slot
+          : {
+              ...s,
+              sequence: Math.max(s.sequence, action.slot.sequence + 1),
+            },
+    };
+  if (s.sequence !== action.sequence) return state;
   return {
     ...state,
     [action.questionId]: {
@@ -134,11 +143,12 @@ export function useAutosaveAnswers(input: {
             savedAt: result.savedAt ?? new Date(),
           });
         else if (result.outcome === "stale") {
-          const canonical = await utils.exam.getAttempt.fetch({
-            attemptId: input.attemptId,
-          });
+          const canonical = await utils.exam.getAttempt.fetch(
+            { attemptId: input.attemptId },
+            { staleTime: 0 },
+          );
           const q = canonical.questions.find((q) => q.id === id);
-          if (q?.answer)
+          if (q?.answer && q.answer.sequence >= result.sequence)
             dispatch({
               type: "canonical",
               questionId: id,

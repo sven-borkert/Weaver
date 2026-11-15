@@ -122,10 +122,12 @@ export function WikiInputScreen({
     toast.error(error.message || "Could not update the wiki input");
 
   const addText = api.wiki.input.addText.useMutation({
-    onSuccess: async () => {
+    onSuccess: async (_result, variables) => {
       toast.success("Added to the queue");
-      setNote("");
-      await refresh();
+      setNote((current) => (current === variables.text ? "" : current));
+      await utils.wiki.input.list.invalidate({
+        projectId: variables.projectId,
+      });
     },
     onError,
   });

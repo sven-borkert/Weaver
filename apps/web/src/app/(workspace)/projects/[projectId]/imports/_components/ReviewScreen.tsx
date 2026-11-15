@@ -193,12 +193,17 @@ function ReviewForm({
   const router = useRouter();
   const utils = api.useUtils();
   const [rejectOpen, setRejectOpen] = useState(false);
-  const draft = file.draft;
+  const [draft, setDraft] = useState(file.draft);
   const form = useForm<Values>({
     resolver: zodResolver(schema),
     defaultValues: draft ? defaultsFor(draft, folders) : undefined,
   });
   const { register, handleSubmit, control, setError, reset, formState } = form;
+  const hasLocalEdits = Object.keys(formState.dirtyFields).length > 0;
+  const newerDraft =
+    file.draft && draft && file.draft.revision > draft.revision
+      ? file.draft
+      : null;
   const reviewable = file.status === "ready" && !!draft;
   const recovering = file.status === "accepting" && !!draft;
   const folderMissing = draft
@@ -218,7 +223,7 @@ function ReviewForm({
     },
     fallback: string,
   ) => {
-    // Someone else saved this draft: show their version before anything is accepted.
+    // Refresh availability without advancing the form's reviewed baseline.
     if (err.data?.code === "CONFLICT") void invalidate();
     return fieldErrorOrToast(err, fallback);
   };
@@ -236,7 +241,10 @@ function ReviewForm({
   const updateDraft = api.ingestion.updateDraft.useMutation({
     onSuccess: (updated) => {
       toast.success("Draft saved");
-      if (updated.draft) reset(defaultsFor(updated.draft, folders));
+      if (updated.draft) {
+        reset(defaultsFor(updated.draft, folders));
+        setDraft(updated.draft);
+      }
       void invalidate();
     },
     onError: (err) => onFieldError(err, "Could not save the draft"),
@@ -284,10 +292,12 @@ function ReviewForm({
     ),
     columns: draft?.table ? values.columns : undefined,
   });
-  const submitSave = handleSubmit((values) =>
-    updateDraft.mutate(payload(values)),
-  );
+  const submitSave = handleSubmit((values) => {
+    if (newerDraft || busy) return;
+    updateDraft.mutate(payload(values));
+  });
   const submitAccept = handleSubmit(async (values) => {
+    if (newerDraft || busy) return;
     try {
       await acceptReviewedDraft({
         status: "ready",
@@ -321,6 +331,32 @@ function ReviewForm({
           failureMessage={file.failureMessage}
         />
       </div>
+      {newerDraft ? (
+        <div
+          role="alert"
+          className="bg-review-bg text-review flex flex-col gap-2 rounded-[10px] p-3 text-sm"
+        >
+          <p className="m-0">
+            A newer draft is available. Review it before saving or accepting.
+            {hasLocalEdits ? " Your unsaved edits will be kept." : ""}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => {
+              reset(defaultsFor(newerDraft, folders), {
+                keepDirtyValues: hasLocalEdits,
+              });
+              setDraft(newerDraft);
+            }}
+          >
+            {hasLocalEdits
+              ? "Review latest and keep my edits"
+              : "Review latest draft"}
+          </Button>
+        </div>
+      ) : null}
       {!draft ? (
         <p role="status" className="text-text-2 text-sm">
           This file has no draft yet. Its status updates automatically while it
@@ -520,13 +556,15 @@ function ReviewForm({
               <Button
                 type="submit"
                 variant="outline"
-                disabled={!reviewable || busy || !formState.isDirty}
+                disabled={
+                  !reviewable || busy || !!newerDraft || !formState.isDirty
+                }
               >
                 Save changes
               </Button>
               <Button
                 type="button"
-                disabled={(!reviewable && !recovering) || busy}
+                disabled={(!reviewable && !recovering) || busy || !!newerDraft}
                 onClick={() =>
                   recovering
                     ? void acceptReviewedDraft({

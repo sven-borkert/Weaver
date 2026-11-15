@@ -396,7 +396,7 @@ extraction. Every such invalidation is repaired without re-extraction:
 `repairMissingEntityEmbeddings` (`knowledgeEnrichment.ts`) finds entities of
 the generation with a live mention and no `entity` embedding (at most 200 per
 pass), rebuilds their canonical text from the stored entity and aliases, embeds
-them, re-checks the text inside the write transaction, and records usage.
+them, and records usage. Both repair and carried-graph entity publication take the established project/generation/source locks before final text validation and insertion, rechecking compatible generation and exact live source provenance under those locks.
 `processGenerationDocument` runs it best effort after a successful enrichment
 and when a job finds its document already up to date; it never fails a ready
 document. `reconcileProjectKnowledge` makes no provider calls: per generation

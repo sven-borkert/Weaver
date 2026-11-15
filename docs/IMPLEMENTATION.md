@@ -155,7 +155,7 @@ rebuildable projection state.
   force-stages ignored files, and removes ignored leftovers. Git readers provide batched history/path/blob helpers; document
   history rejects non-ancestor revisions, and table trees use database projections.
   Table deletion carries an expected revision, like other content writes. Document
-  restore/diff verifies historical identity; history offsets are capped at 1,000.
+  deletion validates committed identity under the repository lock before removing content or assets; restore/diff verifies historical identity. History offsets are capped at 1,000.
   Post-commit document projection failures enqueue a distinct `project.reconcile`
   repair delivery carrying document ids.
 
@@ -605,6 +605,7 @@ after five. A lost lint or classify-apply lease restarts the run (`expireWikiRun
 Classify: [`wikiClassify.ts`](../packages/core/src/services/wikiClassify.ts) holds the Owner actions (`startClassify`, `acceptClassifyPlan`
 with `expectedPlanDigest`, `rejectClassifyPlan`), the preview claim and the model-free apply (`executeWikiClassify`, called by the `wiki.run`
 handler for a queued classify run). The preview is one tool-less call in [`wikiClassifyPreview.ts`](../packages/ai/src/wikiClassifyPreview.ts);
+candidate selection keyset-scans past protected pages. Preview and unanswered-plan reapers atomically recheck their observed lease and age predicates before ending a run.
 the plan, its prompt and its validation are pure code in [`wiki/classifyPlan.ts`](../packages/core/src/wiki/classifyPlan.ts) (`WikiRun.plan`,
 `planDigest`). Save as page: [`SaveAsPageDialog.tsx`](../apps/web/src/components/assistant/SaveAsPageDialog.tsx) over the pure mapping in
 [`lib/assistant/saveAsPage.ts`](../apps/web/src/lib/assistant/saveAsPage.ts) and `wiki.saveTarget`.
@@ -734,7 +735,7 @@ submitted identity; pending sends/settings saves disable draft editing.
 
 Personal API keys (spec §8) are minted, updated (`apiKey.update`: name, capabilities, projects, rate limit; never the secret or expiry) and revoked only through the `apiKey` tRPC router
 → [`packages/core/src/services/apiKeys.ts`](../packages/core/src/services/apiKeys.ts)
-→ Better Auth (`createApiKeyIssuer`). Keys carry `mcp:use` + `content:read` by
+→ Better Auth (`createApiKeyIssuer`). Issuance and project-restriction persistence hold the per-user credential-revocation lock and revalidate the persisted session, account state and role. Keys carry `mcp:use` + `content:read` by
 default, `content:propose`/`content:write`/`ingest:external` explicitly (the
 last is the external feed channel and never a session or OAuth capability), and
 Weaver-owned project restrictions in `ApiKeyProject`; an omitted custom limit keeps Better
@@ -1514,6 +1515,7 @@ remain retryable internal failures. Description drift does not change the identi
 signature; publication skips outdated vectors and repairs them after releasing the
 processing claim. Terminal failures invalidate older-SHA graph provenance and
 refresh descriptions. Graph details label model excerpts as generated summaries.
+Entity repair and carried-graph publication in [`knowledgeEnrichment.ts`](../packages/core/src/services/knowledgeEnrichment.ts) hold the project/generation/source locks through final text and live-provenance validation and vector insertion.
 
 Keyword indexing remains available without AI: every document, folder, and
 table write enqueues its search-sync job after the Git commit, and
@@ -1668,6 +1670,8 @@ page accepts `?version=<sha>` to open a comparison against a saved version.
 A task's output target is `outputDocumentId` (an existing document or one the
 task creates under `outputTitle` in `outputFolderPath`) with `outputMode`
 `replace` or `update` (migration `20261003150000_scheduled_task_output_target`);
+`20261115090000_scheduled_task_output_owner` makes non-null output IDs unique and refuses existing duplicate owners without changing their data.
+Update-mode publication uses the document ID and revision captured before generation; intervening edits produce `OUTPUT_CONFLICT`.
 the create/edit dialog is tabbed (General, Instructions, Focus, Tools, Output).
 [`packages/core/src/services/scheduledTasks.ts`](../packages/core/src/services/scheduledTasks.ts)
 is the policy owner: CRUD, pause/resume/run-now, the §5 owner/project limits,
@@ -1686,7 +1690,7 @@ assembles a run's prompt: a change digest since the task's last successful
 `projectHeads`, from
 [`services/projectActivity.ts`](../packages/core/src/services/projectActivity.ts)
 (falling back to a seven-day window), plus scope content, both cut to the
-routed model's context window. Paused tasks reject Run now and queued leases
+routed model's context window. Folder-focused content and digest reads are restricted to that resource type and subtree. Paused tasks reject Run now and queued leases
 skip with `task_paused`; resume before running manually. Only the owner receives
 instruction, source scope, external arguments, error text and context summaries;
 output-project Maintainers retain the explicit management/execution grant.
@@ -2652,8 +2656,8 @@ and tables across the project. Deleted-item discovery
 reads committed `D` (delete) records from Git history rather than a database
 projection or commit trailer, so a document or table removed through the web
 UI — which leaves no proposal or MCP audit trail — is still found. The
-signed recovery cursor resumes within a deletion commit when a page fills;
-legacy position-zero cursors still advance past the entire commit. The
+signed recovery cursor retains a commit offset in the original snapshot traversal and an offset within each deletion commit, preserving sibling branches across pages;
+legacy cursors are resolved within that snapshot. Deleted-document assets are preflighted against count, aggregate-byte and configured per-image limits. The
 `content.restore` operation, exposed as `propose_content_restore` (assistant)
 and `restore_content` (MCP direct write), restores an earlier version
 (mode=version, guarded by `expectedHeadCommitSha`) or recovers a deleted item
@@ -2883,7 +2887,7 @@ shares [`applyOperationInRepo`](../packages/core/src/services/contentOperations.
 with `acceptProposal`, uses the independent bounded
 `WEAVER_MCP_OPERATION_LOCK_POOL_MAX` pool, stores one `McpOperation` per `(userId, idempotencyKey)`
 with a request hash, replays the stored result on retry, refuses key reuse with
-a different request, and recovers an interrupted commit by its
+a different request, and recovers a locally trusted interrupted commit by its
 `Weaver-Operation-Id: mcp:…` trailer only when the durable
 `Weaver-MCP-Request-Hash` and `Weaver-MCP-Tool` trailers also match. Legacy or
 mismatched operation-only commits fail closed as idempotency-key reuse. Every

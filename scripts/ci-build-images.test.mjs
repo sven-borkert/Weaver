@@ -6,6 +6,7 @@ import {
   writeFileSync,
   chmodSync,
   existsSync,
+  rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,31 +15,35 @@ import test from "node:test";
 // Runs the CI build script against a stub `docker` that records every call.
 function runBuild(env, expectedStatus = 0) {
   const dir = mkdtempSync(join(tmpdir(), "weaver-ci-"));
-  const log = join(dir, "calls.log");
-  const stub = join(dir, "docker");
-  writeFileSync(
-    stub,
-    `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nif [ "$1" = manifest ]; then echo "no such manifest" >&2; exit 1; fi\n`,
-  );
-  chmodSync(stub, 0o755);
-  const result = spawnSync("sh", ["deploy/ci/build-images.sh"], {
-    env: {
-      PATH: process.env.PATH,
-      CI_COMMIT_BRANCH: "main",
-      CI_DEFAULT_BRANCH: "main",
-      CI_COMMIT_TAG: "",
-      IMAGE: "registry.test/weaver",
-      COMMIT_SHA: "0123456789abcdef0123456789abcdef01234567",
-      SHORT_SHA: "01234567",
-      BUILD_TIME: "2026-09-22T10:00:00Z",
-      BASE_PATH: "/weaver",
-      DOCKER: stub,
-      ...env,
-    },
-    encoding: "utf8",
-  });
-  assert.equal(result.status, expectedStatus, result.stderr);
-  return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
+  try {
+    const log = join(dir, "calls.log");
+    const stub = join(dir, "docker");
+    writeFileSync(
+      stub,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nif [ "$1" = manifest ]; then echo "no such manifest" >&2; exit 1; fi\n`,
+    );
+    chmodSync(stub, 0o755);
+    const result = spawnSync("sh", ["deploy/ci/build-images.sh"], {
+      env: {
+        PATH: process.env.PATH,
+        CI_COMMIT_BRANCH: "main",
+        CI_DEFAULT_BRANCH: "main",
+        CI_COMMIT_TAG: "",
+        IMAGE: "registry.test/weaver",
+        COMMIT_SHA: "0123456789abcdef0123456789abcdef01234567",
+        SHORT_SHA: "01234567",
+        BUILD_TIME: "2026-09-22T10:00:00Z",
+        BASE_PATH: "/weaver",
+        DOCKER: stub,
+        ...env,
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, expectedStatus, result.stderr);
+    return existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const builds = (calls) => calls.filter((c) => c.startsWith("build "));

@@ -931,6 +931,29 @@ function loadEntitiesById(
 
 const MAX_ENTITY_EMBEDDING_REPAIRS = 200;
 
+async function loadLiveEntitiesForPublication(
+  tx: Prisma.TransactionClient,
+  input: EnrichGenerationDocumentInput,
+  ids: string[],
+) {
+  const live = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT DISTINCT mention."entityId" AS "id"
+    FROM "EntityMention" mention
+    JOIN "Document" document ON document."id" = mention."documentId"
+      AND document."projectId" = mention."projectId"
+      AND document."headCommitSha" = mention."sourceCommitSha"
+    WHERE mention."projectId" = ${input.projectId}::uuid
+      AND mention."generationId" = ${input.generationId}::uuid
+      AND mention."entityId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+      AND mention."invalidatedAt" IS NULL
+  `);
+  return loadEntitiesById(
+    tx,
+    input,
+    live.map((row) => row.id),
+  );
+}
+
 /**
  * Re-embeds entities that still have live provenance but no vector. A changed
  * canonical description deletes the vector, and the enrichment that caused it
@@ -1024,12 +1047,18 @@ export async function repairMissingEntityEmbeddings(
     throw error;
   }
   return knowledgeTransaction(db, async (tx) => {
+    if (!(await lockCompatibleTarget(tx, input))) {
+      await recordUsageWithOutcome(tx, input, usageRecords, "stale_discarded");
+      return 0;
+    }
     // Skip an entity whose text changed meanwhile; the next pass repairs it.
     const current = new Map(
-      (await loadEntitiesById(tx, input, orphanIds)).map((entity) => [
-        entity.id,
-        contentHash(canonicalEntityText({ ...entity, isNew: false })),
-      ]),
+      (await loadLiveEntitiesForPublication(tx, input, orphanIds)).map(
+        (entity) => [
+          entity.id,
+          contentHash(canonicalEntityText({ ...entity, isNew: false })),
+        ],
+      ),
     );
     const fresh = embeddings.filter(
       (embedding) => current.get(embedding.entity.id) === embedding.contentHash,
@@ -1101,9 +1130,13 @@ async function embedDocumentEntities(
     throw error;
   }
   return knowledgeTransaction(db, async (tx) => {
+    if (!(await lockCompatibleTarget(tx, input))) {
+      await recordUsageWithOutcome(tx, input, usageRecords, "stale_discarded");
+      return 0;
+    }
     // An entity whose text changed meanwhile is left to the repair pass.
     const current = new Map(
-      (await loadEntitiesById(tx, input, ids)).map((entity) => [
+      (await loadLiveEntitiesForPublication(tx, input, ids)).map((entity) => [
         entity.id,
         contentHash(canonicalEntityText({ ...entity, isNew: false })),
       ]),

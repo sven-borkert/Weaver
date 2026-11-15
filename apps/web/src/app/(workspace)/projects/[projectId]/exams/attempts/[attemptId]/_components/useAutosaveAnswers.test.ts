@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { create, act, type ReactTestRenderer } from "react-test-renderer";
 import { createElement } from "react";
+import { createQueryClient } from "~/trpc/query-client";
 const mock = vi.hoisted(() => ({ save: vi.fn(), fetch: vi.fn() }));
 vi.mock("~/trpc/react", () => ({
   api: {
@@ -67,12 +68,18 @@ describe("answer saves", () => {
     ]));
 });
 
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
 let renderer: ReactTestRenderer | undefined;
+let client: ReturnType<typeof createQueryClient> | undefined;
 afterEach(async () => {
   if (renderer) await act(async () => renderer?.unmount());
   renderer = undefined;
   vi.useRealTimers();
-  vi.clearAllMocks();
+  client?.clear();
+  client = undefined;
+  vi.resetAllMocks();
 });
 async function harness() {
   let hook: ReturnType<typeof useAutosaveAnswers> | undefined;
@@ -157,6 +164,7 @@ it("stale acknowledgements reload the canonical sequence and value", async () =>
   vi.useFakeTimers();
   mock.save.mockResolvedValue({
     outcome: "stale",
+    sequence: 30,
     timing: {
       startedAt: new Date(),
       deadlineAt: new Date(),
@@ -184,4 +192,127 @@ it("stale acknowledgements reload the canonical sequence and value", async () =>
   });
   expect(get().slots.q?.sequence).toBe(30);
   expect(get().slots.q?.value.text).toBe("newer canonical");
+});
+
+const recoveryTiming = {
+  startedAt: new Date(),
+  deadlineAt: new Date(Date.now() + 60000),
+  serverNow: new Date(),
+  remainingMs: 60000,
+};
+function canonical(sequence: number, text: string) {
+  return {
+    questions: [
+      {
+        id: "q",
+        answer: { sequence, text, selectedChoiceIds: [], savedAt: new Date() },
+      },
+    ],
+  };
+}
+function cachedRecovery(load: () => Promise<ReturnType<typeof canonical>>) {
+  client = createQueryClient();
+  const queryKey = ["exam.getAttempt", { attemptId: "attempt" }];
+  client.setQueryData(queryKey, canonical(8, "old cached answer"));
+  mock.fetch.mockImplementation(
+    (_input: unknown, options?: { staleTime?: number }) =>
+      client!.fetchQuery({ queryKey, queryFn: load, ...options }),
+  );
+}
+it("recovers a lost save response from the server despite a fresh query cache", async () => {
+  vi.useFakeTimers();
+  mock.save
+    .mockRejectedValueOnce(new Error("response lost"))
+    .mockResolvedValue({
+      outcome: "stale",
+      sequence: 9,
+      timing: recoveryTiming,
+    });
+  const load = vi.fn(async () => canonical(9, "new answer"));
+  cachedRecovery(load);
+  const get = await harness();
+  await act(async () => {
+    get().setText("q", "new answer");
+    await vi.advanceTimersByTimeAsync(750);
+  });
+  expect(get().slots.q?.status).toBe("error");
+  await act(async () => {
+    await get().flush();
+  });
+  expect(get().slots.q).toMatchObject({
+    sequence: 9,
+    status: "saved",
+    value: { text: "new answer" },
+  });
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(get().pendingCount).toBe(0);
+});
+it.each(["older answer", "failed refresh"])(
+  "keeps the local answer unacknowledged after a %s",
+  async (failure) => {
+    vi.useFakeTimers();
+    mock.save.mockResolvedValue({
+      outcome: "stale",
+      sequence: 30,
+      timing: recoveryTiming,
+    });
+    cachedRecovery(async () => {
+      if (failure === "failed refresh") throw new Error("offline");
+      return canonical(29, "unverified answer");
+    });
+    const get = await harness();
+    await act(async () => {
+      get().setText("q", "local answer");
+      await vi.advanceTimersByTimeAsync(750);
+    });
+    expect(get().slots.q).toMatchObject({
+      sequence: 9,
+      status: "error",
+      value: { text: "local answer" },
+    });
+    expect(get().pendingCount).toBe(1);
+  },
+);
+it("rebases edits made during recovery above the canonical sequence before saving", async () => {
+  vi.useFakeTimers();
+  let resolveRead!: (value: ReturnType<typeof canonical>) => void;
+  cachedRecovery(
+    () =>
+      new Promise((resolve) => {
+        resolveRead = resolve;
+      }),
+  );
+  mock.save
+    .mockResolvedValueOnce({
+      outcome: "stale",
+      sequence: 30,
+      timing: recoveryTiming,
+    })
+    .mockResolvedValue({
+      outcome: "saved",
+      sequence: 31,
+      savedAt: new Date(),
+      timing: recoveryTiming,
+    });
+  const get = await harness();
+  await act(async () => {
+    get().setText("q", "submitted answer");
+    await vi.advanceTimersByTimeAsync(750);
+  });
+  await act(async () => {
+    get().setText("q", "typed during recovery");
+    resolveRead(canonical(30, "another tab"));
+  });
+  expect(get().slots.q).toMatchObject({
+    sequence: 31,
+    status: "pending",
+    value: { text: "typed during recovery" },
+  });
+  await act(async () => {
+    await get().flush();
+  });
+  expect(mock.save).toHaveBeenLastCalledWith(
+    expect.objectContaining({ sequence: 31, text: "typed during recovery" }),
+  );
+  expect(get().pendingCount).toBe(0);
 });

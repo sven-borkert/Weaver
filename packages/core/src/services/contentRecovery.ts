@@ -7,6 +7,7 @@ import {
   cursorQueryIdentity,
   decodeContentCursor,
   encodeContentCursor,
+  invalidCursorError,
 } from "./contentCursors";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 
@@ -145,23 +146,43 @@ export async function listDeletedContent(
     MAX_RECOVERY_SCAN_COMMITS,
   );
 
-  // Legacy zero-position cursors consumed the whole commit; positive offsets resume within it.
-  const fetchLimit = scanLimit + (skipAfter ? 2 : 1);
-  const entries = await repo.logChangesBefore(after ?? snapshotCommitSha, {
-    limit: fetchLimit,
+  let commitOffset = decoded?.commitOffset ?? 0;
+  if (after && decoded?.commitOffset === undefined) {
+    // Locate legacy SHA cursors in the full snapshot traversal, including sibling branches.
+    for (;;) {
+      const batch = await repo.listCommitShas(snapshotCommitSha, {
+        exclude: null,
+        maxCount: 1_000,
+        skip: commitOffset,
+      });
+      const index = batch.indexOf(after);
+      if (index !== -1) {
+        commitOffset += index;
+        break;
+      }
+      if (batch.length < 1_000) throw invalidCursorError();
+      commitOffset += batch.length;
+    }
+  }
+  const shas = await repo.listCommitShas(snapshotCommitSha, {
+    exclude: null,
+    maxCount: scanLimit + (skipAfter ? 2 : 1),
+    skip: commitOffset,
   });
-  const walk = skipAfter
-    ? entries.filter((entry) => entry.sha !== after)
-    : entries;
-  const scanned = walk.slice(0, scanLimit);
+  if (after && shas[0] !== after) throw invalidCursorError();
+  const walk = skipAfter ? shas.slice(1) : shas;
+  const entries = await repo.logChangesForShas(walk.slice(0, scanLimit));
+  const scanned = entries;
 
   const items: DeletedContentItem[] = [];
   const seen = new Set<string>();
   let lastScanned: string | undefined;
   let nextPosition = 0;
+  let lastCommitOffset = commitOffset;
   let exhaustedPage = false;
-  for (const entry of scanned) {
+  for (const [entryIndex, entry] of scanned.entries()) {
     lastScanned = entry.sha;
+    lastCommitOffset = commitOffset + (skipAfter ? 1 : 0) + entryIndex;
     const consumed = entry.sha === after ? resumePosition : 0;
     let sourceSha: string | null | undefined;
     for (const [changeIndex, change] of entry.changes.entries()) {
@@ -214,6 +235,7 @@ export async function listDeletedContent(
             ...binding,
             snapshotCommitSha,
             position: nextPosition,
+            commitOffset: lastCommitOffset,
             after: lastScanned,
           })
         : null,

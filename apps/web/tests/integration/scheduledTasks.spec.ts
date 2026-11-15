@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { Client } from "pg";
 import * as taskServices from "@weaver/core/services/scheduledTasks";
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,9 +14,12 @@ import {
   createDocument,
   deleteDocument,
   saveDocument,
+  getDocument,
+  documentContentText,
 } from "@weaver/core/services/documents";
 import { softDeleteProject } from "@weaver/core/services/projects";
 import { createFolder } from "@weaver/core/services/folders";
+import { createFolder as createTableFolder } from "@weaver/core/services/tableFolders";
 import { projectChangesSince } from "@weaver/core/services/projectActivity";
 import { assembleTaskContext } from "@weaver/core/scheduledTasks/context";
 import { resolveScopeSnapshot } from "@weaver/core/assistant/scope";
@@ -260,6 +264,113 @@ describe("assembleTaskContext", () => {
   beforeEach(async () => {
     await resetDb();
   });
+
+  it.each(["document", "table"] as const)(
+    "restricts a %s folder's content and change digest to its subtree",
+    async (resourceType) => {
+      const db = getPrisma();
+      const { owner, project } = await fixture(`folder-${resourceType}`);
+      const actor = enriched(owner);
+      for (const create of [createFolder, createTableFolder]) {
+        await create(
+          db,
+          { projectId: project.id, parentPath: [], name: "Selected" },
+          actor,
+        );
+        await create(
+          db,
+          { projectId: project.id, parentPath: ["selected"], name: "Nested" },
+          actor,
+        );
+        await create(
+          db,
+          { projectId: project.id, parentPath: [], name: "Selected sibling" },
+          actor,
+        );
+      }
+      const makeDocument = (folderPath: string[], title: string) =>
+        createDocument(
+          db,
+          {
+            projectId: project.id,
+            folderPath,
+            title,
+            content: {
+              kind: "markdown",
+              contentJson: parseDocumentBody(`${title} body`),
+            },
+          },
+          actor,
+        );
+      const makeTable = (folderPath: string[], title: string) =>
+        createTable(db, { projectId: project.id, folderPath, title }, actor);
+      const mixedPaths: string[] = [];
+      for (const [kind, create] of [
+        ["document", makeDocument],
+        ["table", makeTable],
+      ] as const) {
+        const selected = await create(["selected"], `Selected ${kind}`);
+        await create(["selected", "nested"], `Nested ${kind}`);
+        await create(["selected-sibling"], `Sibling ${kind}`);
+        const outside = await create([], `Outside ${kind}`);
+        if (kind === resourceType)
+          mixedPaths.push(
+            ...[selected.path, outside.path].map((path) =>
+              kind === "table" ? `${path}/schema.json` : path,
+            ),
+          );
+      }
+      const scope = await resolveScopeSnapshot(db, actor, {
+        kind: "folder",
+        projectId: project.id,
+        folderPath: ["selected"],
+        resourceType,
+      });
+      const context = await assembleTaskContext(db, actor, {
+        scope,
+        excludeDocumentId: null,
+        previousHeads: null,
+        inputBytes: 32_000,
+        now: new Date(),
+      });
+      for (const text of [context.content, context.digest]) {
+        expect(text).toContain(`Selected ${resourceType}`);
+        expect(text).toContain(`Nested ${resourceType}`);
+        expect(text).not.toContain("Sibling");
+        expect(text).not.toContain("Outside");
+        expect(text).not.toContain(
+          resourceType === "document" ? "Selected table" : "Selected document",
+        );
+      }
+      expect(context.summary).toMatchObject({
+        documents: resourceType === "document" ? 2 : 0,
+        tables: resourceType === "table" ? 2 : 0,
+        commits: 2,
+      });
+      await withProjectRepo(project.id, async (repo) => {
+        for (const file of mixedPaths)
+          await repo.writeFileAtomic(
+            file,
+            (await repo.readFileFromWorktree(file)) + "\n",
+          );
+        await repo.commitAll("Outside-sensitive-description", {
+          userId: owner.id,
+          name: "Test",
+          email: owner.email,
+        });
+      });
+      const mixed = await assembleTaskContext(db, actor, {
+        scope,
+        excludeDocumentId: null,
+        previousHeads: context.heads,
+        inputBytes: 32_000,
+        now: new Date(),
+      });
+      expect(mixed.digest).toContain(`Selected ${resourceType}`);
+      expect(mixed.digest).not.toContain("Outside");
+      expect(mixed.summary.commits).toBe(1);
+    },
+  );
 
   it("diffs a changed document from its own previous revision and skips one created inside the window", async () => {
     const owner = await makeUser("User", "context");
@@ -990,6 +1101,144 @@ describe("scheduled task policy", () => {
     ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
   });
 
+  it("refuses legacy duplicate output owners without changing their task rows", async () => {
+    const migration = await readFile(
+      new URL(
+        "../../../../packages/db/prisma/migrations/20261115090000_scheduled_task_output_owner/migration.sql",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const client = new Client({ connectionString: process.env.DATABASE_URL });
+    await client.connect();
+    try {
+      await client.query("SET search_path TO pg_temp");
+      await client.query(
+        'CREATE TEMPORARY TABLE "ScheduledTask" ("id" uuid NOT NULL, "outputDocumentId" uuid)',
+      );
+      await client.query(
+        'CREATE INDEX "ScheduledTask_outputDocumentId_idx" ON "ScheduledTask"("outputDocumentId")',
+      );
+      const first = randomUUID();
+      const second = randomUUID();
+      const output = randomUUID();
+      await client.query(
+        'INSERT INTO "ScheduledTask" VALUES ($1, $3), ($2, $3)',
+        [first, second, output],
+      );
+      await expect(client.query(migration)).rejects.toThrow(
+        "Cannot enforce scheduled-task output ownership",
+      );
+      await client.query("ROLLBACK");
+      const preserved = await client.query<{
+        id: string;
+        outputDocumentId: string;
+      }>('SELECT * FROM "ScheduledTask" ORDER BY "id"');
+      expect(preserved.rows).toEqual(
+        [first, second].sort().map((id) => ({ id, outputDocumentId: output })),
+      );
+      await client.query(
+        'UPDATE "ScheduledTask" SET "outputDocumentId" = NULL WHERE "id" = $1',
+        [second],
+      );
+      await client.query(migration);
+      await client.query('INSERT INTO "ScheduledTask" VALUES ($1, NULL)', [
+        randomUUID(),
+      ]);
+      await expect(
+        client.query('INSERT INTO "ScheduledTask" VALUES ($1, $2)', [
+          randomUUID(),
+          output,
+        ]),
+      ).rejects.toMatchObject({ code: "23505" });
+    } finally {
+      await client.end();
+    }
+  });
+
+  it.each(["create", "retarget"] as const)(
+    "admits one writer when different owners concurrently %s the same output",
+    async (operation) => {
+      const db = getPrisma();
+      const { owner, maintainer, project } = await fixture(
+        `output-${operation}-race`,
+      );
+      const output = await createDocument(
+        db,
+        {
+          projectId: project.id,
+          folderPath: [],
+          title: "Shared output",
+          content: {
+            kind: "markdown",
+            contentJson: parseDocumentBody("Shared report"),
+          },
+        },
+        enriched(owner),
+      );
+      const tasks =
+        operation === "retarget"
+          ? await Promise.all(
+              [owner, maintainer].map((user) =>
+                createTask(
+                  db,
+                  securityContextFor(user),
+                  definition(project.id),
+                ),
+              ),
+            )
+          : [];
+      let arrived = 0;
+      let release!: () => void;
+      const bothChecked = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const findFirst = db.scheduledTask.findFirst.bind(db.scheduledTask);
+      const barrier = vi
+        .spyOn(db.scheduledTask, "findFirst")
+        .mockImplementation((async (...args: Parameters<typeof findFirst>) => {
+          const row = await findFirst(...args);
+          if (args[0]?.where?.outputDocumentId === output.id) {
+            if (++arrived === 2) release();
+            await bothChecked;
+          }
+          return row;
+        }) as typeof findFirst);
+      let results: PromiseSettledResult<unknown>[];
+      try {
+        results = await Promise.allSettled(
+          [owner, maintainer].map((user, index) => {
+            const input = {
+              ...definition(project.id),
+              outputDocumentId: output.id,
+            };
+            return operation === "create"
+              ? createTask(db, securityContextFor(user), input)
+              : updateTask(db, securityContextFor(user), {
+                  ...input,
+                  taskId: tasks[index]!.id,
+                });
+          }),
+        );
+      } finally {
+        barrier.mockRestore();
+      }
+      expect(
+        results.filter((result) => result.status === "fulfilled"),
+      ).toHaveLength(1);
+      expect(
+        results.find((result) => result.status === "rejected"),
+      ).toMatchObject({
+        reason: { code: "CONFLICT", details: { field: "outputDocumentId" } },
+      });
+      expect(
+        await db.scheduledTask.count({
+          where: { outputDocumentId: output.id },
+        }),
+      ).toBe(1);
+    },
+  );
+
   it("admits exactly one of two concurrent creates at the owner limit", async () => {
     const { owner, project } = await fixture("owner-race");
     await seedTasks(owner.id, project.id, 19);
@@ -1598,13 +1847,13 @@ describe("scheduled task claiming and run state", () => {
 function reportModel(
   prompts: string[],
   text = "## Report\n\nNothing burned down.",
-  onGenerate?: () => void,
+  onGenerate?: () => void | Promise<void>,
   finishReason: "stop" | "length" = "stop",
 ) {
   return new MockLanguageModelV4({
     doGenerate: async (options) => {
       prompts.push(JSON.stringify(options.prompt));
-      onGenerate?.();
+      await onGenerate?.();
       return {
         content: [{ type: "text", text }],
         finishReason: { unified: finishReason, raw: undefined },
@@ -2048,6 +2297,72 @@ describe("scheduled task runner", () => {
     expect(
       await getPrisma().document.count({ where: { projectId: project.id } }),
     ).toBe(2);
+  });
+
+  it("preserves an update target edited while the model generates its report", async () => {
+    await seedTestLlmRouting({ jobs: true });
+    const db = getPrisma();
+    const { owner, project } = await fixture("update-output-race");
+    const actor = enriched(owner);
+    const output = await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Living report",
+        content: {
+          kind: "markdown",
+          contentJson: parseDocumentBody("Original report"),
+        },
+      },
+      actor,
+    );
+    const task = await createTask(db, actor, {
+      ...definition(project.id),
+      outputDocumentId: output.id,
+      outputMode: "update",
+    });
+    const prompts: string[] = [];
+    const { runId } = await queueRun(actor, task.id);
+    await executeScheduledTaskRun(
+      runnerDeps(
+        reportModel(prompts, "Model revision of original report", async () => {
+          await saveDocument(
+            db,
+            {
+              projectId: project.id,
+              documentId: output.id,
+              baseCommitSha: output.headCommitSha,
+              content: {
+                kind: "markdown",
+                contentJson: parseDocumentBody("Human edit during generation"),
+              },
+              changeSummary: "Human correction",
+            },
+            actor,
+          );
+        }),
+      ),
+      runId,
+    );
+    expect(prompts[0]).toContain("Original report");
+    expect(await latestRun(task.id)).toMatchObject({
+      status: "failed",
+      errorCode: "OUTPUT_CONFLICT",
+    });
+    const current = await getDocument(
+      db,
+      { projectId: project.id, documentId: output.id },
+      actor,
+    );
+    expect(documentContentText(current.content)).toContain(
+      "Human edit during generation",
+    );
+    expect(
+      await db.scheduledTaskRun.count({
+        where: { taskId: task.id, status: "succeeded" },
+      }),
+    ).toBe(0);
   });
 
   it("writes into a chosen document, revises it in update mode, and names a created one", async () => {

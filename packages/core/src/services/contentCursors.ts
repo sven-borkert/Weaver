@@ -22,6 +22,8 @@ const cursorSchema = z
     snapshotCommitSha: z.string().regex(/^[0-9a-f]{40}$/),
     query: z.string().regex(/^[0-9a-f]{64}$/),
     position: z.number().int().min(0),
+    /** Deleted-history commit index in the pinned snapshot's complete traversal. */
+    commitOffset: z.number().int().min(0).optional(),
     /** History commit: position zero resumes after it; positive positions resume inside it. */
     after: z
       .string()

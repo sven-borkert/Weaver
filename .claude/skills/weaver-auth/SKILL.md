@@ -179,4 +179,6 @@ Training roles are orthogonal to content ranks. `services/projectTraining.ts` ga
 
 ## Review hardening invariants
 
+Personal key issuance holds `weaver:user-credentials:<userId>` through Better Auth minting and project-restriction persistence on a dedicated lock connection, so a one-connection application pool remains usable. Revalidate the persisted session, expiration, password-change gate, active ban and live role after admission; check lock liveness after minting and before releasing the secret, and discard a minted key if admission or finalization fails.
+
 OAuth bearer resolution requires a live enabled client. JWT introspection enforces JTI revocation, exact live consent generation and refresh-family state. Consent writes use oauthConsentAdapter with the same per-user credential lock as lifecycle revocation and revalidate the persisted session. Browser RPC logging excludes credential routers and redacts all payloads.

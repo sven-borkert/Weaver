@@ -162,6 +162,10 @@ stays idempotent. The UI's `acceptReviewedDraft` accepts the revision its own
 save returned, or the one on screen when nothing needed saving, and reloads
 the draft on `CONFLICT`. Pipeline stages write the draft before `ready` and do
 not bump the revision.
+The review form keeps its displayed draft and baseline revision together. A newer
+query result blocks save/accept until explicit Review latest; that action loads
+the new baseline while preserving dirty fields. Only this action or the form's
+own successful save advances its revision; background refetches never do.
 
 `ingestionAccept.ts` is the only ingestion module that touches Git. It reuses
 `loadIngestionFile` for Editor authorization, claims `ready → accepting` under

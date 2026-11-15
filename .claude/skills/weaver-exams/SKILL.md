@@ -62,6 +62,10 @@ changes so long prompts do not create nested vertical scrolling.
 On every attempt-page visit, fetch the current attempt before initializing the
 answer form; cached answers can predate autosaves. Keep the initialized form
 mounted during later refreshes and transient errors so local edits survive.
+Stale autosave acknowledgements recover with `getAttempt.fetch` and `staleTime: 0`;
+the returned answer sequence must reach the server-reported sequence before it is
+saved locally. Preserve edits made during recovery and rebase their sequence above
+the recovered answer. A failed or older recovery remains unacknowledged.
 
 Keep completed attempts on `exams/results`, with role-specific tables and explicit
 Open/Review actions, separate from exam creation and starting attempts. Trainer

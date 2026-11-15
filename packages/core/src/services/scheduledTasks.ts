@@ -320,6 +320,38 @@ function validateDefinition(input: TaskDefinitionInput): ValidDefinition {
   };
 }
 
+function outputTargetConflict(error: unknown): never {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    error.code === "P2002"
+  ) {
+    const meta = (
+      error as {
+        meta?: {
+          target?: unknown;
+          driverAdapterError?: {
+            cause?: { constraint?: { fields?: unknown } };
+          };
+        };
+      }
+    ).meta;
+    const fields =
+      meta?.target ?? meta?.driverAdapterError?.cause?.constraint?.fields;
+    const matches = (field: unknown) =>
+      typeof field === "string" &&
+      field.replaceAll('"', "") === "outputDocumentId";
+    if (Array.isArray(fields) ? fields.some(matches) : matches(fields))
+      throw new CoreError(
+        "CONFLICT",
+        "Another task already writes this document",
+        { field: "outputDocumentId" },
+      );
+  }
+  throw error;
+}
+
 /** Validates an explicitly chosen target document and the title used when one has to be created. */
 async function resolveOutputTarget(
   db: PrismaClient,
@@ -612,7 +644,7 @@ export async function createTask(
   );
   const row = await db.$transaction(async (tx) => {
     await assertLimits(tx, actor.userId, input.outputProjectId);
-    return tx.scheduledTask.create({
+    const saved = tx.scheduledTask.create({
       data: {
         externalInputs: {
           create: externalInputs.map((value, position) => ({
@@ -640,6 +672,7 @@ export async function createTask(
       },
       include: TASK_INCLUDE,
     });
+    return saved.catch(outputTargetConflict);
   });
   taskEvent("task.created", actor, row, {
     schedule: valid.cron,
@@ -753,7 +786,7 @@ export async function updateTask(
           },
         });
     }
-    return tx.scheduledTask.update({
+    const saved = tx.scheduledTask.update({
       where: { id: input.taskId },
       data: {
         name: valid.name,
@@ -783,6 +816,7 @@ export async function updateTask(
       },
       include: TASK_INCLUDE,
     });
+    return saved.catch(outputTargetConflict);
   });
   taskEvent("task.updated", actor, row);
   const access = await resolveProjectAccess(db, row.outputProjectId, actor);

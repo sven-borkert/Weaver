@@ -2,7 +2,13 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
-import { readFileSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  readFileSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import test from "node:test";
 
 const script = readFileSync("deploy/weaver-backup", "utf8");
@@ -98,8 +104,9 @@ test("backup unit allows for the service drain", () => {
 });
 
 for (const stubborn of [false, true])
-  test(`backup handles restarting writers (stop fails: ${stubborn})`, () => {
+  test(`backup handles restarting writers (stop fails: ${stubborn})`, (t) => {
     const root = mkdtempSync(join(tmpdir(), "weaver-backup-test-"));
+    t.after(() => rmSync(root, { recursive: true, force: true }));
     mkdirSync(join(root, "data"));
     const bin = join(root, "bin");
     mkdirSync(bin);

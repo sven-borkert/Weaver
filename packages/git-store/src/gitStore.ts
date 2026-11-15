@@ -1569,7 +1569,7 @@ function makeRepo(dir: string) {
     },
     async listCommitShas(
       commitish: string,
-      options: { exclude: string | null; maxCount: number },
+      options: { exclude: string | null; maxCount: number; skip?: number },
     ) {
       assertCommitish(commitish);
       if (options.exclude !== null) assertCommitish(options.exclude);
@@ -1578,6 +1578,7 @@ function makeRepo(dir: string) {
           "rev-list",
           "--max-count",
           String(options.maxCount),
+          ...(options.skip === undefined ? [] : [`--skip=${options.skip}`]),
           commitish,
           ...(options.exclude === null ? [] : ["--not", options.exclude]),
           "--",

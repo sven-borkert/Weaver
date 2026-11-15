@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { simpleGit } from "simple-git";
 import {
   addMembership,
   getPrisma,
@@ -27,8 +28,12 @@ import * as folders from "@weaver/core/services/folders";
 import * as tableFolders from "@weaver/core/services/tableFolders";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 import { withProjectRepo } from "@weaver/core/services/projectRepo";
-import { openProjectRepo } from "@weaver/git-store";
-import { applyMcpOperation } from "@weaver/core/services/mcpOperations";
+import { openProjectRepo, repoDir } from "@weaver/git-store";
+import {
+  applyMcpOperation,
+  mcpOperationId,
+  requestHash,
+} from "@weaver/core/services/mcpOperations";
 import type { ContentOperation } from "@weaver/core/services/contentOperations";
 import { storeDocumentImage } from "@weaver/core/services/documentImages";
 import { listDeletedContent } from "@weaver/core/services/contentRecovery";
@@ -315,6 +320,61 @@ describe("lock-free item writers", () => {
       await f.db.document.findUnique({ where: { id: doc.id } }),
     ).toBeNull();
     expect(await trailerCommits(f.project.id, OPERATION_ID)).toHaveLength(1);
+  });
+
+  it("refuses a stale document path before deleting another identity or its assets", async () => {
+    const f = await ownerProject("doc-delete-stale");
+    const create = (title: string) =>
+      createDocument(
+        f.db,
+        {
+          projectId: f.project.id,
+          title,
+          folderPath: [],
+          content: {
+            kind: "markdown",
+            contentJson: parseDocumentBody("body\n"),
+          },
+          assets: [{ name: "image.png", bytes: PNG_1X1 }],
+        },
+        f.actor,
+      );
+    const displaced = await create("Guide");
+    const replacement = await create("Remote");
+    const snapshot = await withProjectRepo(f.project.id, async (repo) => {
+      await repo.mv(displaced.path, "guide-2.md");
+      await repo.mv("guide.assets", "guide-2.assets");
+      await repo.mv(replacement.path, displaced.path);
+      await repo.mv("remote.assets", "guide.assets");
+      return repo.commitAll("pull: relocate colliding documents", {
+        ...AUTHOR,
+        userId: f.actor.userId,
+      });
+    });
+
+    await expect(
+      deleteDocument(
+        f.db,
+        { projectId: f.project.id, documentId: displaced.id },
+        f.actor,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    const repo = (await openProjectRepo(f.project.id))!;
+    expect(await repo.resolveHead()).toBe(snapshot);
+    expect(await repo.showFileAt(snapshot, "guide.md")).toContain(
+      replacement.id,
+    );
+    expect(await repo.showFileAt(snapshot, "guide-2.md")).toContain(
+      displaced.id,
+    );
+    for (const asset of ["guide.assets/image.png", "guide-2.assets/image.png"])
+      expect(
+        (await repo.readCommittedBlobAt(snapshot, asset, 1024))?.bytes,
+      ).toEqual(PNG_1X1);
+    expect(
+      await f.db.document.count({ where: { projectId: f.project.id } }),
+    ).toBe(2);
   });
 
   it("moves a table inside a caller-held lock and records the trailer", async () => {
@@ -982,6 +1042,74 @@ describe("content.lifecycle operation", () => {
 });
 
 describe("lifecycle recovery after a lost acknowledgement", () => {
+  it("refuses imported trailers claiming a folder operation that never happened", async () => {
+    const f = await ownerProject("forged-folder-create");
+    const listing = await listContentFolders(
+      f.db,
+      { projectId: f.project.id },
+      f.actor,
+    );
+    const request = {
+      idempotencyKey: "forged-folder-create-1",
+      toolName: "apply_content_lifecycle",
+      summary: "Add a folder",
+      operation: {
+        kind: "content.lifecycle",
+        projectId: f.project.id,
+        action: "folder_create",
+        resourceType: "document",
+        baseProjectCommitSha: listing.baseProjectCommitSha,
+        parentPath: [],
+        name: "Never created",
+      } as ContentOperation,
+    };
+    const operationId = mcpOperationId(f.actor.userId, request.idempotencyKey);
+    const hash = requestHash({
+      toolName: request.toolName,
+      operation: request.operation,
+      summary: request.summary,
+    });
+    const imported = await withProjectRepo(f.project.id, async (repo) => {
+      await repo.writeFileAtomic("unrelated.txt", "unrelated imported content");
+      const git = simpleGit(repoDir(f.project.id));
+      await git.raw(["add", "--", "unrelated.txt"]);
+      await git.raw([
+        "-c",
+        "user.name=External",
+        "-c",
+        "user.email=external@example.test",
+        "commit",
+        "-m",
+        `Imported change\n\nWeaver-Operation-Id: ${operationId}\nWeaver-MCP-Request-Hash: ${hash}\nWeaver-MCP-Tool: ${request.toolName}`,
+      ]);
+      return repo.resolveHead();
+    });
+    await expect(
+      applyMcpOperation(f.db, f.actor, request),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const repo = (await openProjectRepo(f.project.id))!;
+    const [entry] = await repo.logForPath(".", {
+      skip: 0,
+      limit: 1,
+      operationId,
+    });
+    expect(entry).toMatchObject({
+      sha: imported,
+      trustedAuthor: false,
+      mcpRequestHash: hash,
+      mcpToolName: request.toolName,
+    });
+    expect(await repo.resolveHead()).toBe(imported);
+    expect(await repo.listTrackedFiles(imported)).not.toContain(
+      "never-created/.gitkeep",
+    );
+    expect(
+      await f.db.mcpOperation.count({
+        where: { userId: f.actor.userId },
+      }),
+    ).toBe(0);
+  });
+
   it("replays its own folder create instead of colliding with it", async () => {
     const f = await ownerProject("ack-folder-create");
     const listing = await listContentFolders(

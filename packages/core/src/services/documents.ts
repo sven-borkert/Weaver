@@ -2626,6 +2626,22 @@ export async function deleteDocumentInRepo(
   audit: DocumentWriteAudit = {},
 ): Promise<DocumentDeleteResult> {
   const row = await requireDocument(db, input.projectId, input.documentId);
+  const snapshot = await repo.readCommittedFileAt(
+    await repo.resolveHead(),
+    row.path,
+  );
+  if (!snapshot) throw new CoreError("NOT_FOUND");
+  let parsed: ReturnType<typeof parseDocumentFile>;
+  try {
+    parsed = parseDocumentFile(snapshot.content, documentKindOfPath(row.path));
+  } catch {
+    throw new CoreError("PRECONDITION_FAILED", "document content is malformed");
+  }
+  if (parsed.meta.id !== row.id)
+    throw new CoreError(
+      "CONFLICT",
+      "The document path changed. Rebuild the document index before deleting.",
+    );
   const assetsDir = assetsDirForDocPath(row.path);
   if (await repo.fileExistsInWorktree(assetsDir)) await repo.rmDir(assetsDir);
   await repo.rm(row.path);

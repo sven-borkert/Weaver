@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { simpleGit } from "simple-git";
 import {
   addMembership,
   getPrisma,
@@ -34,9 +35,10 @@ import {
   requestHash,
 } from "@weaver/core/services/mcpOperations";
 import { storeDocumentImage } from "@weaver/core/services/documentImages";
+import { applyOperationInRepo } from "@weaver/core/services/contentOperations";
 import * as toolContract from "@weaver/assistant-tools/contract";
 import * as projectRepo from "@weaver/core/services/projectRepo";
-import { openProjectRepo } from "@weaver/git-store";
+import { openProjectRepo, repoDir } from "@weaver/git-store";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 import { createProposal } from "@weaver/core/services/assistantProposals";
 import { createConversation } from "@weaver/core/services/assistantConversations";
@@ -469,6 +471,73 @@ describe("listDeletedContent", () => {
       2,
     );
   });
+
+  it.each([
+    { limit: 1, scanLimit: 200 },
+    { limit: 50, scanLimit: 1 },
+  ])(
+    "keeps sibling deletion history across merged pages ($limit/$scanLimit)",
+    async ({ limit, scanLimit }) => {
+      const ctx = await ownerProject(`merged-${limit}`);
+      const create = (title: string) =>
+        createDocument(
+          ctx.db,
+          {
+            projectId: ctx.project.id,
+            folderPath: [],
+            title,
+            content: {
+              kind: "markdown",
+              contentJson: parseDocumentBody("body\n"),
+            },
+          },
+          ctx.actor,
+        );
+      const leftDocument = await create("Left");
+      const git = simpleGit(repoDir(ctx.project.id));
+      await git.raw(["branch", "recovery-side", leftDocument.headCommitSha]);
+      const left = await deleteTogether(ctx, [leftDocument]);
+      await git.raw(["checkout", "recovery-side"]);
+      const rightDocument = await create("Right");
+      const right = await deleteTogether(ctx, [rightDocument]);
+      await git.raw(["checkout", "--detach", left]);
+      await git.raw([
+        "-c",
+        "user.name=Recovery test",
+        "-c",
+        "user.email=recovery@example.test",
+        "merge",
+        "--no-ff",
+        "-m",
+        "Merge recovery branches",
+        right,
+      ]);
+
+      const found: string[] = [];
+      let cursor: string | undefined;
+      let finished = false;
+      for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
+        const page = await listDeletedContent(
+          ctx.db,
+          {
+            projectId: ctx.project.id,
+            limit,
+            scanLimit,
+            cursor,
+          },
+          ctx.actor,
+        );
+        found.push(...page.items.map((item) => item.id));
+        if (!page.hasMore) {
+          finished = true;
+          break;
+        }
+        cursor = page.nextCursor!;
+      }
+      expect(finished).toBe(true);
+      expect(found.sort()).toEqual([leftDocument.id, rightDocument.id].sort());
+    },
+  );
 
   it("keeps legacy zero-position cursors after their completed commit", async () => {
     const ctx = await ownerProject("legacy-cursor");
@@ -1065,6 +1134,92 @@ describe("content.restore", () => {
     expect(second.resourceId).toBe(doc.id);
     expect(await repo!.resolveHead()).toBe(headAfterFirst);
   });
+
+  it.each([
+    {
+      budget: "count",
+      count: 101,
+      size: PNG_1X1.length,
+      maxBytes: 50 * 1024 ** 2,
+    },
+    {
+      budget: "aggregate",
+      count: 2,
+      size: 33 * 1024 ** 2,
+      maxBytes: 50 * 1024 ** 2,
+    },
+    { budget: "per image", count: 1, size: 2 * 1024 ** 2, maxBytes: 1024 ** 2 },
+  ])(
+    "preflights the deleted-document $budget budget before reading any assets",
+    async ({ budget, count, size, maxBytes }) => {
+      const ctx = await ownerProject(`asset-budget-${budget}`);
+      vi.stubEnv("WEAVER_DOCUMENT_IMAGE_MAX_BYTES", String(maxBytes));
+      const doc = await createDocument(
+        ctx.db,
+        {
+          projectId: ctx.project.id,
+          folderPath: [],
+          title: "Gone",
+          content: {
+            kind: "markdown",
+            contentJson: parseDocumentBody("body\n"),
+          },
+        },
+        ctx.actor,
+      );
+      const sourceSha = await projectRepo.withProjectRepo(
+        ctx.project.id,
+        async (repo) => {
+          for (let index = 0; index < count; index++)
+            await repo.writeBinaryFileAtomic(
+              `gone.assets/image-${index}.png`,
+              PNG_1X1,
+            );
+          return repo.commitAll("add historical assets", {
+            ...AUTHOR,
+            userId: ctx.actor.userId,
+          });
+        },
+      );
+      await deleteDocument(
+        ctx.db,
+        { projectId: ctx.project.id, documentId: doc.id },
+        ctx.actor,
+      );
+      await projectRepo.withProjectRepo(ctx.project.id, async (repo) => {
+        const deletedAtSha = await repo.resolveHead();
+        const originalSize = repo.blobSizeAt.bind(repo);
+        vi.spyOn(repo, "blobSizeAt").mockImplementation((sha, file) =>
+          file.startsWith("gone.assets/")
+            ? Promise.resolve(size)
+            : originalSize(sha, file),
+        );
+        const read = vi.spyOn(repo, "readCommittedBlobAt");
+        await expect(
+          applyOperationInRepo(
+            ctx.db,
+            repo,
+            {
+              kind: "content.restore",
+              projectId: ctx.project.id,
+              resourceType: "document",
+              resourceId: doc.id,
+              mode: "deleted",
+              sourceSha,
+              deletedAtSha,
+            },
+            ctx.actor,
+            { table: null, summary: "Recover", operationId: "asset-budget" },
+          ),
+        ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+        expect(read).not.toHaveBeenCalled();
+        expect(await repo.resolveHead()).toBe(deletedAtSha);
+        expect(
+          await ctx.db.document.findUnique({ where: { id: doc.id } }),
+        ).toBeNull();
+      });
+    },
+  );
 
   it("recovers its own deleted-document recovery after a lost acknowledgement, without a second copy of the id", async () => {
     const { db, project, actor } = await ownerProject("recover-deleted-ack");

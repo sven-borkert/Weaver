@@ -1,14 +1,163 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CoreError } from "../errors";
+import type { PrismaClient } from "@weaver/db/client";
+import type { GitLogEntry, ProjectRepoWriter } from "@weaver/git-store";
+import { composeDocumentFile } from "../documents/frontmatter";
+import type { EnrichedActor } from "./documents";
 import {
   assertLifecycleShape,
   contentOperationSchema,
   type ContentOperation,
+  matchesRecoveryIdentity,
+  recoverPriorOperation,
+  applyOperationInRepo,
 } from "./contentOperations";
 
 const PROJECT = "11111111-1111-4111-8111-111111111111";
 const RESOURCE = "22222222-2222-4222-8222-222222222222";
 const SHA = "a".repeat(40);
+
+describe("deleted-document asset budgets", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each([
+    { budget: "count", count: 101, size: 1_024 },
+    { budget: "aggregate", count: 2, size: 33 * 1024 ** 2 },
+    { budget: "per-image", count: 1, size: 51 * 1024 ** 2 },
+  ])(
+    "rejects the $budget limit before buffering historical assets",
+    async ({ count, size }) => {
+      vi.stubEnv("DATABASE_URL", "postgresql://localhost/weaver_test");
+      vi.stubEnv("AUTH_SECRET", "test-only-asset-budget-secret-value");
+      vi.stubEnv("WEAVER_DATA_DIR", "./data-test");
+      vi.stubEnv("WEAVER_DOCUMENT_IMAGE_MAX_BYTES", String(50 * 1024 ** 2));
+      const sourceSha = "b".repeat(40);
+      const files = Array.from(
+        { length: count },
+        (_, index) => `gone.assets/${index}.png`,
+      );
+      const stored = composeDocumentFile(
+        {
+          id: RESOURCE,
+          title: "Gone",
+          created: "2026-11-14T00:00:00.000Z",
+          updated: "2026-11-14T00:00:00.000Z",
+          createdBy: null,
+          updatedBy: null,
+          review: {
+            reviewers: [],
+            everyMonths: 12,
+            since: "2026-11-14T00:00:00.000Z",
+            lastReviewed: null,
+            reviewedBy: null,
+          },
+        },
+        "body\n",
+        "markdown",
+      );
+      const db = {
+        document: { findFirst: async () => null, findUnique: async () => null },
+        dataTable: { findFirst: async () => null },
+      } as unknown as PrismaClient;
+      let buffered = 0;
+      const repo = {
+        resolveHead: async () => SHA,
+        listTrackedFiles: async (sha: string) =>
+          sha === sourceSha ? files : [],
+        logChangesBefore: async () => [
+          { sha: SHA, changes: [{ status: "D", path: "gone.md" }] },
+        ],
+        showFileAt: async () => stored,
+        blobSizeAt: async () => size,
+        readCommittedBlobAt: async () => {
+          buffered++;
+          throw new Error("buffered an over-budget historical asset");
+        },
+      } as unknown as ProjectRepoWriter;
+      await expect(
+        applyOperationInRepo(
+          db,
+          repo,
+          {
+            kind: "content.restore",
+            projectId: PROJECT,
+            resourceType: "document",
+            resourceId: RESOURCE,
+            mode: "deleted",
+            sourceSha,
+            deletedAtSha: SHA,
+          },
+          {} as EnrichedActor,
+          { table: null, summary: "Recover", operationId: "asset-budget" },
+        ),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(buffered).toBe(0);
+    },
+  );
+});
+
+describe("MCP recovery trust", () => {
+  const identity = {
+    requestHash: "b".repeat(64),
+    toolName: "apply_content_lifecycle",
+  };
+  const entry: GitLogEntry = {
+    sha: SHA,
+    pathAtSha: ".",
+    authorName: "Imported author",
+    authorEmail: "imported@example.test",
+    userId: null,
+    operationId: "mcp:operation",
+    mcpRequestHash: identity.requestHash,
+    mcpToolName: identity.toolName,
+    runId: null,
+    date: new Date("2026-11-14T00:00:00Z"),
+    message: "imported matching trailers",
+  };
+
+  it.each([false, undefined])(
+    "rejects matching trailers without local trust (%s)",
+    (trustedAuthor) => {
+      expect(
+        matchesRecoveryIdentity({ ...entry, trustedAuthor }, identity),
+      ).toBe(false);
+    },
+  );
+
+  it("accepts a locally trusted commit only for the matching request and tool", () => {
+    const trusted = { ...entry, trustedAuthor: true };
+    expect(matchesRecoveryIdentity(trusted, identity)).toBe(true);
+    expect(
+      matchesRecoveryIdentity(trusted, {
+        ...identity,
+        requestHash: "c".repeat(64),
+      }),
+    ).toBe(false);
+    expect(
+      matchesRecoveryIdentity(trusted, { ...identity, toolName: "other" }),
+    ).toBe(false);
+  });
+
+  it("cannot recover a fabricated folder success from imported history", async () => {
+    const repo = {
+      logForPath: async () => [{ ...entry, trustedAuthor: false }],
+    } as unknown as ProjectRepoWriter;
+    await expect(
+      recoverPriorOperation(
+        {} as PrismaClient,
+        repo,
+        lifecycle({
+          action: "folder_create",
+          parentPath: [],
+          name: "Never created",
+          baseProjectCommitSha: SHA,
+        }),
+        entry.operationId!,
+        identity,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+});
 
 const lifecycle = (
   extra: Partial<Extract<ContentOperation, { kind: "content.lifecycle" }>>,

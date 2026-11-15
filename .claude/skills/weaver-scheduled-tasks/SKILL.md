@@ -294,9 +294,22 @@ next run; omitted = keep the current target), `outputTitle` (title of a created
 document, the task name when empty) and `outputMode` (`replace`, or `update`,
 which puts the target's current Markdown into the prompt as "Current document",
 capped at a quarter of the input budget and charged against the scope content).
-A document can be the target of one task only (`CONFLICT` on
-`outputDocumentId`). A deleted target is recreated in `outputFolderPath` under
-`outputTitle`. Summaries carry `ownerEmail`; lists show it as "Runs as".
+A document can be the target of one task only: the nullable unique
+`ScheduledTask.outputDocumentId` index arbitrates concurrent create/retarget
+requests, which map its collision to `CONFLICT` on `outputDocumentId`.
+Migration `20261115090000_scheduled_task_output_owner` refuses existing duplicate
+targets without changing tasks or history; retarget extra tasks before retrying.
+Update runs retain the target identity and revision used in their prompt and
+publish against that revision. A human edit during generation fails with
+`OUTPUT_CONFLICT`. A target already absent when the run reads its prompt is
+recreated in `outputFolderPath` under `outputTitle`. Summaries carry `ownerEmail`;
+lists show it as "Runs as".
+
+Folder focus restricts both content queries and change-digest resources to its
+subtree and document/table type before diff collection or budgeting. Commits
+without matching resources are omitted; mixed commits use a neutral description
+instead of a message or summary that could describe excluded resources. Keep the
+existing bounded list pages and per-project budget shares.
 
 ## Review hardening
 

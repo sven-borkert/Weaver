@@ -87,43 +87,64 @@ export async function loadClassifyCandidates(
   projectId: string,
   limit: number = CLASSIFY_MAX_PAGES,
 ): Promise<ClassifyCandidate[]> {
-  const rows = await db.document.findMany({
-    where: {
+  const candidates: ClassifyCandidate[] = [];
+  let after: { path: string; id: string } | undefined;
+  while (candidates.length < limit) {
+    const rows = await db.document.findMany({
+      where: {
+        projectId,
+        kind: "markdown",
+        wikiSourceItemId: null,
+        reviewExempt: false,
+        OR: [{ wikiType: null }, { wikiSummary: null }],
+        ...(after
+          ? {
+              AND: [
+                {
+                  OR: [
+                    { path: { gt: after.path } },
+                    { path: after.path, id: { gt: after.id } },
+                  ],
+                },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ path: "asc" }, { id: "asc" }],
+      take: limit + 20,
+      select: {
+        id: true,
+        path: true,
+        title: true,
+        excerpt: true,
+        headCommitSha: true,
+        wikiType: true,
+        wikiSummary: true,
+      },
+    });
+    if (!rows.length) break;
+    const blocked = await protectedDocumentIds(
+      db,
       projectId,
-      kind: "markdown",
-      wikiSourceItemId: null,
-      reviewExempt: false,
-      OR: [{ wikiType: null }, { wikiSummary: null }],
-    },
-    orderBy: [{ path: "asc" }, { id: "asc" }],
-    take: limit + 20,
-    select: {
-      id: true,
-      path: true,
-      title: true,
-      excerpt: true,
-      headCommitSha: true,
-      wikiType: true,
-      wikiSummary: true,
-    },
-  });
-  const blocked = await protectedDocumentIds(
-    db,
-    projectId,
-    rows.map((row) => row.id),
-  );
-  return rows
-    .filter((row) => !blocked.has(row.id))
-    .slice(0, limit)
-    .map((row) => ({
-      documentId: row.id,
-      path: row.path,
-      title: row.title,
-      excerpt: row.excerpt,
-      headCommitSha: row.headCommitSha,
-      hasType: row.wikiType !== null,
-      hasSummary: row.wikiSummary !== null,
-    }));
+      rows.map((row) => row.id),
+    );
+    for (const row of rows) {
+      if (blocked.has(row.id)) continue;
+      candidates.push({
+        documentId: row.id,
+        path: row.path,
+        title: row.title,
+        excerpt: row.excerpt,
+        headCommitSha: row.headCommitSha,
+        hasType: row.wikiType !== null,
+        hasSummary: row.wikiSummary !== null,
+      });
+      if (candidates.length === limit) break;
+    }
+    after = rows.at(-1)!;
+    if (rows.length < limit + 20) break;
+  }
+  return candidates;
 }
 
 /** Owner only. The run waits in `preparing` for its preview, then for the Owner's decision. */
@@ -573,6 +594,8 @@ export async function reapClassifyRuns(
         ["preparing"],
         {
           status: "failed",
+          leaseToken: run.leaseToken!,
+          leaseExpiresAtOrBefore: now,
           errorCode: "LEASE_LOST",
           errorMessage: "the worker previewing this plan stopped responding",
           note: "The classification ended.",
@@ -615,6 +638,8 @@ export async function reapClassifyRuns(
       {
         status: "cancelled",
         stopReason: "plan_expired",
+        leaseToken: null,
+        planExpiredAtOrBefore: expiry,
         note: "The classification plan was not accepted in time.",
       },
       now,

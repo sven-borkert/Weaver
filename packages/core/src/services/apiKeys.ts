@@ -1,4 +1,6 @@
 import type { ApiKeyIssuer } from "@weaver/auth";
+import { parseServerEnv } from "@weaver/config/server";
+import { Client } from "pg";
 import { CoreError } from "@weaver/core/errors";
 import {
   API_KEY_CAPABILITIES,
@@ -8,7 +10,7 @@ import {
   type ApiKeyPermissions,
   type Capability,
 } from "@weaver/core/security/context";
-import type { ApiKey, Prisma, PrismaClient } from "@weaver/db/client";
+import type { Prisma, ApiKey, PrismaClient } from "@weaver/db/client";
 import { notDeleted, type ProjectActor } from "./projectAccess";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -204,6 +206,96 @@ export async function createApiKey(
   issuer: ApiKeyIssuer,
 ): Promise<{ key: ApiKeySummary; secret: string }> {
   assertSessionActor(actor);
+  const lock = new Client({
+    connectionString: parseServerEnv(process.env).DATABASE_URL,
+    connectionTimeoutMillis: 15_000,
+    statement_timeout: 15_000,
+    query_timeout: 16_000,
+    application_name: "weaver-api-key-issuance",
+  });
+  let lost = false;
+  lock.on("error", () => {
+    lost = true;
+  });
+  lock.on("end", () => {
+    lost = true;
+  });
+  const assertLock = async () => {
+    if (!lost) await lock.query("SELECT 1");
+    if (lost)
+      throw new CoreError(
+        "CONFLICT",
+        "Credential issuance lost its lock. Retry the request.",
+      );
+  };
+  let issuedId: string | undefined;
+  try {
+    await lock.connect();
+    await lock.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
+      `weaver:user-credentials:${actor.userId}`,
+    ]);
+    const session = await db.session.findFirst({
+      where: {
+        id: actor.credentialId,
+        userId: actor.userId,
+        expiresAt: { gt: new Date() },
+      },
+      select: {
+        user: {
+          select: {
+            role: true,
+            banned: true,
+            banExpires: true,
+            mustChangePassword: true,
+          },
+        },
+      },
+    });
+    if (
+      !session ||
+      session.user.mustChangePassword ||
+      (session.user.banned &&
+        (!session.user.banExpires || session.user.banExpires > new Date()))
+    )
+      throw new CoreError("FORBIDDEN", "Session was revoked. Sign in again.");
+    const result = await issueApiKey(
+      db,
+      {
+        ...actor,
+        globalRole: session.user.role === "Admin" ? "Admin" : "User",
+      },
+      input,
+      issuer,
+      async (id) => {
+        issuedId = id;
+        await assertLock();
+      },
+    );
+    await assertLock();
+    return result;
+  } catch (error) {
+    if (issuedId) await discardIssuedKey(db, issuedId);
+    throw error;
+  } finally {
+    await lock.end().catch(() => undefined);
+  }
+}
+
+async function discardIssuedKey(db: PrismaClient, id: string): Promise<void> {
+  await db.apiKey.deleteMany({ where: { id } }).catch(async () => {
+    await db.apiKey
+      .updateMany({ where: { id }, data: { enabled: false } })
+      .catch(() => undefined);
+  });
+}
+
+async function issueApiKey(
+  db: PrismaClient,
+  actor: ProjectActor,
+  input: CreateApiKeyInput,
+  issuer: ApiKeyIssuer,
+  afterIssue: (id: string) => Promise<void>,
+): Promise<{ key: ApiKeySummary; secret: string }> {
   const { name, projectIds } = await validateKeyPolicy(db, actor, input);
   if (
     input.expiresInDays !== null &&
@@ -229,24 +321,11 @@ export async function createApiKey(
         : { maxRequests: input.rateLimitPerMinute, windowMs: MINUTE_MS },
   });
 
-  try {
-    if (projectIds.length > 0) {
-      await db.apiKeyProject.createMany({
-        data: projectIds.map((projectId) => ({
-          apiKeyId: issued.id,
-          projectId,
-        })),
-      });
-    }
-  } catch (error) {
-    // Never leave an unrestricted key behind when the restriction failed to persist.
-    await db.apiKey.delete({ where: { id: issued.id } }).catch(async () => {
-      // Delete itself failed: fail closed by disabling the stranded key instead of leaving it usable and unrestricted.
-      await db.apiKey
-        .update({ where: { id: issued.id }, data: { enabled: false } })
-        .catch(() => undefined);
+  await afterIssue(issued.id);
+  if (projectIds.length > 0) {
+    await db.apiKeyProject.createMany({
+      data: projectIds.map((projectId) => ({ apiKeyId: issued.id, projectId })),
     });
-    throw error;
   }
 
   const row = await db.apiKey.findUniqueOrThrow({

@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WikiInputView } from "@weaver/core/services/wikiInputs";
 import { WikiInputScreen } from "./WikiInputScreen";
+
+vi.mock("next/link", () => ({
+  default: ({
+    href,
+    children,
+  }: {
+    href: string;
+    children: React.ReactNode;
+  }) => <a href={href}>{children}</a>,
+}));
 
 type MockQuery = { data: unknown; error: unknown };
 type Mocked = {
@@ -9,6 +20,12 @@ type Mocked = {
   list: MockQuery;
   mutation: () => { useMutation: () => Record<string, unknown> };
 };
+type NoteInput = { projectId: string; text: string };
+const noteMutation = vi.hoisted(() => ({
+  submit: vi.fn(),
+  success: undefined as
+    ((result: unknown, input: NoteInput) => Promise<void>) | undefined,
+}));
 
 const mocked = vi.hoisted((): Mocked => ({
   project: { data: undefined, error: null },
@@ -31,7 +48,14 @@ vi.mock("~/trpc/react", () => ({
       cancelRun: mocked.mutation(),
       input: {
         list: { useQuery: () => mocked.list },
-        addText: mocked.mutation(),
+        addText: {
+          useMutation: (options: {
+            onSuccess: typeof noteMutation.success;
+          }) => {
+            noteMutation.success = options.onSuccess;
+            return { mutate: noteMutation.submit, isPending: false };
+          },
+        },
         addFiles: mocked.mutation(),
         process: mocked.mutation(),
         retry: mocked.mutation(),
@@ -79,6 +103,16 @@ const listData = (over: Record<string, unknown> = {}) => ({
 const render = () =>
   renderToStaticMarkup(<WikiInputScreen projectId="p" maxBytes={1024} />);
 
+(
+  globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+let renderer: ReactTestRenderer | undefined;
+afterEach(async () => {
+  if (renderer) await act(async () => renderer?.unmount());
+  renderer = undefined;
+  noteMutation.submit.mockClear();
+});
+
 describe("WikiInputScreen", () => {
   beforeEach(() => {
     mocked.project = {
@@ -87,6 +121,41 @@ describe("WikiInputScreen", () => {
     };
     mocked.list = { data: listData(), error: null };
   });
+
+  it.each([false, true])(
+    "clears only the submitted note (edited while pending: %s)",
+    async (edited) => {
+      await act(async () => {
+        renderer = create(<WikiInputScreen projectId="p" maxBytes={1024} />);
+      });
+      const textarea = () => ({
+        props: renderer!.root.findByType("textarea").props as {
+          value: string;
+          onChange: (event: { target: { value: string } }) => void;
+        },
+      });
+      await act(async () =>
+        textarea().props.onChange({ target: { value: "Note A" } }),
+      );
+      const add = renderer!.root
+        .findAllByType("button")
+        .find((button) => button.children.includes("Add to queue"))!;
+      const onClick = add.props.onClick as () => void;
+      await act(async () => onClick());
+      expect(noteMutation.submit).toHaveBeenCalledWith({
+        projectId: "p",
+        text: "Note A",
+      });
+      if (edited)
+        await act(async () =>
+          textarea().props.onChange({ target: { value: "Note B" } }),
+        );
+      await act(async () =>
+        noteMutation.success!(undefined, { projectId: "p", text: "Note A" }),
+      );
+      expect(textarea().props.value).toBe(edited ? "Note B" : "");
+    },
+  );
 
   it("warns about history, remotes and the provider, and offers the note form", () => {
     const html = render();

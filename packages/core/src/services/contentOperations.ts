@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { JSONContent } from "@tiptap/core";
 import { z } from "zod";
 import type { PrismaClient } from "@weaver/db/client";
+import { parseServerEnv } from "@weaver/config/server";
 import type {
   GitLogEntry,
   ProjectRepoReader,
@@ -23,7 +24,11 @@ import {
 } from "../documents/kinds";
 import { assetsDirForDocPath, hasAssetsSegment } from "../documents/images";
 import { withoutTitleHeading } from "../documents/importMarkdown";
-import { MAX_MARKDOWN_CHARS } from "../documents/limits";
+import {
+  MAX_MARKDOWN_CHARS,
+  MAX_IMPORTED_IMAGES,
+  MAX_IMPORT_IMAGE_BYTES,
+} from "../documents/limits";
 import {
   wikiPagePropertiesInputSchema,
   type WikiPageProperties,
@@ -68,7 +73,6 @@ import {
   type EnrichedActor,
 } from "./documents";
 import { hasNoUser, type ContentWriteActor } from "./contentAuthor";
-import { MAX_SERVED_BLOB_BYTES } from "./documentImages";
 import { defaultReviewForFolderInRepo } from "./folderReview";
 import { resolveImageReferences } from "./documentImageImports";
 import {
@@ -647,7 +651,7 @@ export function applyTableRowChanges(
 
 export type TableAtHead = Awaited<ReturnType<typeof getTableInRepo>>;
 
-/** Who a recovered commit must belong to; a wiki identity also needs the ledger's trust. */
+/** Recovery requires locally trusted commits matching the recorded request identity. */
 export type RecoveryIdentity =
   | { requestHash: string; toolName: string }
   | { wikiAgentId: string; wikiRequestHash: string }
@@ -667,7 +671,8 @@ export function matchesRecoveryIdentity(
     ? entry.trustedAuthor === true &&
         entry.wikiAgentId === identity.wikiAgentId &&
         entry.wikiRequestHash === identity.wikiRequestHash
-    : entry.mcpRequestHash === identity.requestHash &&
+    : entry.trustedAuthor === true &&
+        entry.mcpRequestHash === identity.requestHash &&
         entry.mcpToolName === identity.toolName;
 }
 
@@ -1375,7 +1380,7 @@ async function deletedDocumentAssets(
   oldDocPath: string,
 ): Promise<DocumentAssetFile[]> {
   const from = assetsDirForDocPath(oldDocPath);
-  const assets: DocumentAssetFile[] = [];
+  const files: Array<{ file: string; name: string }> = [];
   for (const file of await repo.listTrackedFiles(operation.sourceSha)) {
     if (!file.startsWith(`${from}/`)) continue;
     const name = file.slice(from.length + 1);
@@ -1387,17 +1392,39 @@ async function deletedDocumentAssets(
         )
     )
       continue;
+    files.push({ file, name });
+    if (files.length > MAX_IMPORTED_IMAGES)
+      throw new CoreError("BAD_REQUEST", "Too many historical images");
+  }
+  const maxBytes = parseServerEnv(process.env).WEAVER_DOCUMENT_IMAGE_MAX_BYTES;
+  let totalBytes = 0;
+  for (const { file } of files) {
+    const size = await repo.blobSizeAt(operation.sourceSha, file);
+    if (size === null)
+      throw new CoreError(
+        "BAD_REQUEST",
+        `cannot recover the image ${file}: it is unreadable at that revision`,
+      );
+    totalBytes += size;
+    if (size > maxBytes || totalBytes > MAX_IMPORT_IMAGE_BYTES)
+      throw new CoreError(
+        "BAD_REQUEST",
+        "Historical images exceed the image size limit",
+      );
+  }
+  const assets: DocumentAssetFile[] = [];
+  for (const { file, name } of files) {
     const blob = await repo.readCommittedBlobAt(
       operation.sourceSha,
       file,
-      MAX_SERVED_BLOB_BYTES,
+      maxBytes,
     );
     // The writer rewrites this document's links onto the new slug, so skipping
     // an unreadable asset would commit a link to a file nothing ever writes.
     if (!blob)
       throw new CoreError(
         "BAD_REQUEST",
-        `cannot recover the image ${file}: it is unreadable at that revision or larger than the ${MAX_SERVED_BLOB_BYTES}-byte limit`,
+        `cannot recover the image ${file}: it is unreadable at that revision or larger than the ${maxBytes}-byte limit`,
       );
     assets.push({ name, bytes: blob.bytes });
   }
@@ -1429,8 +1456,11 @@ async function recoverDeletedInRepo(
   if (operation.resourceType === "table")
     return recoverDeletedTableInRepo(db, repo, operation, author, options);
   const { path, file } = await locateDeletedDocument(repo, operation);
-  await ensureRecoveryFolder(repo, path.split("/").slice(0, -1), "documents");
   const kind = documentKindOfPath(path);
+  const assets = DOCUMENT_KINDS[kind].supportsImages
+    ? await deletedDocumentAssets(repo, operation, path)
+    : undefined;
+  await ensureRecoveryFolder(repo, path.split("/").slice(0, -1), "documents");
   const result = await writeDocumentInRepo(
     db,
     repo,
@@ -1461,8 +1491,8 @@ async function recoverDeletedInRepo(
         : {}),
       // The writer allocates the slug, so it also rewrites the document's own
       // asset links onto it and commits the blobs in the same commit.
-      ...(DOCUMENT_KINDS[kind].supportsImages && {
-        assets: await deletedDocumentAssets(repo, operation, path),
+      ...(assets && {
+        assets,
         assetsFromSlug: documentSlugFromPath(path),
       }),
     },

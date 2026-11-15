@@ -123,6 +123,9 @@ awaits review by construction; never turn it back into a denylist.
 `recoverPriorOperation` (renamed from `recoverCreatedOperation`) replays a
 lifecycle commit found by its trailer, because a delete leaves no target to
 re-derive and a folder create would otherwise collide with itself.
+MCP recovery requires the commit's local trust-ledger membership in addition to
+matching operation ID, request hash and tool name. Imported matching trailers
+must never acknowledge an operation as successfully executed.
 
 `aggregate_table` (design §8) folds every row matching the typed filters at one
 pinned snapshot into named results — count, countNonEmpty, sum, avg, min, max,

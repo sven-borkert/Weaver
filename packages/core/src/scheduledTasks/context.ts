@@ -15,6 +15,7 @@ import {
   type ProjectChange,
 } from "../services/projectActivity";
 import { getTable, listTables } from "../services/tables";
+import { isTableDirName, TABLES_ROOT } from "../tables/paths";
 
 export const TASK_MAX_OUTPUT_TOKENS = 4096;
 const DEFAULT_CONTEXT_WINDOW = 32000;
@@ -274,6 +275,15 @@ export async function assembleTaskContext(
   heads: Record<string, string>;
   period: { from: Date | null; to: Date };
 }> {
+  const folder = input.scope.kind === "folder" ? input.scope : null;
+  if (folder && (!folder.folderPath?.length || !folder.folderResourceType))
+    throw new CoreError("NOT_FOUND", "The task's folder focus is incomplete");
+  const folderPrefix = folder
+    ? [
+        ...(folder.folderResourceType === "table" ? [TABLES_ROOT] : []),
+        ...folder.folderPath!,
+      ].join("/") + "/"
+    : null;
   const sinceDate = input.period
     ? new Date(input.period.start)
     : new Date(input.now.getTime() - FIRST_RUN_WINDOW_MS);
@@ -304,6 +314,41 @@ export async function assembleTaskContext(
       changes.commits = changes.commits.filter(
         (commit) => commit.date >= sinceDate && commit.date <= input.now,
       );
+    if (folderPrefix && folder) {
+      changes.commits = changes.commits.flatMap((commit) => {
+        const documents =
+          folder.folderResourceType === "document"
+            ? commit.documents.filter((doc) =>
+                doc.path.startsWith(folderPrefix),
+              )
+            : [];
+        const tables =
+          folder.folderResourceType === "table"
+            ? commit.tables.filter(
+                (table) =>
+                  table.path.startsWith(folderPrefix) &&
+                  isTableDirName(table.path.split("/").at(-1) ?? ""),
+              )
+            : [];
+        if (documents.length === 0 && tables.length === 0) return [];
+        const mixed =
+          documents.length !== commit.documents.length ||
+          tables.length !== commit.tables.length;
+        return [
+          {
+            ...commit,
+            documents,
+            tables,
+            ...(mixed
+              ? {
+                  message: "Changed content in the selected folder",
+                  changeSummary: null,
+                }
+              : {}),
+          },
+        ];
+      });
+    }
     if (changes.headSha) heads[projectId] = changes.headSha;
     if (changes.fallback === "since_date") fallback = "since_date";
     if (changes.truncated) truncated = true;
@@ -462,30 +507,42 @@ export async function assembleTaskContext(
           (total, block) => total + bytes(block.text) + BLOCK_SEPARATOR_BYTES,
           0,
         );
-      const docs = await listDocuments(
-        db,
-        {
-          projectId,
-          page: 1,
-          pageSize: LIST_PAGE,
-          sort: "lastEditedAt",
-          dir: "desc",
-        },
-        actor,
-      );
-      for (const item of docs.items) {
-        if (shareUsed() > share) break;
-        const block = await documentBlock(projectId, item.id);
-        if (block) forProject.push(block);
+      if (!folder || folder.folderResourceType === "document") {
+        const docs = await listDocuments(
+          db,
+          {
+            projectId,
+            page: 1,
+            pageSize: LIST_PAGE,
+            sort: "lastEditedAt",
+            dir: "desc",
+            ...(folder ? { folderPath: folder.folderPath! } : {}),
+          },
+          actor,
+        );
+        for (const item of docs.items) {
+          if (shareUsed() > share) break;
+          const block = await documentBlock(projectId, item.id);
+          if (block) forProject.push(block);
+        }
       }
-      const tbls = await listTables(
-        db,
-        { projectId, page: 1, pageSize: 50, sort: "lastEditedAt", dir: "desc" },
-        actor,
-      );
-      for (const item of tbls.items) {
-        if (shareUsed() > share) break;
-        forProject.push(await tableBlock(projectId, item.id));
+      if (!folder || folder.folderResourceType === "table") {
+        const tbls = await listTables(
+          db,
+          {
+            projectId,
+            page: 1,
+            pageSize: 50,
+            sort: "lastEditedAt",
+            dir: "desc",
+            ...(folder ? { folderPath: folder.folderPath! } : {}),
+          },
+          actor,
+        );
+        for (const item of tbls.items) {
+          if (shareUsed() > share) break;
+          forProject.push(await tableBlock(projectId, item.id));
+        }
       }
       const withinShare = fitWithinBudget(forProject, share);
       if (withinShare.truncated) truncated = true;

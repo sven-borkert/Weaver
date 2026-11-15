@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { MockLanguageModelV4 } from "ai/test";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeWikiRun } from "@weaver/ai/wikiRunner";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 import { classifyPlanDigest } from "@weaver/core/wiki/classifyPlan";
@@ -9,6 +9,7 @@ import {
   executeWikiClassify,
   loadClassifyCandidates,
   readClassifyPlan,
+  reapClassifyRuns,
   rejectClassifyPlan,
   startClassify,
 } from "@weaver/core/services/wikiClassify";
@@ -86,6 +87,138 @@ const row = (p: WikiProject, id: string) =>
   p.db.wikiRun.findUniqueOrThrow({ where: { id } });
 
 describe("classify existing pages", () => {
+  it("preserves a fresh plan stored after the unanswered-plan expiry scan", async () => {
+    const p = await wikiProject();
+    const { runId } = await startClassify(p.db, p.security, {
+      projectId: p.projectId,
+    });
+    const now = new Date();
+    await p.db.wikiRun.update({
+      where: { id: runId },
+      data: { startedAt: new Date(now.getTime() - 25 * 60 * 60_000) },
+    });
+    const findMany = p.db.wikiRun.findMany.bind(p.db.wikiRun);
+    const spy = vi
+      .spyOn(p.db.wikiRun, "findMany")
+      .mockImplementationOnce((args) => findMany(args))
+      .mockImplementationOnce((async (args: Parameters<typeof findMany>[0]) => {
+        const rows = await findMany(args);
+        await p.db.wikiRun.update({
+          where: { id: runId },
+          data: { queuedAt: now, plan: { pages: [] } },
+        });
+        return rows;
+      }) as typeof findMany);
+    try {
+      expect(await reapClassifyRuns(p.db, now)).toEqual({
+        released: 0,
+        expired: 0,
+      });
+      expect((await row(p, runId)).status).toBe("preparing");
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each(["renewed", "completed"])(
+    "does not reap a preview %s after the scan",
+    async (state) => {
+      const p = await wikiProject();
+      const { runId } = await startClassify(p.db, p.security, {
+        projectId: p.projectId,
+      });
+      const now = new Date();
+      const token = randomUUID();
+      await p.db.wikiRun.update({
+        where: { id: runId },
+        data: {
+          leaseToken: token,
+          leaseExpiresAt: new Date(now.getTime() - 1_000),
+          attempts: 3,
+        },
+      });
+      const findMany = p.db.wikiRun.findMany.bind(p.db.wikiRun);
+      const spy = vi
+        .spyOn(p.db.wikiRun, "findMany")
+        .mockImplementationOnce((async (
+          args: Parameters<typeof findMany>[0],
+        ) => {
+          const rows = await findMany(args);
+          await p.db.wikiRun.update({
+            where: { id: runId },
+            data:
+              state === "renewed"
+                ? { leaseExpiresAt: new Date(now.getTime() + 60_000) }
+                : {
+                    leaseToken: null,
+                    leaseExpiresAt: null,
+                    plan: { pages: [] },
+                    queuedAt: now,
+                  },
+          });
+          return rows;
+        }) as typeof findMany);
+      try {
+        expect(await reapClassifyRuns(p.db, now)).toEqual({
+          released: 0,
+          expired: 0,
+        });
+        expect(await row(p, runId)).toMatchObject({
+          status: "preparing",
+          errorCode: null,
+        });
+      } finally {
+        spy.mockRestore();
+      }
+    },
+  );
+
+  it("scans beyond a full window of protected historical task outputs", async () => {
+    const p = await wikiProject();
+    const run = await createTaskRun({
+      owner: p.owner,
+      projectId: p.projectId,
+      name: "Historical outputs",
+    });
+    const template = await p.db.document.findFirstOrThrow({
+      where: { projectId: p.projectId },
+      select: {
+        projectId: true,
+        kind: true,
+        excerpt: true,
+        headCommitSha: true,
+        lastEditedAt: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    const documents = Array.from({ length: 121 }, (_, index) => ({
+      ...template,
+      id: randomUUID(),
+      path: `${index < 120 ? "a" : "z"}-${index}.md`,
+      slug: `candidate-${index}`,
+      title: `Candidate ${index}`,
+      wikiType: null,
+      wikiSummary: null,
+      reviewExempt: false,
+      wikiSourceItemId: null,
+    }));
+    await p.db.document.createMany({ data: documents });
+    await p.db.scheduledTaskRun.createMany({
+      data: documents.slice(0, 120).map((document) => ({
+        taskId: run.taskId,
+        trigger: "manual",
+        status: "succeeded",
+        outputDocumentId: document.id,
+      })),
+    });
+    expect(
+      (await loadClassifyCandidates(p.db, p.projectId)).map(
+        (candidate) => candidate.documentId,
+      ),
+    ).toContain(documents[120]!.id);
+  });
+
   beforeEach(async () => {
     await resetDb();
     setJobQueueForTests(new FakeJobQueue());

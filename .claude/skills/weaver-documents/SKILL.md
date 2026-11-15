@@ -636,7 +636,9 @@ src>` can become an image without width and unknown attributes are dropped.
   title-only update against its own path/history.
 - Move and delete re-read the document index row after entering the repository
   lock. Move commits `git mv` under that lock and re-slugs target collisions;
-  delete retains inbound target-id link rows while the source relation cascades.
+  delete verifies the committed header's identity before removing either content
+  or assets, refusing stale paths until projection repair. Delete retains inbound
+  target-id link rows while the source relation cascades.
 - Crossrefs have typed `document` or `table` targets and serialize as
   `weaver://document/<id>` or `weaver://table/<id>`; legacy nodes without a
   type remain documents. Resolve labels through the corresponding same-project
@@ -789,6 +791,11 @@ HEAD` + clean before writes. Atomic replacement prevents truncated worktree
   id, commit the recovery, then run `document.rebuildIndex`. Work on a
   backup/branch first if the history is uncertain; never manufacture a
   projection row by hand.
+  Deleted-document recovery preflights the historical assets directory against
+  the 100-image count, 64 MiB aggregate and configured per-image limits before
+  reading any image bytes or creating folders. Recovery history cursors retain
+  their pinned snapshot traversal position so merged sibling history survives
+  both item-page and commit-scan boundaries.
 
 ## UI rules
 

@@ -1,4 +1,8 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createApiKeyIssuer, createWeaverAuth } from "@weaver/auth";
+import { PrismaPg } from "@prisma/adapter-pg";
+import { createApiKey } from "@weaver/core/services/apiKeys";
+import { Prisma, PrismaClient } from "@weaver/db/client";
 import { createApiKeySecurityContext } from "@weaver/core/security/context";
 import {
   addMembership,
@@ -8,10 +12,209 @@ import {
   makeProject,
   makeUser,
   resetDb,
+  securityContextFor,
   testAuth,
 } from "./_harness";
 
 describe("apiKey router", () => {
+  it("removes a key minted after its credential lock connection is lost", async () => {
+    const user = await makeUser("User", "key-lost-lock");
+    const db = getPrisma();
+    const issuer = createApiKeyIssuer(testAuth());
+    const issue = issuer.issue.bind(issuer);
+    const spy = vi
+      .spyOn(issuer, "issue")
+      .mockImplementationOnce(async (input) => {
+        const terminated = await db.$queryRaw<
+          Array<{ terminated: boolean }>
+        >(Prisma.sql`
+        SELECT pg_terminate_backend(pid) AS terminated
+        FROM pg_stat_activity
+        WHERE datname = current_database() AND application_name = 'weaver-api-key-issuance'
+      `);
+        expect(terminated).toEqual([{ terminated: true }]);
+        await db.$transaction(async (tx) => {
+          await tx.$queryRaw(
+            Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:user-credentials:${user.id}`}, 0))::text`,
+          );
+          await tx.session.deleteMany({ where: { userId: user.id } });
+          await tx.apiKey.deleteMany({ where: { referenceId: user.id } });
+        });
+        return issue(input);
+      });
+    try {
+      await expect(
+        createApiKey(
+          db,
+          securityContextFor(user),
+          {
+            name: "Lost lock",
+            capabilities: ["mcp:use"],
+            projectIds: [],
+            expiresInDays: null,
+            rateLimitPerMinute: null,
+          },
+          issuer,
+        ),
+      ).rejects.toThrow();
+      expect(await db.apiKey.count()).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("mints and restricts a real Better Auth key with one application pool connection", async () => {
+    const user = await makeUser("User", "key-one-connection");
+    const project = await makeProject("One connection");
+    await addMembership(project.id, user.id, "Editor");
+    const db = new PrismaClient({
+      adapter: new PrismaPg({
+        connectionString: process.env.DATABASE_URL!,
+        max: 1,
+        connectionTimeoutMillis: 1_000,
+      }),
+    });
+    try {
+      const auth = createWeaverAuth({
+        db,
+        secret: process.env.AUTH_SECRET!,
+        baseURL: "http://localhost:3000",
+        mcp: {
+          resource: "http://localhost:3000/api/mcp",
+          loginPage: "/login",
+          consentPage: "/consent",
+        },
+      });
+      const result = await createApiKey(
+        db,
+        securityContextFor(user),
+        {
+          name: "One connection",
+          capabilities: ["mcp:use", "content:read"],
+          projectIds: [project.id],
+          expiresInDays: null,
+          rateLimitPerMinute: null,
+        },
+        createApiKeyIssuer(auth),
+      );
+      expect(result.key.projectIds).toEqual([project.id]);
+      expect(
+        await auth.api.verifyApiKey({ body: { key: result.secret } }),
+      ).toMatchObject({ valid: true });
+      expect(
+        await db.apiKeyProject.count({ where: { apiKeyId: result.key.id } }),
+      ).toBe(1);
+      await vi.waitFor(async () => {
+        const [remaining] = await db.$queryRaw<
+          Array<{ count: bigint }>
+        >(Prisma.sql`
+        SELECT count(*) AS count FROM pg_stat_activity
+        WHERE datname = current_database() AND application_name = 'weaver-api-key-issuance'
+      `);
+        expect(remaining?.count).toBe(0n);
+      });
+    } finally {
+      await db.$disconnect();
+    }
+  });
+
+  it.each(["revoked", "expired", "banned", "password-reset", "demoted"])(
+    "refuses issuance from a stale %s session actor",
+    async (state) => {
+      const user = await makeUser("Admin", `key-stale-${state}`);
+      const db = getPrisma();
+      const actor = securityContextFor(user);
+      if (state === "revoked")
+        await db.session.deleteMany({ where: { userId: user.id } });
+      if (state === "expired")
+        await db.session.updateMany({
+          where: { userId: user.id },
+          data: { expiresAt: new Date(0) },
+        });
+      if (state === "banned")
+        await db.user.update({
+          where: { id: user.id },
+          data: { banned: true },
+        });
+      if (state === "password-reset")
+        await db.user.update({
+          where: { id: user.id },
+          data: { mustChangePassword: true },
+        });
+      if (state === "demoted")
+        await db.user.update({
+          where: { id: user.id },
+          data: { role: "User" },
+        });
+      const issuer = createApiKeyIssuer(testAuth());
+      const issue = vi.spyOn(issuer, "issue");
+      await expect(
+        createApiKey(
+          db,
+          actor,
+          {
+            name: "Stale request",
+            capabilities: ["mcp:use", "system:admin"],
+            projectIds: [],
+            expiresInDays: null,
+            rateLimitPerMinute: null,
+          },
+          issuer,
+        ),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(issue).not.toHaveBeenCalled();
+      expect(await db.apiKey.count()).toBe(0);
+    },
+  );
+
+  it("queues issuance behind credential revocation and rechecks the session", async () => {
+    const user = await makeUser("User", "key-revocation-race");
+    const db = getPrisma();
+    const actor = securityContextFor(user);
+    const issuer = createApiKeyIssuer(testAuth());
+    const issue = vi.spyOn(issuer, "issue");
+    let issuance: Promise<unknown> | undefined;
+    let outcome: Promise<unknown> | undefined;
+    await db
+      .$transaction(async (tx) => {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:user-credentials:${user.id}`}, 0))::text`,
+        );
+        issuance = createApiKey(
+          db,
+          actor,
+          {
+            name: "Queued",
+            capabilities: ["mcp:use"],
+            projectIds: [],
+            expiresInDays: null,
+            rateLimitPerMinute: null,
+          },
+          issuer,
+        );
+        outcome = issuance.catch((error: unknown) => error);
+        await vi.waitFor(
+          async () => {
+            const waiting = await tx.$queryRaw<
+              Array<{ waiting: boolean }>
+            >(Prisma.sql`
+          SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND NOT granted) AS waiting
+        `);
+            expect(waiting[0]?.waiting).toBe(true);
+          },
+          { timeout: 2_000 },
+        );
+        expect(issue).not.toHaveBeenCalled();
+        await tx.session.deleteMany({ where: { userId: user.id } });
+        await tx.apiKey.deleteMany({ where: { referenceId: user.id } });
+      })
+      .finally(async () => {
+        await outcome;
+      });
+    expect(await outcome).toMatchObject({ code: "FORBIDDEN" });
+    expect(await db.apiKey.count()).toBe(0);
+  });
+
   it("prevents hard project deletion from widening a restricted key", async () => {
     const user = await makeUser("User", "purge-key");
     const project = await makeProject("Restricted");

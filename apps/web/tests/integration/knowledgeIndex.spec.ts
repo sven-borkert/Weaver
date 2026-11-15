@@ -33,6 +33,7 @@ import {
   reconcileProjectKnowledge,
 } from "@weaver/core/services/knowledgeReconciliation";
 import { refreshEntityDescriptions } from "@weaver/core/services/knowledgeEntityDescriptions";
+import { lockLiveKnowledgeProject } from "@weaver/core/services/knowledgeTargets";
 import { embedGenerationDocument } from "@weaver/core/services/knowledgeEmbeddings";
 import {
   enrichGenerationDocument,
@@ -502,6 +503,107 @@ async function setupEnrichmentDocument(suffix: string) {
 let knowledgeQueue: FakeJobQueue;
 
 describe("local knowledge indexing", () => {
+  it.each(["repair", "carried"])(
+    "serializes %s entity vector publication with description invalidation",
+    async (mode) => {
+      const f = await setupEnrichmentDocument(`entity-publication-${mode}`);
+      const input = {
+        projectId: f.project.id,
+        generationId: f.generation.id,
+        documentId: f.document.id,
+        sourceCommitSha: f.document.headCommitSha,
+        configFingerprint: f.generation.configFingerprint,
+        ...enrichmentIdentity,
+      };
+      await enrichGenerationDocument(
+        f.context,
+        f.db,
+        enrichmentProvider({}),
+        input,
+      );
+      const entity = await f.db.graphEntity.findFirstOrThrow({
+        where: { generationId: f.generation.id },
+      });
+      await f.db.knowledgeEmbedding.deleteMany({
+        where: { ownerType: "entity", ownerId: entity.id },
+      });
+      const original = f.db.$transaction.bind(f.db);
+      let invalidation: Promise<unknown> | undefined;
+      let invalidated = false;
+      let observed = false;
+      const spy = vi.spyOn(f.db, "$transaction");
+      spy.mockImplementationOnce((async (
+        callback: (tx: Prisma.TransactionClient) => Promise<unknown>,
+        options?: {
+          maxWait?: number;
+          timeout?: number;
+          isolationLevel?: Prisma.TransactionIsolationLevel;
+        },
+      ) =>
+        original(async (tx) => {
+          const findMany = tx.graphEntity.findMany.bind(tx.graphEntity);
+          const read = vi
+            .spyOn(tx.graphEntity, "findMany")
+            .mockImplementationOnce((async (
+              args: Parameters<typeof findMany>[0],
+            ) => {
+              const rows = await findMany(args);
+              invalidation = original(async (writer) => {
+                await lockLiveKnowledgeProject(writer, f.project.id);
+                await writer.graphEntity.update({
+                  where: { id: entity.id },
+                  data: { description: "Updated during publication" },
+                });
+                await writer.knowledgeEmbedding.deleteMany({
+                  where: { ownerType: "entity", ownerId: entity.id },
+                });
+              }).then(() => {
+                invalidated = true;
+              });
+              await waitForCondition(async () => {
+                const [blocked] = await f.db.$queryRaw<
+                  Array<{ waiting: boolean }>
+                >(Prisma.sql`
+              SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting
+            `);
+                return invalidated || blocked?.waiting ? true : null;
+              });
+              observed = true;
+              return rows;
+            }) as typeof findMany);
+          try {
+            return await callback(tx);
+          } finally {
+            read.mockRestore();
+          }
+        }, options)) as typeof f.db.$transaction);
+      try {
+        if (mode === "repair")
+          await repairMissingEntityEmbeddings(
+            f.db,
+            enrichmentProvider({}),
+            input,
+          );
+        else
+          await enrichGenerationDocument(
+            f.context,
+            f.db,
+            enrichmentProvider({}),
+            input,
+          );
+      } finally {
+        spy.mockRestore();
+        await invalidation;
+      }
+      expect(observed).toBe(true);
+      expect(
+        await f.db.knowledgeEmbedding.count({
+          where: { ownerType: "entity", ownerId: entity.id },
+        }),
+      ).toBe(0);
+    },
+  );
+
   beforeEach(async () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("WEAVER_JOBS_ENABLED", "true");

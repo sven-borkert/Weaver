@@ -146,7 +146,12 @@ async function readCurrentOutput(
   task: LeasedTaskRun["task"],
   actor: EnrichedActor,
   inputBytes: number,
-): Promise<{ text: string; truncated: boolean } | null> {
+): Promise<{
+  documentId: string;
+  baseCommitSha: string;
+  text: string;
+  truncated: boolean;
+} | null> {
   if (!task.outputDocumentId) return null;
   try {
     const current = await getDocument(
@@ -157,7 +162,12 @@ async function readCurrentOutput(
     const body = documentContentText(current.content);
     // A quarter of the input at most, so the document cannot crowd out the material.
     const cut = cutToBytes(body, Math.max(1_024, Math.floor(inputBytes / 4)));
-    return { text: cut, truncated: cut !== body };
+    return {
+      documentId: current.id,
+      baseCommitSha: current.baseCommitSha,
+      text: cut,
+      truncated: cut !== body,
+    };
   } catch (error) {
     if (isCoreError(error) && error.code === "NOT_FOUND") return null;
     throw error;
@@ -172,6 +182,7 @@ async function writeOutput(
   provenance: DocumentProvenance,
   summary: string,
   repo: Parameters<typeof writeDocumentInRepo>[1],
+  currentDocument: Awaited<ReturnType<typeof readCurrentOutput>>,
 ): Promise<DocumentResult> {
   const create = async () => {
     try {
@@ -201,17 +212,25 @@ async function writeOutput(
     }
   };
   if (!task.outputDocumentId) return create();
-  let current: Awaited<ReturnType<typeof getDocument>>;
-  try {
-    current = await getDocument(
-      db,
-      { projectId: task.outputProjectId, documentId: task.outputDocumentId },
-      actor,
-    );
-  } catch (error) {
-    // The previous output was deleted: start a fresh document in the same folder.
-    if (isCoreError(error) && error.code === "NOT_FOUND") return create();
-    throw error;
+  let baseline: { documentId: string; baseCommitSha: string };
+  if (task.outputMode === "update") {
+    if (!currentDocument) return create();
+    baseline = currentDocument;
+  } else {
+    try {
+      const current = await getDocument(
+        db,
+        { projectId: task.outputProjectId, documentId: task.outputDocumentId },
+        actor,
+      );
+      baseline = {
+        documentId: current.id,
+        baseCommitSha: current.baseCommitSha,
+      };
+    } catch (error) {
+      if (isCoreError(error) && error.code === "NOT_FOUND") return create();
+      throw error;
+    }
   }
   try {
     const result = await writeDocumentInRepo(
@@ -220,8 +239,8 @@ async function writeOutput(
       task.outputProjectId,
       {
         kind: "update",
-        documentId: task.outputDocumentId,
-        baseCommitSha: current.baseCommitSha,
+        documentId: baseline.documentId,
+        baseCommitSha: baseline.baseCommitSha,
         content: { kind: "markdown", contentJson },
         changeSummary: summary,
       },
@@ -493,6 +512,7 @@ async function runTask(
             { operationId: `task-run:${runId}`, runId },
             `Scheduled task "${task.name}" run ${now.toISOString().slice(0, 10)}`,
             repo,
+            currentDocument,
           );
         } catch (error) {
           if (
