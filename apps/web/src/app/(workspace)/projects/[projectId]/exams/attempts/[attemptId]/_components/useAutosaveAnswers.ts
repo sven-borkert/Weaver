@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { AttemptTiming } from "@weaver/core/services/examAttempts";
+import { queryErrorCode } from "~/lib/query-presentation";
 import { api } from "~/trpc/react";
 export type AnswerValue = { selectedChoiceIds: string[]; text: string | null };
 type SavedAnswer = {
@@ -9,6 +10,7 @@ type SavedAnswer = {
   savedAt: Date | null;
 };
 export type AnswerSlot = SavedAnswer & {
+  baseSequence: number;
   status: "idle" | "pending" | "saving" | "saved" | "error" | "conflict";
   attempts: number;
   closed?: boolean;
@@ -68,17 +70,26 @@ export function autosaveReducer(
     if (sameAnswer(s.value, answer.value))
       return {
         ...state,
-        [action.questionId]: { ...answer, status: "saved", attempts: 0 },
+        [action.questionId]: {
+          ...answer,
+          baseSequence: answer.sequence,
+          status: "saved",
+          attempts: 0,
+        },
       };
     if (
       s.sequence !== action.sequence &&
+      answer.sequence === action.sequence &&
       sameAnswer(action.submittedValue, answer.value)
     )
       return {
         ...state,
         [action.questionId]: {
           ...s,
-          sequence: Math.max(s.sequence, answer.sequence + 1),
+          baseSequence: answer.sequence,
+          status: "pending",
+          attempts: 0,
+          savedAt: answer.savedAt,
         },
       };
     return {
@@ -95,9 +106,15 @@ export function autosaveReducer(
     if (!conflictingAnswer) return state;
     const next: AnswerSlot =
       action.choice === "saved"
-        ? { ...conflictingAnswer, status: "saved", attempts: 0 }
+        ? {
+            ...conflictingAnswer,
+            baseSequence: conflictingAnswer.sequence,
+            status: "saved",
+            attempts: 0,
+          }
         : {
             ...conflictingAnswer,
+            baseSequence: conflictingAnswer.sequence,
             value: s.value,
             sequence: Math.max(conflictingAnswer.sequence + 1, s.sequence),
             status: "pending",
@@ -105,19 +122,26 @@ export function autosaveReducer(
           };
     return { ...state, [action.questionId]: next };
   }
+  if (action.type === "saved") {
+    if (action.sequence <= s.baseSequence) return state;
+    return {
+      ...state,
+      [action.questionId]: {
+        ...s,
+        baseSequence: action.sequence,
+        status: s.sequence === action.sequence ? "saved" : "pending",
+        attempts: 0,
+        savedAt: action.savedAt,
+      },
+    };
+  }
   if (s.sequence !== action.sequence) return state;
   return {
     ...state,
     [action.questionId]: {
       ...s,
-      status:
-        action.type === "saving"
-          ? "saving"
-          : action.type === "failed"
-            ? "error"
-            : "saved",
+      status: action.type === "saving" ? "saving" : "error",
       attempts: action.type === "failed" ? s.attempts + 1 : s.attempts,
-      savedAt: action.type === "saved" ? action.savedAt : s.savedAt,
     },
   };
 }
@@ -144,6 +168,7 @@ export function useAutosaveAnswers(input: {
   const closed = useRef(false);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const running = useRef(new Map<string, Promise<void>>());
+  const retrying = useRef(new Map<string, AnswerSlot>());
   const mutation = api.exam.saveAnswer.useMutation();
   const utils = api.useUtils();
   function dispatch(a: AutosaveAction) {
@@ -167,18 +192,24 @@ export function useAutosaveAnswers(input: {
       await existing;
       return;
     }
-    const s = current.current[id];
-    if (!s || closed.current || !["pending", "error"].includes(s.status))
+    const latest = current.current[id];
+    if (
+      !latest ||
+      closed.current ||
+      !["pending", "error"].includes(latest.status)
+    )
       return;
+    const s = retrying.current.get(id) ?? latest;
     const timer = timers.current.get(id);
     if (timer) clearTimeout(timer);
     timers.current.delete(id);
-    dispatch({ type: "saving", questionId: id, sequence: s.sequence });
+    dispatch({ type: "saving", questionId: id, sequence: latest.sequence });
     const work = (async () => {
       try {
         const result = await mutation.mutateAsync({
           attemptId: input.attemptId,
           questionId: id,
+          baseSequence: s.baseSequence,
           sequence: s.sequence,
           ...s.value,
         });
@@ -217,18 +248,29 @@ export function useAutosaveAnswers(input: {
           dispatch({ type: "closed" });
           callbacks.current.onExpired();
         }
-      } catch {
-        dispatch({ type: "failed", questionId: id, sequence: s.sequence });
-        const latest = current.current[id];
-        if (latest && !closed.current && alive.current)
-          schedule(id, nextRetryDelayMs(latest.attempts));
+        retrying.current.delete(id);
+      } catch (error) {
+        if (queryErrorCode(error) === "BAD_REQUEST")
+          retrying.current.delete(id);
+        else retrying.current.set(id, s);
+        dispatch({
+          type: "failed",
+          questionId: id,
+          sequence: current.current[id]?.sequence ?? s.sequence,
+        });
+        const failed = current.current[id];
+        if (failed && !closed.current && alive.current)
+          schedule(id, nextRetryDelayMs(failed.attempts));
       }
     })();
     running.current.set(id, work);
     await work;
     running.current.delete(id);
-    const latest = current.current[id];
-    if (latest?.status === "pending" && !closed.current && alive.current)
+    if (
+      current.current[id]?.status === "pending" &&
+      !closed.current &&
+      alive.current
+    )
       schedule(id, 0);
   }
   function edit(id: string, value: AnswerValue, delay: number) {

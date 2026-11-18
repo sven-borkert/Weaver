@@ -121,9 +121,8 @@ ledger before applying pagination.
 
 `git log` orders by date, and dates in untrusted commits are attacker-controlled, so a date cutoff can end a walk before a backdated side-branch commit. For "changes since a time"
 use `firstParentTrustedBefore(commitish, before)` (newest trusted first-parent commit older than the time), `listCommitShas(commitish, { exclude, maxCount })` (`rev-list`, so every commit
-of `<boundary>..HEAD`) and `logChangesForShas(shas)` (order kept, `--diff-merges=first-parent` so merge commits show their file changes). A cursor is a sha found in the listed range; page by
-slicing it rather than re-walking from the cursor, which would miss commits that are not its ancestors.
-`listCommitShas` also accepts `skip` for position-based paging anchored at one
-immutable snapshot. Deleted-content cursors store that commit offset separately
+of `<boundary>..HEAD`) and `logChangesForShas(shas)` (order kept, `--diff-merges=first-parent` so merge commits show their file changes). The wiki change feed uses
+`listCommitShas` with `skip` to page from the original tip and retain commits from
+every merge parent. Deleted-content cursors store that commit offset separately
 from the within-commit change offset; older SHA-only cursors first locate their
 commit in the snapshot's complete traversal.

@@ -55,6 +55,7 @@ jobs:
             `DATABASE_URL=${process.env.DATABASE_URL}`,
             `WEAVER_DATA_DIR=${process.env.WEAVER_DATA_DIR}`,
             `AUTH_SECRET=${randomBytes(32).toString("base64")}`,
+            `WEAVER_ENCRYPTION_KEYS=1:${randomBytes(32).toString("base64")}`,
             "AUTH_URL=http://localhost:3000",
             "NODE_ENV=test",
             "WEAVER_JOBS_ENABLED=true",
@@ -62,5 +63,7 @@ jobs:
           ].join("\n"), { mode: 0o600 });
           NODE
       - run: pnpm db:test:migrate
+      - name: Verify a router caller in the isolated test environment
+        run: pnpm test:integration apps/web/tests/integration/localDocument.spec.ts -t 'stores a nested tree separately from tracked documents and Git'
       - name: Run the guarded full integration suite
         run: RUN_FULL_TESTS=1 pnpm test:integration

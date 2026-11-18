@@ -708,10 +708,13 @@ src>` can become an image without width and unknown attributes are dropped.
   assert Editor itself before invoking one. The exported wrappers are thin
   `withProjectRepo` callers and keep their existing signatures; never call one
   from inside another project write lock.
-- History uses offset paging over `git log --follow`, newest first. Read from
-  HEAD through `offset + limit` and slice afterward so Git retains rename
-  context; rename-aware version lookup checks reachability and reads one capped
-  10,000-entry history window.
+- History resolves the document UUID in a pinned HEAD and validates each
+  `git log --follow` entry against the UUID in its historical blob before applying
+  the offset and limit. Preserve rename context when extending the scan window.
+  Rename-aware version lookup also checks reachability and caps the scan at
+  10,000 entries.
+- Public save and delete recheck Editor access after acquiring the repository
+  lock. Updates check the committed UUID before using the projected path.
 - Only commits recorded locally in `.git/weaver-trusted-commits` may resolve to a Weaver user; pulled commits retain external author text without matching users by trailer or email. Log fields use NUL framing.
 - Validate and lowercase trailer UUIDs before a Prisma UUID query. Resolve a
   valid trailer to a User before consulting the commit author email; use email
@@ -810,6 +813,9 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   `LocalDocumentEntry` model and the ordinary project roles. A folder's children
   share its project and storage. Guard edits and deletes with the saved revision
   and allow deleting only empty folders.
+- An Outside Git 401 hides and retains the dirty draft in memory for the same
+  signed-in identity. Enable writes only after project, list and detail reads
+  succeed again. Clear the suspended draft when the identity changes.
 - Creating a folder stays on the current level (`onFolderCreated` is a no-op in
   `ContentExplorerScreen`) so the new folder can be filled by drag and drop.
   Items and folders are draggable for Editors (`lib/explorer/drag.ts` payload, MIME

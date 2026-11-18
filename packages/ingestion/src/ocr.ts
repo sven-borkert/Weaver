@@ -3,7 +3,7 @@ import type { PrismaClient } from "@weaver/db/client";
 import { classifyRunError } from "@weaver/ai/errors";
 import { modelOutputFailure } from "@weaver/ai/completion";
 import { createAssistantLanguageModel } from "@weaver/ai/model";
-import { usageFromSdk } from "@weaver/ai/usage";
+import { usageFromError, usageFromSdk } from "@weaver/ai/usage";
 import { emptyUsage } from "@weaver/core/ai/http";
 import { createDbCredentialSource } from "@weaver/core/ai/registry";
 import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
@@ -126,17 +126,20 @@ export function createOcrClient(deps: OcrClientDeps): OcrClient {
             : OCR_MAX_OUTPUT_TOKENS,
         });
       } catch (error) {
+        const durationMs = Date.now() - started;
+        const usage = usageFromError(error, durationMs);
+        if (usage || !signal.aborted)
+          await recordAiUsageSafely(
+            deps.db,
+            {
+              ...accounting,
+              usage: usage ?? emptyUsage(durationMs),
+              outcome: signal.aborted ? "stale_discarded" : "provider_failure",
+            },
+            recordUsage,
+          );
         if (signal.aborted) throw error;
         const failure = classifyRunError(error);
-        await recordAiUsageSafely(
-          deps.db,
-          {
-            ...accounting,
-            usage: emptyUsage(Date.now() - started),
-            outcome: "provider_failure",
-          },
-          recordUsage,
-        );
         emitDiagnostic({
           event: "ingestion.ocr.failed",
           severity: "warn",
@@ -153,8 +156,8 @@ export function createOcrClient(deps: OcrClientDeps): OcrClient {
         });
         return { failureKind: "provider", message: failure.message };
       }
-      signal.throwIfAborted();
-      const markdown = cleanTranscript(result.text);
+      const cancelled = signal.aborted;
+      const markdown = cancelled ? "" : cleanTranscript(result.text);
       const failure = modelOutputFailure(
         {
           finishReason: result.finishReason,
@@ -167,10 +170,15 @@ export function createOcrClient(deps: OcrClientDeps): OcrClient {
         {
           ...accounting,
           usage: usageFromSdk(result.usage, Date.now() - started),
-          outcome: failure ? "validation_failure" : "success",
+          outcome: cancelled
+            ? "stale_discarded"
+            : failure
+              ? "validation_failure"
+              : "success",
         },
         recordUsage,
       );
+      signal.throwIfAborted();
       emitDiagnostic({
         event: failure ? "ingestion.ocr.failed" : "ingestion.ocr.completed",
         severity: failure ? "warn" : "info",

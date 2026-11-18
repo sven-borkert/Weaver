@@ -252,6 +252,43 @@ describe("assistant run lifecycle", () => {
     vi.unstubAllEnvs();
   });
 
+  it("returns the saved message and run when the queue receipt cannot be stored", async () => {
+    const db = getPrisma();
+    const actor = securityContextFor(await makeUser("User", "receipt-write"));
+    const conversation = await createConversation(db, actor, {});
+    const receipt = vi
+      .spyOn(db.assistantRun, "updateMany")
+      .mockRejectedValueOnce(new Error("queue receipt unavailable"));
+    try {
+      const { run, userMessage } = await submitUserMessage(db, actor, {
+        conversationId: conversation.id,
+        text: "Send once",
+        scope: { kind: "all" },
+      });
+      expect(queue.jobs).toEqual([
+        { name: "assistant.run", data: { runId: run.id } },
+      ]);
+      expect(
+        (await getConversation(db, actor, conversation.id)).messages,
+      ).toEqual([
+        expect.objectContaining({
+          id: userMessage.id,
+          role: "user",
+          text: "Send once",
+        }),
+      ]);
+      expect(
+        await db.assistantRun.findMany({
+          where: { conversationId: conversation.id },
+        }),
+      ).toEqual([
+        expect.objectContaining({ id: run.id, status: "queued", jobId: null }),
+      ]);
+    } finally {
+      receipt.mockRestore();
+    }
+  });
+
   it("clamps an `all` scope past the cap so the run still leases and stays visible", async () => {
     const db = getPrisma();
     const user = await makeUser("User", "allscope");
@@ -583,6 +620,36 @@ describe("assistant run lifecycle", () => {
         .status,
     ).toBe("queued");
     expect(queue.jobs.map((j) => j.name)).toEqual(["assistant.run"]);
+  });
+
+  it("keeps reconciling queued runs when one dispatch fails", async () => {
+    const { db, run: first } = await queuedRun("reconcile-dispatch-first");
+    const { run: second } = await queuedRun("reconcile-dispatch-second");
+    await db.assistantRun.updateMany({
+      where: { id: { in: [first.id, second.id] } },
+      data: { jobId: null },
+    });
+    queue.jobs.length = 0;
+    const send = vi
+      .spyOn(queue, "send")
+      .mockRejectedValueOnce(new Error("temporary queue failure"));
+    try {
+      expect(await reconcileAssistantRuns(db)).toMatchObject({
+        republished: 1,
+      });
+      expect(queue.jobs).toHaveLength(1);
+      expect(await reconcileAssistantRuns(db)).toMatchObject({
+        republished: 1,
+      });
+      expect(queue.jobs).toEqual(
+        expect.arrayContaining([
+          { name: "assistant.run", data: { runId: first.id } },
+          { name: "assistant.run", data: { runId: second.id } },
+        ]),
+      );
+    } finally {
+      send.mockRestore();
+    }
   });
 
   it("fails a run whose last attempt is abandoned past maxAttempts", async () => {

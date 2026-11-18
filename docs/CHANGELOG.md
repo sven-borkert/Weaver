@@ -4,6 +4,18 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.246] - 2026-11-18
+
+### Fixed
+
+- Outside Git keeps unsaved titles and Markdown through session expiry and verifies access before enabling editing again. Git-backed saves check the committed document ID and the writer's current access under the repository lock. History shows only revisions belonging to the requested document.
+- Personal API-key edits detect stale policies, password changes work with a one-connection pool, and project machine API retries retain their idempotency keys after a failed revision check.
+- Git pull resolves collisions on long table names. Wiki change-feed pagination includes both sides of a merge, and cancelled reverts cannot change input records during finalization. Semantic search widens its candidate window when one document dominates the first results.
+- Assistant sends survive queue bookkeeping failures, stream complete Unicode characters, and report filtered provider output. Scheduled reports require Markdown targets. Confirmed peer transfers survive local timestamp failures, and outbound MCP calls release server sessions.
+- Exam autosave detects competing edits from the same starting revision. Trainees can resume existing attempts and see historical results after an exam returns to draft, using the saved exam title.
+- Artifact and import deletions report success once committed and defer failed storage cleanup. OneNote preserves readable content after an oversized table, import usage includes known billed tokens, and math plots break at singularities in both the editor and PDF exports.
+- Nightly integration tests provision their encryption key. Image release retries preserve newer floating tags, and reinstalling the current release keeps the offline rollback images.
+
 ## [0.1.245] - 2026-11-18
 
 ### Added

@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import {
   DropdownMenu,
@@ -25,8 +25,9 @@ import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import {
   dataUnlessAccessError,
   isQueryAccessError,
+  queryErrorCode,
 } from "~/lib/query-presentation";
-import { api, type RouterOutputs } from "~/trpc/react";
+import { api, useSessionExpired, type RouterOutputs } from "~/trpc/react";
 import { DocumentsWorkspace } from "./DocumentsWorkspace";
 import {
   WorkspaceEmpty,
@@ -46,24 +47,104 @@ export function LocalDocumentsScreen({
   projectId: string;
   selection: { folder?: string; document?: string } | null;
 }) {
-  const project = api.project.get.useQuery({ projectId });
+  const sessionExpired = useSessionExpired();
+  const [unverifiedAt, setUnverifiedAt] = useState<number[] | null>(null);
+  const refetchOnWindowFocus = unverifiedAt ? ("always" as const) : true;
+  const project = api.project.get.useQuery(
+    { projectId },
+    { refetchOnWindowFocus },
+  );
   const projectData = dataUnlessAccessError(project.data, project.error);
   const list = api.localDocument.list.useQuery(
     { projectId },
-    { enabled: Boolean(projectData && selection) },
+    { enabled: Boolean(projectData && selection), refetchOnWindowFocus },
   );
-  const entries = dataUnlessAccessError(list.data, list.error);
+  const entryId = selection?.document;
+  const detail = api.localDocument.get.useQuery(
+    { projectId, entryId: entryId ?? "" },
+    { enabled: Boolean(entryId && projectData), refetchOnWindowFocus },
+  );
+  const { refetch: refetchProject } = project;
+  const { refetch: refetchList } = list;
+  const { refetch: refetchDetail } = detail;
+  const hasSelection = Boolean(selection);
+  const accessQueries = [
+    project,
+    ...(selection ? [list] : []),
+    ...(entryId ? [detail] : []),
+  ];
+  const lostSession =
+    sessionExpired ||
+    accessQueries.some(
+      (query) => queryErrorCode(query.error) === "UNAUTHORIZED",
+    );
+  if (lostSession && !unverifiedAt)
+    setUnverifiedAt(accessQueries.map((query) => query.dataUpdatedAt));
+  const accessRefetched =
+    unverifiedAt &&
+    accessQueries.every(
+      (query, index) =>
+        query.isSuccess && query.dataUpdatedAt > (unverifiedAt[index] ?? 0),
+    );
+  if (!lostSession && accessRefetched) setUnverifiedAt(null);
+  const suspended = lostSession || (unverifiedAt !== null && !accessRefetched);
+  const refreshAccess = useCallback(async () => {
+    const results = await Promise.all([
+      refetchProject(),
+      ...(hasSelection ? [refetchList()] : []),
+      ...(entryId ? [refetchDetail()] : []),
+    ]);
+    return results.every((result) => result.isSuccess);
+  }, [refetchProject, refetchList, refetchDetail, hasSelection, entryId]);
+  const confirmAccess = useCallback((confirmed: boolean) => {
+    if (confirmed) setUnverifiedAt(null);
+  }, []);
+  useEffect(() => {
+    if (unverifiedAt && !sessionExpired)
+      void refreshAccess().then(confirmAccess);
+  }, [unverifiedAt, sessionExpired, refreshAccess, confirmAccess]);
+
+  const denied = (error: unknown) =>
+    isQueryAccessError(error) && queryErrorCode(error) !== "UNAUTHORIZED";
+  const accessError = denied(project.error) || denied(list.error);
+  const entries = suspended
+    ? list.data
+    : dataUnlessAccessError(list.data, list.error);
   const root = localDocumentsHref(projectId);
-  const accessError =
-    isQueryAccessError(project.error) || isQueryAccessError(list.error);
   const listError = project.error ?? list.error;
   const canEdit = Boolean(
-    projectData && projectRoleAtLeast(projectData.myRole, "Editor"),
+    !suspended &&
+    projectData &&
+    projectRoleAtLeast(projectData.myRole, "Editor"),
   );
+  const entry = suspended
+    ? detail.data
+    : dataUnlessAccessError(detail.data, detail.error);
 
   let content;
   if (accessError) {
     content = <WorkspaceNotFound />;
+  } else if (
+    entryId &&
+    entry?.kind === "document" &&
+    !denied(detail.error) &&
+    (entries || suspended)
+  ) {
+    content = (
+      <div hidden={suspended} inert={suspended}>
+        <LocalDocumentView
+          key={`${projectId}:${entryId}`}
+          projectId={projectId}
+          entry={entry}
+          entries={entries ?? []}
+          canEdit={canEdit}
+          error={suspended ? null : detail.error}
+          retry={() => void detail.refetch()}
+        />
+      </div>
+    );
+  } else if (suspended) {
+    content = null;
   } else if (!selection) {
     content = <MissingEntry root={root} />;
   } else if (!entries && listError) {
@@ -85,16 +166,22 @@ export function LocalDocumentsScreen({
     );
   } else if (!entries) {
     content = <WorkspaceLoading title="Loading Outside Git" />;
-  } else if (selection.document) {
-    content = (
-      <LocalDocumentView
-        key={`${projectId}:${selection.document}`}
-        projectId={projectId}
-        entryId={selection.document}
-        entries={entries}
-        canEdit={canEdit}
-      />
-    );
+  } else if (entryId) {
+    content =
+      denied(detail.error) || entry ? (
+        <MissingEntry root={root} />
+      ) : detail.error ? (
+        <WorkspaceError
+          title="Could not load the document"
+          action={
+            <Button variant="outline" onClick={() => void detail.refetch()}>
+              Retry
+            </Button>
+          }
+        />
+      ) : (
+        <WorkspaceLoading title="Loading document" />
+      );
   } else {
     const folder = entries.find(
       (entry) => entry.kind === "folder" && entry.id === selection.folder,
@@ -126,7 +213,39 @@ export function LocalDocumentsScreen({
 
   return (
     <DocumentsWorkspace>
-      {entries && list.error ? (
+      {suspended && !accessError ? (
+        <WorkspaceError
+          title="Document access needs to be restored"
+          action={
+            <div className="flex flex-wrap justify-center gap-2">
+              {lostSession && !sessionExpired ? (
+                <Button variant="outline" asChild>
+                  <a
+                    href={withBasePath("/login")}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Sign in again in a new tab
+                  </a>
+                </Button>
+              ) : null}
+              <Button
+                variant="outline"
+                disabled={
+                  sessionExpired ||
+                  project.isFetching ||
+                  list.isFetching ||
+                  detail.isFetching
+                }
+                onClick={() => void refreshAccess().then(confirmAccess)}
+              >
+                Retry access
+              </Button>
+            </div>
+          }
+        />
+      ) : null}
+      {entries && list.error && !suspended ? (
         <div
           role="status"
           className="border-line bg-surface-2 flex items-center justify-between gap-3 border-b px-5 py-2 text-sm"
@@ -431,33 +550,19 @@ function LocalEntryRow({
 
 function LocalDocumentView({
   projectId,
-  entryId,
+  entry,
   entries,
   canEdit,
+  error,
+  retry,
 }: {
   projectId: string;
-  entryId: string;
+  entry: RouterOutputs["localDocument"]["get"];
   entries: LocalEntrySummary[];
   canEdit: boolean;
+  error: unknown;
+  retry: () => void;
 }) {
-  const query = api.localDocument.get.useQuery({ projectId, entryId });
-  const entry = dataUnlessAccessError(query.data, query.error);
-  if (isQueryAccessError(query.error) || (entry && entry.kind !== "document"))
-    return <MissingEntry root={localDocumentsHref(projectId)} />;
-  if (!entry) {
-    if (query.error)
-      return (
-        <WorkspaceError
-          title="Could not load the document"
-          action={
-            <Button variant="outline" onClick={() => void query.refetch()}>
-              Retry
-            </Button>
-          }
-        />
-      );
-    return <WorkspaceLoading title="Loading document" />;
-  }
   return (
     <div className="px-4 py-6 sm:px-6">
       <LocalFolderTrail
@@ -465,17 +570,13 @@ function LocalDocumentView({
         entries={entries}
         parentId={entry.parentId}
       />
-      {query.error ? (
+      {error ? (
         <div
           className="text-text-3 mt-2 flex items-center gap-3 text-sm"
           role="status"
         >
           The latest document could not be loaded.
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => void query.refetch()}
-          >
+          <Button size="sm" variant="outline" onClick={retry}>
             Retry
           </Button>
         </div>

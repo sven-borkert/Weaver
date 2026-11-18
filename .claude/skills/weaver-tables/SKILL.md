@@ -22,6 +22,8 @@ Shared storage primitives use `weaver-git-store`; machine HTTP grants/publishing
   Image icon paths are `.weaver-icons/<digest>.<png|jpg|webp>`, outside leaves.
 - A table lives in a `<slug>.table` directory. Folder paths are relative to
   `tables/`, and folder trees hide those table-leaf directories.
+- Normal writes and Git pull collisions share `tableSlugWithSuffix` to fit
+  numeric suffixes within the 80-character slug limit.
 - `DataTable` is the rebuildable projection of a Git-backed table. Moving or
   renaming a table folder must rewrite matching `DataTable.path` rows after the
   Git commit.

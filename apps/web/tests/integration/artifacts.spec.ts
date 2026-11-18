@@ -287,6 +287,51 @@ describe("artifact service", () => {
     );
   });
 
+  it("returns a completed artifact deletion when blob reclamation is unavailable", async () => {
+    const db = getPrisma();
+    const { project, editor } = await members("delete-cleanup");
+    const staged = await stage(project.id, "recoverable orphan");
+    const { artifacts } = await finalizeArtifactUpload(
+      db,
+      editor,
+      {
+        projectId: project.id,
+        files: [{ ...staged, filename: "Recoverable.txt", replace: false }],
+      },
+      OPTIONS,
+    );
+    const artifactId = artifacts[0]!.id;
+    const transaction = db.$transaction.bind(db);
+    const cleanup = new Error("cleanup database unavailable");
+    const spy = vi
+      .spyOn(db, "$transaction")
+      .mockImplementationOnce(transaction)
+      .mockRejectedValueOnce(cleanup);
+    try {
+      await expect(
+        deleteArtifact(
+          db,
+          editor,
+          { projectId: project.id, artifactId },
+          OPTIONS,
+        ),
+      ).resolves.toEqual({ deletedBlob: false });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(
+      await db.artifact.findUnique({ where: { id: artifactId } }),
+    ).toBeNull();
+    expect(await blobExists(DATA_DIR, project.id, staged.contentDigest)).toBe(
+      true,
+    );
+    await ageBlob(project.id, staged.contentDigest);
+    await sweepAbandonedUploads(db, { dataDir: DATA_DIR, ttlMinutes: 60 });
+    expect(await blobExists(DATA_DIR, project.id, staged.contentDigest)).toBe(
+      false,
+    );
+  });
+
   it("refuses an existing name without replace, case-insensitively, and stores nothing", async () => {
     const db = getPrisma();
     const { project, editor } = await members("conflict");

@@ -127,6 +127,7 @@ describe("bearer credentials", () => {
         after(() =>
           caller.apiKey.update({
             keyId: created.key.id,
+            expectedPolicyRevision: created.key.policyRevision,
             name: "Race",
             projectIds: [projectB.id],
           }),

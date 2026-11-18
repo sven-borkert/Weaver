@@ -52,7 +52,9 @@ import {
   testEncryptionKeys,
 } from "./_harness";
 
-const finish = (reason: "stop" | "tool-calls" | "length") => ({
+const finish = (
+  reason: "stop" | "tool-calls" | "length" | "content-filter",
+) => ({
   type: "finish" as const,
   finishReason: { unified: reason, raw: undefined },
   usage: {
@@ -409,6 +411,75 @@ describe("assistant runner", () => {
     expect(
       (await getConversation(db, actor, conversation.id)).messages.at(-1)?.text,
     ).toContain("output limit");
+  });
+
+  it("replays a whole emoji across provider and persistence chunk boundaries", async () => {
+    await seedTestLlmRouting();
+    const { db, actor, conversation, run } = await fixture("unicode-output");
+    const prefix = "a".repeat(399);
+    const answer = prefix + "🙂!";
+    await executeAssistantRun(
+      {
+        db,
+        ring: testEncryptionKeys(),
+        workerId: "unicode",
+        modelFactory: () =>
+          scriptedModel([
+            [
+              { type: "text-start", id: "text" },
+              { type: "text-delta", id: "text", delta: answer.slice(0, 400) },
+              { type: "text-delta", id: "text", delta: answer.slice(400) },
+              { type: "text-end", id: "text" },
+              finish("stop"),
+            ],
+          ]),
+      },
+      run.id,
+    );
+    const { events } = await listRunEvents(db, actor, {
+      runId: run.id,
+      after: -1,
+    });
+    expect(
+      events
+        .filter((event) => event.type === "text.delta")
+        .map((event) => event.payload),
+    ).toEqual([{ text: prefix }, { text: "🙂!" }]);
+    expect(
+      (await getConversation(db, actor, conversation.id)).messages.at(-1),
+    ).toMatchObject({ role: "assistant", text: answer });
+  });
+
+  it("reports provider filtering without an empty reply and retains usage", async () => {
+    await seedTestLlmRouting();
+    const { db, actor, conversation, run } = await fixture("filtered-output");
+    await executeAssistantRun(
+      {
+        db,
+        ring: testEncryptionKeys(),
+        workerId: "filtered",
+        modelFactory: () => scriptedModel([[finish("content-filter")]]),
+      },
+      run.id,
+    );
+    expect(
+      await db.assistantRun.findUnique({ where: { id: run.id } }),
+    ).toMatchObject({
+      status: "failed",
+      errorCode: "CONTENT_FILTERED",
+      assistantMessageId: null,
+      attemptCount: 1,
+    });
+    expect(
+      (await getConversation(db, actor, conversation.id)).messages,
+    ).toHaveLength(1);
+    expect(
+      await db.aiUsage.findFirst({ where: { runId: run.id } }),
+    ).toMatchObject({
+      inputTokens: 10,
+      outputTokens: 5,
+      outcome: "provider_failure",
+    });
   });
 
   it("does not invent a provider call when prompt admission fails", async () => {

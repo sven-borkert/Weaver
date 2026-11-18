@@ -217,8 +217,10 @@ metadata only—never rows, embeddings, entities, or relations.
   or vector queries.
 - Embedding reuse loads all chunk hashes in one query, supported by the
   `(projectId, ownerType, contentHash)` index. Semantic document retrieval bounds an
-  index-eligible nearest-embedding stage before document deduplication. Graph entities
-  require a non-invalidated mention on read; historical evidence remains stored.
+  index-eligible nearest-embedding stage before document deduplication. If fewer
+  live documents survive than requested, retry with a wider chunk window capped at
+  `SEMANTIC_DOCUMENT_CHUNK_BUDGET`. Graph entities require a non-invalidated
+  mention on read; historical evidence remains stored.
 - Semantic search embeds with the live knowledge-embedding route, then
   selects active generations whose fingerprint equals the live one. No
   compatible rows means keyword fallback with

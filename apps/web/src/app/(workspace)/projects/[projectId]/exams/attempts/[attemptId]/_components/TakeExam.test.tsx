@@ -15,7 +15,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("~/trpc/react", () => ({
   api: {
     exam: { submit: { useMutation: () => ({ mutateAsync: mocks.submit }) } },
-    useUtils: () => ({ exam: { listAvailable: { invalidate: vi.fn() } } }),
+    useUtils: () => ({
+      exam: {
+        listAvailable: { invalidate: vi.fn() },
+        listOwnAttempts: { invalidate: vi.fn() },
+      },
+    }),
   },
 }));
 vi.mock("sonner", () => ({ toast: { success: mocks.toast } }));

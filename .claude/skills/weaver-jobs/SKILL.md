@@ -108,7 +108,7 @@ stranded run blocks its conversation until it is reconciled. Both scheduled
 names live in `SCHEDULED_JOB_NAMES` (`packages/core/src/jobs/types.ts`).
 `assistant.run` carries no pg-boss singleton key — the queue policy is
 `standard`, where the key is ignored; duplicate deliveries are harmless because
-`leaseRunAttempt` claims the run with `where: { status: "queued" }`.
+`leaseRunAttempt` claims the run with `where: { status: "queued" }`. Once the user message and run commit, publication and queue receipt failures emit a diagnostic and leave the same run recoverable by reconciliation. A failed dispatch does not interrupt reconciliation of the remaining runs.
 `startKnowledgeWorkers({ assistantRunner, ingestionParseRunner, ingestionAnalyzeRunner, ingestionLinkRunner })`
 (`packages/core/src/jobs/runtime.ts`) is the only registration point —
 `apps/agent-worker` passes `createAssistantRunner(...)` from `@weaver/ai` and

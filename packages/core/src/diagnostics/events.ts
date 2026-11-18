@@ -134,9 +134,11 @@ export const DIAGNOSTIC_CATEGORY_OF = {
   "runtime.error": "runtime",
   "trpc.error": "trpc",
   "assistant.stream.failed": "assistant",
+  "assistant.run.dispatch_failed": "assistant",
   "content.projection.failed": "content",
   "content.transfer.received": "content",
   "remote.transfer.failed": "content",
+  "remote.connection.usage_update_failed": "content",
   "document.pdf.failed": "content",
   "document.summary.completed": "content",
   "document.summary.skipped": "content",
@@ -158,6 +160,7 @@ export const DIAGNOSTIC_CATEGORY_OF = {
   "artifact.replaced": "content",
   "artifact.renamed": "content",
   "artifact.deleted": "content",
+  "storage.cleanup.deferred": "content",
   "artifact.reader.failed": "content",
 } as const satisfies Record<string, DiagnosticCategory>;
 export type DiagnosticEventName = keyof typeof DIAGNOSTIC_CATEGORY_OF;

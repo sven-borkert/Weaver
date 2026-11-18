@@ -36,6 +36,7 @@ function Confirmation({
       toast.success("Attempt deleted");
       await Promise.all([
         utils.exam.listAvailable.invalidate(),
+        utils.exam.listOwnAttempts.invalidate(),
         utils.exam.listAttempts.invalidate(),
         utils.exam.list.invalidate(),
         utils.exam.get.invalidate(),

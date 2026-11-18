@@ -74,17 +74,14 @@ function canonical(value: unknown): string {
 function json(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
-function requireRevision(ifMatch: string | null, revision: string) {
+function revisionMatches(ifMatch: string | null, revision: string): boolean {
   if (ifMatch === null)
     throw new CoreError("PRECONDITION_FAILED", "If-Match is required", {
       status: 428,
     });
   if (!/^"[a-f0-9]{40}"$/.test(ifMatch))
     throw new CoreError("BAD_REQUEST", "A single strong If-Match is required");
-  if (ifMatch !== `"${revision}"`)
-    throw new CoreError("PRECONDITION_FAILED", "Revision changed", {
-      status: 412,
-    });
+  return ifMatch === `"${revision}"`;
 }
 /** Rejections a retry of the identical request would repeat; anything else is not recorded. */
 const DETERMINISTIC_FAILURE_STATUS: Partial<Record<CoreErrorCode, number>> = {
@@ -167,6 +164,15 @@ async function settle(
       httpStatus: reservation.operation.endsWith(".create") ? 201 : 200,
     },
   });
+}
+
+function failureData(code: CoreErrorCode, status: number) {
+  return {
+    state: "failed" as const,
+    error: json({ code }),
+    httpStatus: status,
+    completedAt: new Date(),
+  };
 }
 async function repairRecoveredContent(
   db: PrismaClient,
@@ -478,27 +484,44 @@ export async function applyProjectMachineOperation(
             };
         const change = prepareMachineChange(command, current, ids);
         assertMachineActions(policy, target, change.actions);
-        if (current) requireRevision(meta.ifMatch, current.revision);
-        await validateReferences(db, repo, policy, change, current);
+        const staleRevision =
+          current !== null && !revisionMatches(meta.ifMatch, current.revision);
+        if (!staleRevision)
+          await validateReferences(db, repo, policy, change, current);
         const anchors: Anchors = {
           target,
           actions: change.actions,
           beforeHead: await repo.resolveHead(),
           path: current?.path ?? null,
         };
-        reservation ??= await db.projectApiOperation.create({
-          data: {
-            keyId: context.keyId,
-            projectId: context.projectId,
-            idempotencyKey: meta.idempotencyKey,
-            operation: command.kind,
-            requestHash: hash,
-            resourceId: ids.resourceId,
-            generatedIds: json(ids),
-            authorizingAnchors: json(anchors),
-            createdAt: new Date(),
-          },
-        });
+        const preconditionFailure = staleRevision
+          ? failureData("PRECONDITION_FAILED", 412)
+          : undefined;
+        if (!reservation) {
+          reservation = await db.projectApiOperation.create({
+            data: {
+              keyId: context.keyId,
+              projectId: context.projectId,
+              idempotencyKey: meta.idempotencyKey,
+              operation: command.kind,
+              requestHash: hash,
+              resourceId: ids.resourceId,
+              generatedIds: json(ids),
+              authorizingAnchors: json(anchors),
+              createdAt: new Date(),
+              ...preconditionFailure,
+            },
+          });
+        } else if (preconditionFailure) {
+          await db.projectApiOperation.update({
+            where: { id: reservation.id },
+            data: preconditionFailure,
+          });
+        }
+        if (staleRevision)
+          throw new CoreError("PRECONDITION_FAILED", "Revision changed", {
+            status: 412,
+          });
         const actor = {
           kind: "projectApiKey" as const,
           machineId: context.keyId,
@@ -532,14 +555,20 @@ export async function applyProjectMachineOperation(
         };
         let result: { id: string; path: string; headCommitSha: string };
         try {
-          if (command.kind === "document.replace")
-            await repairDocumentProjectionInRepo(
+          if (command.kind === "document.replace") {
+            const repaired = await repairDocumentProjectionInRepo(
               db,
               repo,
               context.projectId,
               command.id,
               current!.path,
             );
+            if (repaired?.path !== current!.path)
+              throw new CoreError(
+                "INTERNAL_SERVER_ERROR",
+                "Document projection recovery could not be completed",
+              );
+          }
           if (command.kind === "document.delete") {
             await repairDocumentProjectionInRepo(
               db,
@@ -648,12 +677,7 @@ export async function applyProjectMachineOperation(
             else
               await db.projectApiOperation.update({
                 where: { id: reservation.id },
-                data: {
-                  state: "failed",
-                  error: json({ code: (error as CoreError).code }),
-                  httpStatus: status,
-                  completedAt: new Date(),
-                },
+                data: failureData((error as CoreError).code, status),
               });
           }
           throw error;

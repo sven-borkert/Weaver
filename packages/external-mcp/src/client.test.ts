@@ -52,6 +52,61 @@ async function connect(
     throw error;
   }
 }
+
+it("releases each stateful session after catalog and tool operations", async () => {
+  const server = await startMcpFixture({ requireSession: true });
+  const transport = createExternalMcpTransport({ fetchImpl: fetch });
+  try {
+    for (const operation of ["discover", "call"] as const) {
+      const controller = new AbortController();
+      const session = await transport.open({
+        endpoint: server.url,
+        token: async () => null,
+        signal: controller.signal,
+        timeoutMs: 5000,
+      });
+      try {
+        if (operation === "discover") {
+          expect((await session.discover()).tools).toHaveLength(2);
+        } else {
+          expect(
+            await session.call({ name: "read_counter", arguments: {} }),
+          ).toMatchObject({
+            structuredContent: { counter: 0 },
+            isError: false,
+          });
+        }
+        expect(server.liveSessionCount).toBe(1);
+      } finally {
+        controller.abort();
+        await session.close();
+      }
+      expect(server.liveSessionCount).toBe(0);
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+it("closes locally when the peer refuses to terminate its session", async () => {
+  const fixture = await connect({
+    requireSession: true,
+    refuseSessionTermination: true,
+  });
+  try {
+    expect((await fixture.session.discover()).tools).toHaveLength(2);
+    await fixture.session.close();
+    expect(fixture.server.requests).toContainEqual(
+      expect.objectContaining({
+        method: "DELETE",
+        session: "fixture-session",
+      }),
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
 it("uses SSE results, session headers and bounded catalog pagination", async () => {
   const fixture = await connect({
     responseMode: "sse",
@@ -115,10 +170,24 @@ it.each(["401", "overflow", "invalid-json", "redirect"] as const)(
     await expect(connect({ mode })).rejects.toThrow();
   },
 );
-it("rejects unsupported negotiated protocol versions", async () => {
-  await expect(connect({ protocolVersion: "1900-01-01" })).rejects.toThrow(
-    "UNSUPPORTED_PROTOCOL",
-  );
+it("rejects unsupported negotiated protocol versions and releases their sessions", async () => {
+  const server = await startMcpFixture({
+    protocolVersion: "1900-01-01",
+    requireSession: true,
+  });
+  try {
+    await expect(
+      createExternalMcpTransport({ fetchImpl: fetch }).open({
+        endpoint: server.url,
+        token: async () => null,
+        signal: AbortSignal.timeout(5000),
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow("UNSUPPORTED_PROTOCOL");
+    expect(server.liveSessionCount).toBe(0);
+  } finally {
+    await server.close();
+  }
 });
 it("returns MCP isError and truncates model-visible output", async () => {
   const fixture = await connect({

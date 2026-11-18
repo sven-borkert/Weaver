@@ -66,10 +66,12 @@ retry examples. Implementation changes also require `weaver-documents` or
   liveness, including writes added through a new operation.
 - Hash identity binds the normalized command, method, project and `If-Match`.
   Reuse the same key only for the identical request. Reservation preserves
-  generated resource, column and row IDs across retries.
-- A succeeded receipt replay still reauthorizes against current policy and the
-  resource's current location. Stored success must not revive revoked grants or
-  reveal content moved outside authority.
+  generated resource, column and row IDs across retries. An admitted stale
+  `If-Match` records a failed receipt under the same operation lock.
+- Receipt replay reauthorizes against current policy and the resource's current
+  location, including replay of a recorded failure.
+- Document replacement requires projection repair at the Git-resolved path.
+  The locked writer verifies the committed document UUID before editing.
 - Git commits may succeed before receipt/projection settlement fails. Preserve
   committed content and use commit provenance to repair projections, indexing
   publication and the receipt on the identical retry, without a duplicate

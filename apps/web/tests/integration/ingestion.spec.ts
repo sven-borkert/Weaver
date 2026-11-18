@@ -1109,7 +1109,7 @@ describe("ingestion actor services", () => {
     expect(await blobExists(dataDir, project.id, lonely)).toBe(false);
   });
 
-  it("does not restore deleted rows when later blob cleanup fails", async () => {
+  it("returns a completed batch deletion and the sweep reclaims its remaining blob", async () => {
     const db = getPrisma();
     const dataDir = await temporaryDataDir();
     const { project, actor } = await projectWithMember(
@@ -1148,12 +1148,18 @@ describe("ingestion actor services", () => {
 
     await expect(
       deleteBatch(db, actor, { batchId: batch.batchId }, { dataDir }),
-    ).rejects.toThrow();
+    ).resolves.toEqual({ deletedBlobs: 1 });
     expect(
       await db.ingestionBatch.count({ where: { id: batch.batchId } }),
     ).toBe(0);
     expect(await blobExists(dataDir, project.id, removedDigest)).toBe(false);
     expect((await stat(failingPath)).isDirectory()).toBe(true);
+    await rm(failingPath, { recursive: true });
+    await writeFile(failingPath, "directory");
+    const old = new Date(Date.now() - 3 * 3_600_000);
+    await utimes(failingPath, old, old);
+    await sweepAbandonedUploads(db, { dataDir, ttlMinutes: 60 });
+    expect(await blobExists(dataDir, project.id, failingDigest)).toBe(false);
   });
 });
 
@@ -1813,7 +1819,7 @@ describe("ingestion.analyze", () => {
     expect(recordUsage).toHaveBeenCalledTimes(1);
   });
 
-  it("fails the file as a provider failure when the model call throws", async () => {
+  it("fails the file and records known usage when the model call throws", async () => {
     const { db, fixture, queue, payload } =
       await extractingDocument("analyze-provider");
     await seedTestLlmRouting({ ingestion: { capabilities: ["chat"] } });
@@ -1827,7 +1833,9 @@ describe("ingestion.analyze", () => {
         modelFactory: () =>
           new MockLanguageModelV4({
             doGenerate: async () => {
-              throw new Error("upstream exploded");
+              throw Object.assign(new Error("upstream exploded"), {
+                usage: { inputTokens: 8, outputTokens: 3 },
+              });
             },
           }),
       }),
@@ -1844,14 +1852,72 @@ describe("ingestion.analyze", () => {
     ).toMatchObject({ analyzeEndedAt: expect.any(Date), linkEndedAt: null });
     expect(queue.jobs).toEqual([]);
     expect(
-      await db.aiUsage.count({
+      await db.aiUsage.findMany({
         where: {
           projectId: fixture.project.id,
           operation: "ingestion.analyze",
           outcome: "provider_failure",
         },
       }),
-    ).toBe(1);
+    ).toMatchObject([{ inputTokens: 8, outputTokens: 3 }]);
+  });
+
+  it("records returned usage once when a completed analysis is cancelled", async () => {
+    const { db, fixture, queue, payload } = await extractingDocument(
+      "analyze-cancelled-usage",
+    );
+    await seedTestLlmRouting({ ingestion: { capabilities: ["chat"] } });
+    queue.jobs.length = 0;
+    const controller = new AbortController();
+    await queue.work(
+      "ingestion.analyze",
+      createIngestionAnalyzeRunner({
+        db,
+        ring: null,
+        modelFactory: () =>
+          new MockLanguageModelV4({
+            doGenerate: async () => {
+              controller.abort();
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text: '{"title":"Discard this analysis","folder":""}',
+                  },
+                ],
+                finishReason: { unified: "stop", raw: undefined },
+                usage: {
+                  inputTokens: {
+                    total: 8,
+                    noCache: 8,
+                    cacheRead: undefined,
+                    cacheWrite: undefined,
+                  },
+                  outputTokens: { total: 3, text: 3, reasoning: undefined },
+                },
+                warnings: [],
+              };
+            },
+          }),
+      }),
+    );
+    await expect(
+      queue.run("ingestion.analyze", payload, {
+        ...parseExecution(0),
+        signal: controller.signal,
+      }),
+    ).rejects.toBeDefined();
+    expect(
+      await db.aiUsage.findMany({
+        where: {
+          projectId: fixture.project.id,
+          operation: "ingestion.analyze",
+        },
+      }),
+    ).toMatchObject([
+      { outcome: "stale_discarded", inputTokens: 8, outputTokens: 3 },
+    ]);
+    expect(queue.jobs).toEqual([]);
   });
 
   it("ends a failed file with a diagnostic reference and records the error summary", async () => {

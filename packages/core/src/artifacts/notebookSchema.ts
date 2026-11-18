@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const NOTEBOOK_PARSER_VERSION = 3;
+export const NOTEBOOK_PARSER_VERSION = 4;
 export const NOTEBOOK_TIMEOUT_MS = 5 * 60_000;
 export const NOTEBOOK_MANIFEST_MAX_BYTES = 16 * 1024 * 1024;
 export const NOTEBOOK_PAGE_MAX_BYTES = 2 * 1024 * 1024;

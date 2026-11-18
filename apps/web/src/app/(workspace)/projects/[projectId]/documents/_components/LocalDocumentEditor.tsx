@@ -102,6 +102,7 @@ export function LocalDocumentEditor({
   const titleRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
   const locked = useRef(false);
+  const writeAllowed = useRef(false);
   const [baseline, setBaseline] = useState(entry);
   const [draft, setDraft] = useState(() => readDraft(entry));
   const [initial] = useState(() => {
@@ -164,6 +165,12 @@ export function LocalDocumentEditor({
   });
 
   useUnsavedChangesGuard(dirty || busy);
+  useLayoutEffect(() => {
+    writeAllowed.current = canEdit;
+    return () => {
+      writeAllowed.current = false;
+    };
+  }, [canEdit]);
   useLayoutEffect(() => {
     editor?.setEditable(canEdit && !busy && !showingSource, false);
     editor?.view.dom.setAttribute("aria-readonly", String(!canEdit || busy));
@@ -248,6 +255,7 @@ export function LocalDocumentEditor({
     setConflictError(undefined);
     try {
       const latest = await fetchLatest();
+      if (!writeAllowed.current) return;
       resetDraft(latest);
       setConflictOpen(false);
     } catch {
@@ -299,6 +307,7 @@ export function LocalDocumentEditor({
       const revision = overwrite
         ? (await fetchLatest()).revision
         : baseline.revision;
+      if (!writeAllowed.current) return;
       const saved = await update.mutateAsync({
         ...queryInput,
         revision,
@@ -321,6 +330,8 @@ export function LocalDocumentEditor({
       toast.success("Document saved");
     } catch (error) {
       const data = (error as { data?: { field?: string } }).data;
+      if (queryErrorCode(error) === "UNAUTHORIZED")
+        void utils.localDocument.get.invalidate(queryInput);
       if (queryErrorCode(error) === "CONFLICT" && data?.field === "title") {
         setTitleError("This folder already contains an item with that name.");
         setConflictOpen(false);

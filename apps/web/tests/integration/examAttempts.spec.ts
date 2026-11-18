@@ -125,6 +125,7 @@ describe("exam attempts service", () => {
           attemptId: a.id,
           answer: {
             questionId: exam.questions[1]!.id,
+            baseSequence: 0,
             sequence: 1,
             text: "Answer",
           },
@@ -211,7 +212,10 @@ describe("exam attempts service", () => {
         await saveAnswer(
           db,
           trainee,
-          { attemptId: a.id, answer: { questionId, sequence: 2, text: "New" } },
+          {
+            attemptId: a.id,
+            answer: { questionId, baseSequence: 0, sequence: 2, text: "New" },
+          },
           T0,
         )
       ).outcome,
@@ -221,7 +225,10 @@ describe("exam attempts service", () => {
         await saveAnswer(
           db,
           trainee,
-          { attemptId: a.id, answer: { questionId, sequence: 1, text: "Old" } },
+          {
+            attemptId: a.id,
+            answer: { questionId, baseSequence: 0, sequence: 1, text: "Old" },
+          },
           T0,
         )
       ).outcome,
@@ -233,6 +240,7 @@ describe("exam attempts service", () => {
         attemptId: a.id,
         answer: {
           questionId: exam.questions[0]!.id,
+          baseSequence: 0,
           sequence: 1,
           selectedChoiceIds: [exam.questions[0]!.choices![0]!.id],
         },
@@ -293,6 +301,94 @@ describe("exam attempts service", () => {
     expect(released.status).toBe("released");
     expect((await getOwnAttempt(db, trainee, a.id, T0)).totalScore).toBe(8.5);
   });
+
+  it("rejects a second tab's higher proposed sequence from the same base", async () => {
+    const { db, trainee, exam } = await fixture();
+    const attempt = await startAttempt(db, trainee, { examId: exam.id }, T0);
+    const questionId = exam.questions[1]!.id;
+    const save = (baseSequence: number, sequence: number, text: string) =>
+      saveAnswer(
+        db,
+        trainee,
+        {
+          attemptId: attempt.id,
+          answer: { questionId, baseSequence, sequence, text },
+        },
+        T0,
+      );
+
+    await expect(save(0, 8, "Starting answer")).resolves.toMatchObject({
+      outcome: "saved",
+    });
+    await expect(save(8, 9, "First tab")).resolves.toMatchObject({
+      outcome: "saved",
+    });
+    await expect(save(8, 9, "First tab")).resolves.toMatchObject({
+      outcome: "saved",
+      sequence: 9,
+    });
+    await expect(save(8, 10, "Second tab")).resolves.toMatchObject({
+      outcome: "stale",
+      sequence: 9,
+    });
+    const view = await getOwnAttempt(db, trainee, attempt.id, T0);
+    expect(
+      view.questions.find((q) => q.id === questionId)?.answer,
+    ).toMatchObject({ text: "First tab" });
+  });
+
+  it("lists own released and ongoing attempts by snapshot title after an exam returns to draft", async () => {
+    const { db, trainer, trainee, traineeUser, exam } = await fixture();
+    const first = await startAttempt(db, trainee, { examId: exam.id }, T0);
+    await submitAttempt(db, trainee, { attemptId: first.id }, T0);
+    const review = await getAttemptForReview(db, trainer, first.id, T0);
+    await gradeAttempt(
+      db,
+      trainer,
+      {
+        attemptId: first.id,
+        expectedRevision: review.revision,
+        release: true,
+        grades: [
+          {
+            questionId: exam.questions[1]!.id,
+            score: 0,
+            rationale: "No answer was entered",
+          },
+        ],
+      },
+      T0,
+    );
+    const ongoing = await startAttempt(db, trainee, { examId: exam.id });
+    const renamed = await updateExam(db, trainer, {
+      examId: exam.id,
+      expectedRevision: exam.revision,
+      definition: { title: "Renamed" },
+    });
+    await updateExam(db, trainer, {
+      examId: exam.id,
+      expectedRevision: renamed.revision,
+      status: "draft",
+      definition: {},
+    });
+    const caller = callerWithSecurity(traineeUser, trainee);
+    const projectId = exam.projectId;
+    await expect(caller.exam.listAvailable({ projectId })).resolves.toEqual([]);
+    await expect(caller.exam.listOwnAttempts({ projectId })).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: first.id,
+          examTitle: "Safety",
+          status: "released",
+        }),
+        expect.objectContaining({
+          id: ongoing.id,
+          examTitle: "Safety",
+          status: "in_progress",
+        }),
+      ]),
+    );
+  });
   it("keeps one shuffled choice order per attempt and stores partial credit", async () => {
     const { db, trainer, trainee, exam } = await fixture();
     const multi = await updateExam(db, trainer, {
@@ -332,6 +428,7 @@ describe("exam attempts service", () => {
         attemptId: a.id,
         answer: {
           questionId: multi.questions[0]!.id,
+          baseSequence: 0,
           sequence: 1,
           selectedChoiceIds: [
             authored[0]!.id,
@@ -361,6 +458,7 @@ describe("exam attempts service", () => {
           attemptId: a.id,
           answer: {
             questionId: q.id,
+            baseSequence: 0,
             sequence: 1,
             selectedChoiceIds: [q.choices![0]!.id],
           },
@@ -379,7 +477,12 @@ describe("exam attempts service", () => {
           trainee,
           {
             attemptId: a.id,
-            answer: { questionId: q.id, sequence: 2, selectedChoiceIds: [] },
+            answer: {
+              questionId: q.id,
+              baseSequence: 1,
+              sequence: 2,
+              selectedChoiceIds: [],
+            },
           },
           T0,
         )
@@ -496,6 +599,7 @@ describe("exam attempts service", () => {
       traineeKey.exam.saveAnswer({
         attemptId: a.id,
         questionId: exam.questions[1]!.id,
+        baseSequence: 0,
         sequence: 1,
         text: "Answer",
       }),
@@ -559,7 +663,12 @@ describe("exam attempts service", () => {
           trainee,
           {
             attemptId: a.id,
-            answer: { questionId, sequence: 1, text: "Late but within grace" },
+            answer: {
+              questionId,
+              baseSequence: 0,
+              sequence: 1,
+              text: "Late but within grace",
+            },
           },
           new Date(T0.getTime() + 30 * 60_000 + 9_000),
         )
@@ -572,7 +681,12 @@ describe("exam attempts service", () => {
           trainee,
           {
             attemptId: a.id,
-            answer: { questionId, sequence: 2, text: "Too late" },
+            answer: {
+              questionId,
+              baseSequence: 1,
+              sequence: 2,
+              text: "Too late",
+            },
           },
           new Date(T0.getTime() + 30 * 60_000 + 11_000),
         )

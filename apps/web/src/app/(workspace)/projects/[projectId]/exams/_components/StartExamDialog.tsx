@@ -27,7 +27,10 @@ export function StartExamDialog({
   const utils = api.useUtils();
   const start = api.exam.start.useMutation({
     onSuccess: async (a) => {
-      await utils.exam.listAvailable.invalidate({ projectId });
+      await Promise.all([
+        utils.exam.listAvailable.invalidate({ projectId }),
+        utils.exam.listOwnAttempts.invalidate({ projectId }),
+      ]);
       router.push(`/projects/${projectId}/exams/attempts/${a.id}`);
     },
     onError: (e) => toast.error(e.message),

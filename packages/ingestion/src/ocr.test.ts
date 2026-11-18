@@ -2,7 +2,7 @@ import { APICallError } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { describe, expect, it, vi } from "vitest";
 import type { LlmModelSnapshot } from "@weaver/core/services/llmRoutes";
-import { createOcrClient, OCR_PROMPT } from "./ocr";
+import { createOcrClient, OCR_PROMPT, type OcrClientDeps } from "./ocr";
 import { createNativeParser } from "./native";
 import { pdfFixture } from "./fixtures";
 
@@ -249,7 +249,9 @@ describe("createOcrClient", () => {
   });
 
   it("turns provider errors into a provider failure with a usage row", async () => {
-    const recordUsage = vi.fn(async () => undefined);
+    const recordUsage = vi
+      .fn<NonNullable<OcrClientDeps["recordUsage"]>>()
+      .mockResolvedValue(undefined);
     const client = createOcrClient({
       db: {} as never,
       ring: null,
@@ -257,13 +259,16 @@ describe("createOcrClient", () => {
       modelFactory: () =>
         new MockLanguageModelV4({
           doGenerate: async () => {
-            throw new APICallError({
-              message: "HTTP 400",
-              url: "https://ai.test",
-              requestBodyValues: {},
-              statusCode: 400,
-              isRetryable: false,
-            });
+            throw Object.assign(
+              new APICallError({
+                message: "HTTP 400",
+                url: "https://ai.test",
+                requestBodyValues: {},
+                statusCode: 400,
+                isRetryable: false,
+              }),
+              { usage },
+            );
           },
         }),
       recordUsage,
@@ -276,10 +281,12 @@ describe("createOcrClient", () => {
       failureKind: "provider",
       message: "provider request failed",
     });
-    expect(recordUsage).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ outcome: "provider_failure" }),
-    );
+    expect(recordUsage.mock.calls.map(([, row]) => row)).toMatchObject([
+      {
+        outcome: "provider_failure",
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+    ]);
   });
 
   it("rethrows cancellation", async () => {
@@ -302,5 +309,41 @@ describe("createOcrClient", () => {
     await expect(
       client.transcribe(route, input, controller.signal),
     ).rejects.toBeDefined();
+  });
+
+  it("records returned usage once when a transcription is cancelled", async () => {
+    const controller = new AbortController();
+    const recordUsage = vi
+      .fn<NonNullable<OcrClientDeps["recordUsage"]>>()
+      .mockResolvedValue(undefined);
+    const client = createOcrClient({
+      db: {} as never,
+      ring: null,
+      resolveRoute: async () => snapshot,
+      modelFactory: () =>
+        new MockLanguageModelV4({
+          doGenerate: async () => {
+            controller.abort();
+            return {
+              content: [{ type: "text", text: "discard this transcription" }],
+              finishReason: { unified: "stop", raw: undefined },
+              usage,
+              warnings: [],
+            };
+          },
+        }),
+      recordUsage,
+    });
+    const route = await client.resolve();
+    if ("failureKind" in route) throw new Error(route.message);
+    await expect(
+      client.transcribe(route, input, controller.signal),
+    ).rejects.toBeDefined();
+    expect(recordUsage.mock.calls.map(([, row]) => row)).toMatchObject([
+      {
+        outcome: "stale_discarded",
+        usage: { inputTokens: 10, outputTokens: 5 },
+      },
+    ]);
   });
 });

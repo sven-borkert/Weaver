@@ -121,6 +121,15 @@ test("a successful upgrade keeps the new and previous image sets and removes old
   assert.match(result.calls, /^docker image prune -f$/m);
 });
 
+test("repeating an upgrade preserves the previous cached image set", (t) => {
+  const first = runUpgrade(t, {}, "main", "WEAVER_IMAGE_TAG=cccccccc\n");
+  assert.equal(first.status, 0, first.stderr);
+  assert.doesNotMatch(first.calls, /^docker image rm .*:cccccccc$/m);
+  const repeat = runUpgrade(t, {}, "main", "WEAVER_IMAGE_TAG=aaaaaaaa\n");
+  assert.equal(repeat.status, 0, repeat.stderr);
+  assert.doesNotMatch(repeat.calls, /^docker image (rm|prune) /m);
+});
+
 test("an image that cannot be removed does not fail a finished upgrade", (t) => {
   const result = runUpgrade(
     t,

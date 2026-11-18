@@ -57,7 +57,9 @@ validated against a live file's canonical project and digest before a claim.
   `(projectId, contentDigest)` references before unlinking. Never unlink before
   the row deletion commits: a rollback could otherwise resurrect a reference
   whose blob is gone. Shared-digest blobs remain while any file in that project
-  refers to them.
+  refers to them. The deletion result counts blobs removed immediately.
+  `reclaimUnreferencedBlobs` records `storage.cleanup.deferred` if cleanup fails,
+  and the storage sweep handles any remaining orphan blobs.
 - Blob references, the orphan sweep, and the project quota cover
   `IngestionFile` **and** `Artifact` (the project Files store, `weaver-artifacts`)
   through the shared helpers in

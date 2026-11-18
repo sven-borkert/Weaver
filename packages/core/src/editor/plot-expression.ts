@@ -1,4 +1,4 @@
-type Evaluate = (values: readonly number[], denominators?: number[]) => number;
+type Evaluate = (values: readonly number[], poleFactors?: number[]) => number;
 type UnaryFunction = (value: number) => number;
 type BinaryFunction = (left: number, right: number) => number;
 
@@ -30,11 +30,7 @@ const unaryFunctions = new Map<string, UnaryFunction>([
   ["sin", Math.sin],
   ["sinh", Math.sinh],
   ["sqrt", Math.sqrt],
-  [
-    "tan",
-    (value) =>
-      Math.abs(Math.cos(value)) <= Number.EPSILON ? NaN : Math.tan(value),
-  ],
+  ["tan", Math.tan],
   ["tanh", Math.tanh],
 ]);
 
@@ -84,9 +80,18 @@ function tokenize(source: string): string[] {
   return tokens;
 }
 
-function unary(operation: UnaryFunction, operand: Evaluate): Evaluate {
-  return (values, denominators) => {
-    const value = operand(values, denominators);
+function unary(
+  operation: UnaryFunction,
+  operand: Evaluate,
+  tangentIndex?: number,
+): Evaluate {
+  return (values, poleFactors) => {
+    const value = operand(values, poleFactors);
+    if (tangentIndex !== undefined) {
+      const cosine = Math.cos(value);
+      if (poleFactors) poleFactors[tangentIndex] = cosine;
+      if (Math.abs(cosine) <= Number.EPSILON) return NaN;
+    }
     return Number.isFinite(value) ? operation(value) : NaN;
   };
 }
@@ -97,11 +102,11 @@ function binary(
   right: Evaluate,
   divisionIndex?: number,
 ): Evaluate {
-  return (values, denominators) => {
-    const lhs = left(values, denominators);
-    const rhs = right(values, denominators);
-    if (denominators && divisionIndex !== undefined)
-      denominators[divisionIndex] = rhs;
+  return (values, poleFactors) => {
+    const lhs = left(values, poleFactors);
+    const rhs = right(values, poleFactors);
+    if (poleFactors && divisionIndex !== undefined)
+      poleFactors[divisionIndex] = rhs;
     return Number.isFinite(lhs) && Number.isFinite(rhs)
       ? operation(lhs, rhs)
       : NaN;
@@ -114,7 +119,7 @@ export function compilePlotExpression(
 ): Evaluate {
   const tokens = tokenize(source);
   let index = 0;
-  let divisionCount = 0;
+  let poleFactorCount = 0;
 
   function consume(expected: string) {
     if (tokens[index] !== expected) throw new Error(`Expected "${expected}".`);
@@ -160,7 +165,11 @@ export function compilePlotExpression(
     consume(")");
     if (unaryFunction === undefined)
       throw new Error(`Unknown function "${token}".`);
-    return unary(unaryFunction, first);
+    return unary(
+      unaryFunction,
+      first,
+      token === "tan" ? poleFactorCount++ : undefined,
+    );
   }
 
   function parse(minPrecedence: number, depth: number): Evaluate {
@@ -178,7 +187,7 @@ export function compilePlotExpression(
         operation,
         left,
         right,
-        token === "/" ? divisionCount++ : undefined,
+        token === "/" ? poleFactorCount++ : undefined,
       );
     }
     return left;

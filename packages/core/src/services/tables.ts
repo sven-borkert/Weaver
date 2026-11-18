@@ -29,6 +29,7 @@ import {
   isTableDirName,
   slugFromTableDir,
   tableDirPath,
+  tableSlugWithSuffix,
 } from "@weaver/core/tables/paths";
 import {
   hasOptions,
@@ -1039,9 +1040,7 @@ async function nextAvailableTableSlug(
     ),
   );
   for (let index = 1; index < 1000; index++) {
-    const suffix = index === 1 ? "" : `-${index}`;
-    const stem = base.slice(0, 80 - suffix.length).replace(/-+$/g, "");
-    const slug = `${stem}${suffix}`;
+    const slug = tableSlugWithSuffix(base, index);
     const dir = tableDirPath(folderPath, slug);
     const inIndex = await db.dataTable.findFirst({
       where: {

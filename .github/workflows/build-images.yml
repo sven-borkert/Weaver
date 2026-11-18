@@ -38,7 +38,7 @@ jobs:
 
   build:
     needs: test
-    # Releases must not interleave: the build script checks version tags before pushing.
+    # Registry writes, including the branch-tip check and promotion, are serialized.
     concurrency:
       group: ${{ github.event_name == 'pull_request' && format('build-{0}', github.ref) || 'registry-release' }}
       cancel-in-progress: false

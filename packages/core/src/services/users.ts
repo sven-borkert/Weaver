@@ -1,6 +1,7 @@
 import { unlinkUserFromProjectTraining } from "./projectTraining";
 import type { UserAdministrator } from "@weaver/auth";
 import { isReservedEmail } from "@weaver/auth/constants";
+import { withUserCredentialLock } from "@weaver/auth/credential-lock";
 import { captureError, emitDiagnostic } from "@weaver/core/diagnostics/writer";
 import { CoreError } from "@weaver/core/errors";
 import { assertSystemAdmin } from "@weaver/core/security/context";
@@ -396,32 +397,35 @@ export async function deactivateUser(
       "You cannot deactivate your own account",
     );
   }
-  const { target, row } = await db.$transaction(async (tx) => {
-    await tx.$queryRaw(
-      Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:user-credentials:${input.userId}`}, 0))::text`,
-    );
-    await lockGlobalAdminRoster(tx);
-    const target = await tx.user.findUnique({
-      where: { id: input.userId },
-      select: userSelect,
-    });
-    if (!target) throw new CoreError("NOT_FOUND", "No such user");
-    if (target.role === "Admin") {
-      await assertNotLastActiveAdmin(tx, input.userId);
-    }
-    await tx.user.update({
-      where: { id: input.userId },
-      data: { banned: true, banReason: input.reason, banExpires: null },
-    });
-    await tx.session.deleteMany({ where: { userId: input.userId } });
-    await revokeAllOAuthGrantsForUser(tx, input.userId);
-    await tx.apiKey.deleteMany({ where: { referenceId: input.userId } });
-    const row = await tx.user.findUniqueOrThrow({
-      where: { id: input.userId },
-      select: userSelect,
-    });
-    return { target, row };
-  });
+  const { target, row } = await withUserCredentialLock(
+    input.userId,
+    "weaver-user-deactivation",
+    (assertHeld) =>
+      db.$transaction(async (tx) => {
+        await lockGlobalAdminRoster(tx);
+        const target = await tx.user.findUnique({
+          where: { id: input.userId },
+          select: userSelect,
+        });
+        if (!target) throw new CoreError("NOT_FOUND", "No such user");
+        if (target.role === "Admin") {
+          await assertNotLastActiveAdmin(tx, input.userId);
+        }
+        await tx.user.update({
+          where: { id: input.userId },
+          data: { banned: true, banReason: input.reason, banExpires: null },
+        });
+        await tx.session.deleteMany({ where: { userId: input.userId } });
+        await revokeAllOAuthGrantsForUser(tx, input.userId);
+        await tx.apiKey.deleteMany({ where: { referenceId: input.userId } });
+        const row = await tx.user.findUniqueOrThrow({
+          where: { id: input.userId },
+          select: userSelect,
+        });
+        await assertHeld();
+        return { target, row };
+      }),
+  );
   emitDiagnostic({
     event: "admin.user.deactivated",
     message: `deactivated ${target.email}`,
@@ -430,28 +434,6 @@ export async function deactivateUser(
     details: { targetUserId: input.userId, reason: input.reason },
   });
   return toSummary(row);
-}
-
-/**
- * Serializes password and session mutations per user across processes. Better
- * Auth's change-password handler reads the account hash, hashes, then writes
- * without a transaction, so without this a change that started before an admin
- * reset could finish after it and undo the reset.
- */
-async function withUserCredentialLock<T>(
-  db: PrismaClient,
-  userId: string,
-  fn: () => Promise<T>,
-): Promise<T> {
-  return db.$transaction(
-    async (lockTx) => {
-      await lockTx.$queryRaw(Prisma.sql`
-        SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:user-credentials:${userId}`}, 0))::text
-      `);
-      return fn();
-    },
-    { timeout: 60_000, maxWait: 15_000 },
-  );
 }
 
 /**
@@ -465,18 +447,24 @@ export async function changeOwnPassword(
   userId: string,
   change: () => Promise<{ setCookies: string[] }>,
 ): Promise<{ setCookies: string[] }> {
-  return withUserCredentialLock(db, userId, async () => {
-    const result = await change();
-    await db.$transaction(async (tx) => {
-      await revokeAllOAuthGrantsForUser(tx, userId);
-      await tx.apiKey.deleteMany({ where: { referenceId: userId } });
-      await tx.user.update({
-        where: { id: userId },
-        data: { mustChangePassword: false },
+  return withUserCredentialLock(
+    userId,
+    "weaver-password-change",
+    async (assertHeld) => {
+      const result = await change();
+      await assertHeld();
+      await db.$transaction(async (tx) => {
+        await revokeAllOAuthGrantsForUser(tx, userId);
+        await tx.apiKey.deleteMany({ where: { referenceId: userId } });
+        await tx.user.update({
+          where: { id: userId },
+          data: { mustChangePassword: false },
+        });
+        await assertHeld();
       });
-    });
-    return result;
-  });
+      return result;
+    },
+  );
 }
 
 /**
@@ -517,9 +505,9 @@ export async function resetUserPassword(
     );
   }
   const { target, revoked } = await withUserCredentialLock(
-    db,
     input.userId,
-    async () => {
+    "weaver-password-reset",
+    async (assertHeld) => {
       const result = await db.$transaction(async (tx) => {
         const target = await tx.user.findUnique({
           where: { id: input.userId },
@@ -539,11 +527,14 @@ export async function resetUserPassword(
         });
         return { target, revoked: { apiKeys, oauthConsents: consents } };
       });
+      await assertHeld();
       await administrator.setPassword({
         userId: input.userId,
         password: input.password,
       });
+      await assertHeld();
       await administrator.revokeSessions({ userId: input.userId });
+      await assertHeld();
       return result;
     },
   );

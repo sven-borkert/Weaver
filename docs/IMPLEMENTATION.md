@@ -746,6 +746,12 @@ setup help on Account › API keys
 uses the configured `MCP_RESOURCE_URL` and offers copyable API-key setup for
 Claude Code, Codex, OpenCode, Claude Desktop (`mcp-remote`), and ChatGPT Desktop
 (shared Codex configuration), with links to client documentation.
+Personal key updates compare and increment the Weaver-owned `policyRevision`
+alongside the policy and restrictions. Key usage does not advance that revision.
+[Credential serialization](../packages/auth/src/userCredentialLock.ts) uses
+a dedicated database connection shared by key issuance, password changes and
+resets, deactivation, and OAuth consent writes. This leaves the application
+pool available for the credential operation.
 Project machine credentials use separate `ProjectApiKey`/`ProjectApiKeyGrant`
 models and [`ProjectMachineContext`](../packages/core/src/security/projectMachine.ts),
 with an immutable project binding and no user authority. Their secret prefix is
@@ -1195,6 +1201,9 @@ stores its latest saved body. Writes use project Editor access, a per-project
 transaction lock, and revision checks. Project Viewers can read. Weaver's
 database backups cover the area. The separate model keeps its content outside
 the Git worktree, Git sync, and Git projection rebuilds.
+The editor retains its in-memory draft under the same principal when the
+project, folder list, or detail returns a session error. The screen hides the
+editor and suspends writes until those queries confirm access after sign-in.
 
 [`EditorToolbar`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/EditorToolbar.tsx>)
 provides permanent formatting and insertion controls in the shared page header,
@@ -1702,12 +1711,14 @@ hold one owner + scope + output-project task and its run history. A succeeded
 run keeps its own `outputProjectId`, `outputDocumentId` and `outputCommitSha`, so
 history links survive a later change of the task's output project; the document
 page accepts `?version=<sha>` to open a comparison against a saved version.
-A task's output target is `outputDocumentId` (an existing document or one the
+A task's output target is `outputDocumentId` (an existing Markdown document or one the
 task creates under `outputTitle` in `outputFolderPath`) with `outputMode`
 `replace` or `update` (migration `20261003150000_scheduled_task_output_target`);
 `20261115090000_scheduled_task_output_owner` makes non-null output IDs unique and refuses existing duplicate owners without changing their data.
 Update-mode publication uses the document ID and revision captured before generation; intervening edits produce `OUTPUT_CONFLICT`.
-the create/edit dialog is tabbed (General, Instructions, Focus, Tools, Output).
+The runner checks the target's committed kind before generation so legacy
+tasks targeting Python fail with `OUTPUT_KIND`. The create/edit dialog is
+tabbed (General, Instructions, Focus, Tools, Output).
 [`packages/core/src/services/scheduledTasks.ts`](../packages/core/src/services/scheduledTasks.ts)
 is the policy owner: CRUD, pause/resume/run-now, the §5 owner/project limits,
 and the per-task `SELECT … FOR UPDATE` lease/skip/fail/succeed transitions
@@ -1799,7 +1810,7 @@ mirrors roles without storing exam content in Git.
 
 [`exams.ts`](../packages/core/src/services/exams.ts) owns PostgreSQL definitions
 and lifecycle; [`examAttempts.ts`](../packages/core/src/services/examAttempts.ts)
-owns immutable attempt snapshots (choices shuffled once at start), server deadlines, sequence-ordered answer saves,
+owns immutable attempt snapshots (choices shuffled once at start), server deadlines, revision-checked answer saves,
 submission and revision-guarded grade proposals and release. The browser-safe
 [`exams/schema.ts`](../packages/core/src/exams/schema.ts) supplies validation,
 partial-credit scoring and the answer-safe trainee projection. All services intersect membership,
@@ -1813,9 +1824,13 @@ after question reordering to preserve valid free-text payloads.
 [`ExamTextarea`](<../apps/web/src/app/(workspace)/projects/[projectId]/exams/_components/ExamTextarea.tsx>) sizes editor text fields to their contents and width so only the page scrolls.
 The trainee attempt screen fetches current answers before mounting its local
 autosave form on each visit, preserving that draft across later refreshes.
+Each save carries the acknowledged answer sequence separately from the
+proposed sequence. Retries preserve the original request until it is acknowledged.
 `exams/results` owns the trainee's completed-attempt table and the trainer's
 cursor-paged ongoing, submitted, review and released-result tables, with explicit row
-actions. [`DeleteAttemptButton`](<../apps/web/src/app/(workspace)/projects/[projectId]/exams/_components/DeleteAttemptButton.tsx>) confirms deletion from results and the trainee's ongoing-attempt card.
+actions. The trainee's `exam.listOwnAttempts` reads titles from attempt snapshots
+and also supplies resume links for attempts missing from the current catalog.
+[`DeleteAttemptButton`](<../apps/web/src/app/(workspace)/projects/[projectId]/exams/_components/DeleteAttemptButton.tsx>) confirms deletion from results and the trainee's ongoing-attempt card.
 `exam.deleteAttempt` delegates to the session-only `deleteAttempt` service: trainers
 can delete project attempts; trainees can delete their own. The service locks the
 exam then the attempt and cascades answer deletion. New starts use the highest
@@ -3474,6 +3489,14 @@ The main runtime boundaries now include:
   [CI image publication](../deploy/ci/build-images.sh) freezes the four staged
   image digests in a registry manifest. A retry publishes from those digests,
   and floating tags follow the complete immutable release.
+
+## November 18 v0.1.245 review fixes
+
+- [Document writes and history](../packages/core/src/services/documents.ts) enforce committed identity and live write access, and filter history before pagination. [Project API operations](../packages/core/src/projectApi/operations.ts) require successful projection repair and record deterministic precondition failures against their idempotency keys.
+- [Table paths](../packages/core/src/tables/paths.ts) share bounded collision allocation with Git pull. [Wiki changes](../packages/core/src/services/wikiReads.ts) page over a fixed Git traversal, [wiki revert](../packages/core/src/services/wikiRevert.ts) finalizes under its lease, and [search](../packages/core/src/services/search.ts) expands the vector candidate window within a fixed budget.
+- [Assistant admission](../packages/core/src/services/assistantRuns.ts) returns a committed run even when dispatch bookkeeping fails. The [runner](../packages/ai/src/runner.ts) preserves Unicode characters across event boundaries and records filtered responses as failures with usage. [Peer transfers](../packages/core/src/services/remoteInstances/transfer.ts) return confirmed receipts, and the [outbound MCP client](../packages/external-mcp/src/client.ts) attempts bounded server-side session termination.
+- [Artifact deletion](../packages/core/src/services/artifacts.ts) and [import deletion](../packages/core/src/services/ingestion.ts) leave deferred reclamation to storage sweeps. The [OneNote reader](../packages/ingestion/native/onenote-reader/src/lib.rs) budgets tables and indexes retained content. [Import analysis](../packages/ingestion/src/analyzeStage.ts) and [OCR](../packages/ingestion/src/ocr.ts) account for known usage on failed or cancelled calls. The [math sampler](../packages/core/src/editor/plot-spec.ts) splits curves at discontinuities before browser and PDF rendering.
+- [Nightly integration](../.github/workflows/integration.yml) generates the test encryption key and verifies setup with a router call. [Image promotion](../deploy/ci/build-images.sh) checks release eligibility inside CI serialization. [Upgrade cleanup](../deploy/weaver-upgrade) preserves the cached rollback release on same-version installs.
 
 ## Implementation status
 

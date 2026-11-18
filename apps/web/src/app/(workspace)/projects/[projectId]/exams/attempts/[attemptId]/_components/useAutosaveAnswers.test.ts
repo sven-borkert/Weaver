@@ -21,6 +21,7 @@ const state = {
     value,
     status: "saved" as const,
     sequence: 8,
+    baseSequence: 8,
     savedAt: null,
     attempts: 0,
   },
@@ -122,7 +123,7 @@ it("debounces quick edits and flush waits for acknowledgement", async () => {
   });
   expect(mock.save).toHaveBeenCalledTimes(1);
   expect(mock.save).toHaveBeenCalledWith(
-    expect.objectContaining({ sequence: 11, text: "abc" }),
+    expect.objectContaining({ sequence: 11, baseSequence: 8, text: "abc" }),
   );
   await act(async () => {
     await get().flush();
@@ -319,7 +320,46 @@ it("preserves edits made during recovery until the user chooses to save them", a
     await get().flush();
   });
   expect(mock.save).toHaveBeenLastCalledWith(
-    expect.objectContaining({ sequence: 31, text: "typed during recovery" }),
+    expect.objectContaining({
+      sequence: 31,
+      baseSequence: 30,
+      text: "typed during recovery",
+    }),
+  );
+  expect(get().pendingCount).toBe(0);
+});
+
+it("retries the exact edit with a lost receipt before sending subsequent typing", async () => {
+  vi.useFakeTimers();
+  mock.save
+    .mockRejectedValueOnce(new Error("response lost"))
+    .mockResolvedValue({
+      outcome: "saved",
+      savedAt: new Date(),
+      timing: recoveryTiming,
+    });
+  const get = await harness();
+  await act(async () => {
+    get().setText("q", "first edit");
+    await vi.advanceTimersByTimeAsync(750);
+    get().setText("q", "later edit");
+    await vi.advanceTimersByTimeAsync(751);
+  });
+  expect(mock.save).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      baseSequence: 8,
+      sequence: 9,
+      text: "first edit",
+    }),
+  );
+  expect(mock.save).toHaveBeenNthCalledWith(
+    3,
+    expect.objectContaining({
+      baseSequence: 9,
+      sequence: 10,
+      text: "later edit",
+    }),
   );
   expect(get().pendingCount).toBe(0);
 });

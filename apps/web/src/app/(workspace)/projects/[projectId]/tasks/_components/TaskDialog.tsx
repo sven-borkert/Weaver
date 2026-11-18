@@ -166,6 +166,7 @@ function TaskDialogForm({
     {
       projectId,
       pageSize: 100,
+      kind: "markdown",
       sort: "title",
       dir: "asc",
       ...(debouncedDocumentSearch ? { search: debouncedDocumentSearch } : {}),
@@ -615,7 +616,7 @@ function TaskDialogForm({
                     >
                       {[
                         ...(targetDocumentId &&
-                        currentTarget.data &&
+                        currentTarget.data?.content.kind === "markdown" &&
                         !(documents.data?.items ?? []).some(
                           (d) => d.id === targetDocumentId,
                         )

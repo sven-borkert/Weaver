@@ -140,18 +140,11 @@ function routeFingerprint(snapshot: LlmModelSnapshot): string {
     .digest("hex");
 }
 
-/** The target's present Markdown for an `update` task; null when there is nothing to revise yet. */
-async function readCurrentOutput(
+async function getCurrentOutput(
   db: PrismaClient,
   task: LeasedTaskRun["task"],
   actor: EnrichedActor,
-  inputBytes: number,
-): Promise<{
-  documentId: string;
-  baseCommitSha: string;
-  text: string;
-  truncated: boolean;
-} | null> {
+): Promise<Awaited<ReturnType<typeof getDocument>> | null> {
   if (!task.outputDocumentId) return null;
   try {
     const current = await getDocument(
@@ -159,19 +152,31 @@ async function readCurrentOutput(
       { projectId: task.outputProjectId, documentId: task.outputDocumentId },
       actor,
     );
-    const body = documentContentText(current.content);
-    // A quarter of the input at most, so the document cannot crowd out the material.
-    const cut = cutToBytes(body, Math.max(1_024, Math.floor(inputBytes / 4)));
-    return {
-      documentId: current.id,
-      baseCommitSha: current.baseCommitSha,
-      text: cut,
-      truncated: cut !== body,
-    };
+    if (current.content.kind !== "markdown")
+      throw new TaskRunFailure(
+        "OUTPUT_KIND",
+        "choose a Markdown document for the report",
+      );
+    return current;
   } catch (error) {
     if (isCoreError(error) && error.code === "NOT_FOUND") return null;
     throw error;
   }
+}
+
+function readCurrentOutput(
+  current: Awaited<ReturnType<typeof getDocument>>,
+  inputBytes: number,
+) {
+  const body = documentContentText(current.content);
+  // A quarter of the input at most, so the document cannot crowd out the material.
+  const cut = cutToBytes(body, Math.max(1_024, Math.floor(inputBytes / 4)));
+  return {
+    documentId: current.id,
+    baseCommitSha: current.baseCommitSha,
+    text: cut,
+    truncated: cut !== body,
+  };
 }
 
 async function writeOutput(
@@ -182,7 +187,7 @@ async function writeOutput(
   provenance: DocumentProvenance,
   summary: string,
   repo: Parameters<typeof writeDocumentInRepo>[1],
-  currentDocument: Awaited<ReturnType<typeof readCurrentOutput>>,
+  currentDocument: ReturnType<typeof readCurrentOutput> | null,
 ): Promise<DocumentResult> {
   const create = async () => {
     try {
@@ -217,20 +222,12 @@ async function writeOutput(
     if (!currentDocument) return create();
     baseline = currentDocument;
   } else {
-    try {
-      const current = await getDocument(
-        db,
-        { projectId: task.outputProjectId, documentId: task.outputDocumentId },
-        actor,
-      );
-      baseline = {
-        documentId: current.id,
-        baseCommitSha: current.baseCommitSha,
-      };
-    } catch (error) {
-      if (isCoreError(error) && error.code === "NOT_FOUND") return create();
-      throw error;
-    }
+    const current = await getCurrentOutput(db, task, actor);
+    if (!current) return create();
+    baseline = {
+      documentId: current.id,
+      baseCommitSha: current.baseCommitSha,
+    };
   }
   try {
     const result = await writeDocumentInRepo(
@@ -305,6 +302,7 @@ async function runTask(
       "the owner can no longer write to the output project",
     );
   }
+  const output = await getCurrentOutput(db, task, actor);
   const systemPrompt = hasExternal
     ? EXTERNAL_TASK_SYSTEM_PROMPT
     : TASK_SYSTEM_PROMPT;
@@ -348,8 +346,8 @@ async function runTask(
   if (outputTokens < 1)
     throw new ExternalInputFailure("EXTERNAL_CONTEXT_LIMIT");
   const currentDocument =
-    task.outputMode === "update"
-      ? await readCurrentOutput(db, task, actor, budget.inputBytes)
+    task.outputMode === "update" && output
+      ? readCurrentOutput(output, budget.inputBytes)
       : null;
   let context: Awaited<ReturnType<typeof assembleTaskContext>>;
   try {

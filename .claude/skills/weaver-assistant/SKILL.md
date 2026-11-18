@@ -337,7 +337,7 @@ that only appears once the model answers _using_ what it read. `errors.ts` class
 drives the event order: `run.started` → (`text.delta` | `tool.call` →
 `tool.result` → optional `citation`/`proposal.created`)* → `usage` →
 exactly one of `run.completed` / `run.failed` / `run.cancelled` (full union
-in `packages/core/src/assistant/events.ts`).
+in `packages/core/src/assistant/events.ts`). Text deltas preserve whole Unicode code points across provider and persistence boundaries. A provider `content-filter` finish fails with `CONTENT_FILTERED` and keeps billed step usage.
 
 ## Execution and retries
 
@@ -692,7 +692,7 @@ Discovery is bounded to 500 tools, 20 pages, 2 MiB total and 64 KiB per definiti
 local JSON Schema references remain supported, unavailable schemas stay visible.
 Arguments are capped at 16 KiB, wire responses at 256 KiB and model-visible results
 at 16,000 characters. No stdio, SSE-only fallback, per-user OAuth to the remote server, sampling,
-elicitation, automatic resource ingestion or automatic call replay.
+elicitation, automatic resource ingestion or automatic call replay. Closing a session attempts bounded Streamable HTTP termination when the server assigned a session ID. Cleanup failures are isolated from the completed catalog or tool operation.
 
 The browser fixture personas `e2e external read` and `e2e external set <integer>`
 select tools by synthetic descriptions among the actual supplied `ext_` schemas.

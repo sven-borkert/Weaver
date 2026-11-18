@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import simpleGit from "simple-git";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 import { registerKnowledgeJobHandlers } from "@weaver/core/jobs/runtime";
 import { knowledgeSystemContextForTests } from "@weaver/core/jobs/systemContext";
@@ -13,7 +13,11 @@ import {
 } from "@weaver/core/services/wikiRevert";
 import { rollingDestructiveChars } from "@weaver/core/services/wikiRunSession";
 import { getRun, listRuns } from "@weaver/core/services/wikiRunViews";
-import { endRun, type LeasedWikiRun } from "@weaver/core/services/wikiRuns";
+import {
+  cancelRun,
+  endRun,
+  type LeasedWikiRun,
+} from "@weaver/core/services/wikiRuns";
 import { disableWiki, revokeAgent } from "@weaver/core/services/wikiSettings";
 import {
   addMembership,
@@ -138,6 +142,47 @@ describe("wiki revert", () => {
     });
     expect(item.status).toBe("reverted");
     expect(item.outcomeNote).toContain("reverted");
+  }, 60_000);
+
+  it("keeps the source items and report unchanged when cancelled just before finalization", async () => {
+    const p = await wikiProject();
+    const source = await finishedRun(p);
+    const { runId } = await startRevert(p.db, p.security, {
+      projectId: p.projectId,
+      runId: source.lease.id,
+    });
+    const update = p.db.wikiRunOperation.update.bind(p.db.wikiRunOperation);
+    let committed = 0;
+    const intercept = vi
+      .spyOn(p.db.wikiRunOperation, "update")
+      .mockImplementation((async (args: Parameters<typeof update>[0]) => {
+        const result = await update(args);
+        if (
+          args.where.runId_n?.runId === runId &&
+          args.data.status === "committed" &&
+          ++committed === 2
+        ) {
+          await cancelRun(p.db, p.security, { projectId: p.projectId, runId });
+        }
+        return result;
+      }) as unknown as typeof update);
+    try {
+      await executeWikiRevert(p.db, runId, { workerId: "spec" });
+    } finally {
+      intercept.mockRestore();
+    }
+    expect(
+      await p.db.wikiRun.findUnique({ where: { id: runId } }),
+    ).toMatchObject({
+      status: "cancelled",
+      report: null,
+      summary: null,
+    });
+    expect(
+      await p.db.wikiInputItem.findUnique({
+        where: { id: source.items[0]!.id },
+      }),
+    ).toMatchObject({ status: "processed", outcomeNote: "Done." });
   }, 60_000);
 
   it("keeps a page's earlier properties and exemption when restoring", async () => {

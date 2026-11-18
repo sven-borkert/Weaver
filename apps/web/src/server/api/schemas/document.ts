@@ -1,5 +1,6 @@
 import { validateDocumentContent } from "@weaver/core/editor/markdown";
 import { documentTitleSchema } from "@weaver/core/documents/title";
+import { DOCUMENT_KIND_NAMES } from "@weaver/core/documents/kinds";
 import {
   MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS,
   MAX_MARKDOWN_CHARS,
@@ -137,6 +138,7 @@ export const listDocumentsInput = z.object({
     .describe("Case-insensitive document title substring")
     .optional(),
   type: z.string().trim().min(1).max(40).optional(),
+  kind: z.enum(DOCUMENT_KIND_NAMES).optional(),
   tag: z.string().trim().min(1).max(40).optional(),
   includeSummary: z.boolean().default(false),
   sort: z

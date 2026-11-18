@@ -1,8 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { PrismaPg } from "@prisma/adapter-pg";
+import { PrismaClient } from "@weaver/db/client";
 import { openProjectRepo } from "@weaver/git-store";
-import { createBearerVerifiers, createUserAdministrator } from "@weaver/auth";
 import {
+  createBearerVerifiers,
+  createPasswordChanger,
+  createUserAdministrator,
+  createWeaverAuth,
+} from "@weaver/auth";
+import {
+  changeOwnPassword,
   createUser,
   deactivateUser,
   getUser,
@@ -29,11 +37,23 @@ import {
   TEST_PASSWORD,
 } from "./_harness";
 import {
+  authorizeUrl,
   exchangeRefreshToken,
   insertOAuthClient,
   obtainAccessToken,
+  pkce,
+  redirectTargetOf,
   sessionCookieFor,
+  TEST_ORIGIN,
 } from "./_oauth";
+
+function latch() {
+  let release!: () => void;
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { wait, release };
+}
 
 async function committedMembers(projectId: string) {
   const repo = await openProjectRepo(projectId);
@@ -614,6 +634,217 @@ describe("user administration", () => {
     });
     expect(signIn.user.id).toBe(member.id);
   });
+
+  it.each([1, 2])(
+    "serializes password changes and resets with %i application connections",
+    async (max) => {
+      const admin = securityContextFor(
+        await makeUser("Admin", `small-pool-admin-${max}`),
+      );
+      const user = await makeUser("User", `small-pool-user-${max}`);
+      const db = new PrismaClient({
+        adapter: new PrismaPg({
+          connectionString: process.env.DATABASE_URL!,
+          max,
+          connectionTimeoutMillis: 1_000,
+        }),
+      });
+      const auth = createWeaverAuth({
+        db,
+        secret: process.env.AUTH_SECRET!,
+        baseURL: "http://localhost:3000",
+      });
+      const administrator = createUserAdministrator(auth);
+      const changer = createPasswordChanger(auth);
+      const initialPassword = "initial-reset-password";
+      const freshPassword = "self-service-password";
+      const finalPassword = "last-reset-password";
+      const reset = (password: string, adminPort = administrator) =>
+        resetUserPassword(db, admin, { userId: user.id, password }, adminPort);
+      const change = (
+        cookie: string,
+        currentPassword: string,
+        newPassword: string,
+        beforeProvider?: () => void,
+      ) =>
+        changeOwnPassword(db, user.id, () => {
+          beforeProvider?.();
+          return changer.change({
+            headers: new Headers({ cookie }),
+            currentPassword,
+            newPassword,
+          });
+        });
+      try {
+        await reset(initialPassword);
+        await change(
+          await sessionCookieFor(user.email, initialPassword),
+          initialPassword,
+          freshPassword,
+        );
+        expect(
+          await db.user.findUnique({ where: { id: user.id } }),
+        ).toMatchObject({
+          mustChangePassword: false,
+        });
+        const staleCookie = await sessionCookieFor(user.email, freshPassword);
+        const waiting = latch();
+        const paused = latch();
+        let sessionsRevoked = false;
+        const pendingReset = reset(finalPassword, {
+          ...administrator,
+          async setPassword(input) {
+            waiting.release();
+            await paused.wait;
+            return administrator.setPassword(input);
+          },
+          async revokeSessions(input) {
+            await administrator.revokeSessions(input);
+            sessionsRevoked = true;
+          },
+        });
+        await Promise.race([waiting.wait, pendingReset]);
+        let changeAfterRevocation: boolean | undefined;
+        const pendingChange = change(
+          staleCookie,
+          freshPassword,
+          "stale-change-password",
+          () => {
+            changeAfterRevocation = sessionsRevoked;
+          },
+        );
+        paused.release();
+        const [resetResult, changeResult] = await Promise.allSettled([
+          pendingReset,
+          pendingChange,
+        ]);
+        expect(resetResult).toMatchObject({
+          status: "fulfilled",
+          value: { user: { mustChangePassword: true } },
+        });
+        expect(changeResult).toMatchObject({
+          status: "rejected",
+          reason: { status: "UNAUTHORIZED" },
+        });
+        expect(changeAfterRevocation).toBe(true);
+        expect(
+          await auth.api.signInEmail({
+            body: { email: user.email, password: finalPassword },
+          }),
+        ).toMatchObject({ user: { id: user.id, mustChangePassword: true } });
+      } finally {
+        await db.$disconnect();
+      }
+    },
+    30_000,
+  );
+
+  it("keeps the sole application connection available while consent and deactivation wait on a password change", async () => {
+    const admin = securityContextFor(
+      await makeUser("Admin", "shared-lock-admin"),
+    );
+    const user = await makeUser("User", "shared-lock-user");
+    await ensureOAuthResource();
+    await insertOAuthClient();
+    const db = new PrismaClient({
+      adapter: new PrismaPg({
+        connectionString: process.env.DATABASE_URL!,
+        max: 1,
+        connectionTimeoutMillis: 1_000,
+      }),
+    });
+    try {
+      const auth = createWeaverAuth({
+        db,
+        secret: process.env.AUTH_SECRET!,
+        baseURL: TEST_ORIGIN,
+        mcp: {
+          resource: TEST_MCP_RESOURCE,
+          loginPage: "/login",
+          consentPage: "/consent",
+        },
+      });
+      const consentCookie = await sessionCookieFor(user.email);
+      const passwordCookie = await sessionCookieFor(user.email);
+      const authorize = await auth.handler(
+        new Request(authorizeUrl(pkce().challenge, "mcp:use content:read"), {
+          headers: { cookie: consentCookie },
+        }),
+      );
+      const consentUrl = new URL(
+        await redirectTargetOf(authorize),
+        TEST_ORIGIN,
+      );
+      expect(consentUrl.pathname).toBe("/consent");
+
+      const waiting = latch();
+      const paused = latch();
+      const change = changeOwnPassword(db, user.id, async () => {
+        waiting.release();
+        await paused.wait;
+        return createPasswordChanger(auth).change({
+          headers: new Headers({ cookie: passwordCookie }),
+          currentPassword: TEST_PASSWORD,
+          newPassword: "changed-before-deactivation",
+        });
+      });
+      await Promise.race([waiting.wait, change]);
+      const consent = auth.handler(
+        new Request(`${TEST_ISSUER}/oauth2/consent`, {
+          method: "POST",
+          headers: {
+            cookie: consentCookie,
+            origin: TEST_ORIGIN,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            accept: true,
+            oauth_query: consentUrl.search.slice(1),
+          }),
+        }),
+      );
+      const deactivation = deactivateUser(
+        db,
+        admin,
+        {
+          userId: user.id,
+          reason: "Deactivation queued while changing password",
+        },
+        createUserAdministrator(auth),
+      );
+      const completion = Promise.allSettled([change, consent, deactivation]);
+      try {
+        await vi.waitFor(async () => {
+          const [row] = await getPrisma().$queryRaw<{ waiting: number }[]>`
+            SELECT count(*)::int AS waiting
+            FROM pg_locks AS l JOIN pg_stat_activity AS a USING (pid)
+            WHERE l.locktype = 'advisory' AND NOT l.granted AND a.datname = current_database()
+                  AND l.classid = ((hashtextextended(${`weaver:user-credentials:${user.id}`}, 0) >> 32) & 4294967295)::oid
+              AND l.objid = (hashtextextended(${`weaver:user-credentials:${user.id}`}, 0) & 4294967295)::oid
+          `;
+          expect(row?.waiting).toBe(2);
+        });
+      } finally {
+        paused.release();
+        await completion;
+      }
+      const [changed, consentResult, deactivated] = await completion;
+      expect(changed.status).toBe("fulfilled");
+      expect(consentResult).toMatchObject({
+        status: "fulfilled",
+        value: { status: 403 },
+      });
+      expect(deactivated).toMatchObject({
+        status: "fulfilled",
+        value: { active: false },
+      });
+      expect(await db.oauthConsent.count({ where: { userId: user.id } })).toBe(
+        0,
+      );
+    } finally {
+      await db.$disconnect();
+    }
+  }, 30_000);
 
   it("resets a password and revokes the user's API keys and OAuth grants, which stay revoked after the forced change", async () => {
     const admin = await makeUser("Admin", "reset-creds");

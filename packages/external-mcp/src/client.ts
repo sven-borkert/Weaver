@@ -19,6 +19,8 @@ import {
 } from "./schemas";
 import type { ExternalMcpTransport, JsonObject, RemoteCatalog } from "./types";
 
+const SESSION_TERMINATION_TIMEOUT_MS = 2_000;
+
 export function createExternalMcpTransport({
   fetchImpl,
 }: {
@@ -43,6 +45,7 @@ export function createExternalMcpTransport({
         signal,
         fetchImpl: guardedFetch,
       });
+      let terminationFetch: typeof fetch | undefined;
       const client = new Client(
         { name: "weaver-external-mcp", version: "1" },
         {
@@ -55,7 +58,10 @@ export function createExternalMcpTransport({
       const transport = new StreamableHTTPClientTransport(
         endpointUrl(options.endpoint),
         {
-          fetch: http.fetch,
+          fetch: (input, init) =>
+            init?.method === "DELETE" && terminationFetch
+              ? terminationFetch(input, { ...init, signal: undefined })
+              : http.fetch(input, init),
           onInsufficientScope: "throw",
           reconnectionOptions: {
             maxRetries: 0,
@@ -98,13 +104,29 @@ export function createExternalMcpTransport({
             : undefined;
         },
       });
-      let closed = false;
+      let closing: Promise<void> | undefined;
       let busy = false;
       let catalog: RemoteCatalog | undefined;
+      function close(): Promise<void> {
+        closing ??= (async () => {
+          controller.abort();
+          if (transport.sessionId) {
+            // A failed handshake can already have aborted the SDK transport.
+            terminationFetch = createBoundedFetch({
+              ...options,
+              signal: AbortSignal.timeout(SESSION_TERMINATION_TIMEOUT_MS),
+              fetchImpl: guardedFetch,
+            }).fetch;
+            await transport.terminateSession().catch(() => undefined);
+          }
+          await client.close().catch(() => undefined);
+        })();
+        return closing;
+      }
       async function run<T>(
         operation: (requestSignal: AbortSignal) => Promise<T>,
       ) {
-        if (closed) throw new ExternalMcpError("CLOSED");
+        if (closing) throw new ExternalMcpError("CLOSED");
         if (busy) throw new ExternalMcpError("BUSY");
         busy = true;
         const requestSignal = AbortSignal.any([
@@ -146,8 +168,7 @@ export function createExternalMcpTransport({
           client.connect(transport, { signal, timeout: timeoutMs }),
         );
       } catch (error) {
-        controller.abort();
-        await client.close();
+        await close();
         throw error;
       }
       async function discover(): Promise<RemoteCatalog> {
@@ -243,12 +264,7 @@ export function createExternalMcpTransport({
             };
           });
         },
-        async close() {
-          if (closed) return;
-          closed = true;
-          controller.abort();
-          await client.close();
-        },
+        close,
       };
     },
   };

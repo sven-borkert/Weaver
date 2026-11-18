@@ -4,7 +4,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./constants": "./src/constants.ts"
+    "./constants": "./src/constants.ts",
+    "./credential-lock": "./src/userCredentialLock.ts"
   },
   "scripts": {
     "lint": "eslint src scripts",
@@ -19,7 +20,8 @@
     "@better-auth/mcp": "1.7.2",
     "@better-auth/oauth-provider": "1.7.2",
     "better-auth": "1.7.2",
-    "jose": "^6.2.9"
+    "jose": "^6.2.9",
+    "pg": "^8.23.0"
   },
   "devDependencies": {
     "typescript": "~5.9.3",

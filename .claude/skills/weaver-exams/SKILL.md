@@ -62,6 +62,9 @@ changes so long prompts do not create nested vertical scrolling.
 On every attempt-page visit, fetch the current attempt before initializing the
 answer form; cached answers can predate autosaves. Keep the initialized form
 mounted during later refreshes and transient errors so local edits survive.
+Send the last acknowledged `baseSequence` with the proposed `sequence`.
+Retry the same request when its acknowledgement is lost, then submit any
+subsequent typing against that confirmed revision.
 Stale autosave acknowledgements recover with `getAttempt.fetch` and `staleTime: 0`;
 the returned answer sequence must reach the server-reported sequence before it is
 saved locally. Preserve edits made during recovery and rebase their sequence above
@@ -69,7 +72,9 @@ the recovered answer. A failed or older recovery remains unacknowledged.
 
 Keep completed attempts on `exams/results`, with role-specific tables and explicit
 Open/Review actions, separate from exam creation and starting attempts. Trainer
-results preserve cursor pagination and reset it on status changes. Render question
+results preserve cursor pagination and reset it on status changes. Trainee results
+read `exam.listOwnAttempts`, using saved titles and showing resume links for open
+attempts whose exam leaves the catalog. Render question
 prompts through `ExamQuestionPrompt`, including code-example dialogs outside
 disabled answer/grading controls. Questions must be self-contained: referenced
 code goes in fenced Markdown blocks in `prompt`, never only in `expectedAnswer`.

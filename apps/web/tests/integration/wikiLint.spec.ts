@@ -149,6 +149,32 @@ describe("list_recent_changes ancestry boundary", () => {
       cursor = page.nextCursor;
     }
     expect(collected.sort()).toEqual([...seen].sort());
+
+    const all = await listRecentChanges(
+      f.db,
+      { projectId: f.project.id },
+      f.security,
+    );
+    expect(all.changes.map((entry) => entry.sha)).toContain(shas.side);
+    const paged: string[] = [];
+    cursor = undefined;
+    for (let i = 0; i < all.changes.length; i++) {
+      const page = await listRecentChanges(
+        f.db,
+        { projectId: f.project.id, cursor, limit: 1 },
+        f.security,
+      );
+      paged.push(...page.changes.map((entry) => entry.sha));
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+      if (i === 0) {
+        await withProjectRepo(f.project.id, async (repo) => {
+          await repo.writeFileAtomic("next.md", "next\n");
+          await repo.commitAll("create: next.md", AUTHOR);
+        });
+      }
+    }
+    expect(paged).toEqual(all.changes.map((entry) => entry.sha));
   }, 30_000);
 });
 

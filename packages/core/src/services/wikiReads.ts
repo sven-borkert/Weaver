@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@weaver/db/client";
-import { openProjectRepo, type GitChangeEntry } from "@weaver/git-store";
+import { openProjectRepo } from "@weaver/git-store";
 import { CoreError } from "../errors";
 import { normalizeKnowledgeName } from "../knowledge/extraction";
 import { changeKindOf, type WikiChangeKind } from "../wiki/changeKinds";
@@ -299,62 +299,104 @@ function oneLine(text: string, max: number): string {
     .slice(0, max);
 }
 
+type RecentChangesCursor = [string, string, number, number | null];
+
+function decodeRecentChangesCursor(
+  encoded: string,
+  projectId: string,
+  since: number | null,
+): RecentChangesCursor {
+  if (encoded.length <= 200 && /^[A-Za-z0-9_-]+$/.test(encoded)) {
+    try {
+      const value: unknown = JSON.parse(
+        Buffer.from(encoded, "base64url").toString("utf8"),
+      );
+      if (
+        Array.isArray(value) &&
+        value.length === 4 &&
+        value[0] === projectId &&
+        typeof value[1] === "string" &&
+        SHA_RE.test(value[1]) &&
+        typeof value[2] === "number" &&
+        Number.isSafeInteger(value[2]) &&
+        value[2] >= 0 &&
+        value[3] === since
+      )
+        return value as RecentChangesCursor;
+    } catch {
+      /* falls through */
+    }
+  }
+  throw invalidCursorError();
+}
+
 /** Project-wide commit feed, newest first, with the kind taken from trusted operation-id prefixes. */
 export async function listRecentChanges(
   db: PrismaClient,
   input: { projectId: string; since?: Date; cursor?: string; limit?: number },
   actor: SecurityContext,
-): Promise<{ changes: RecentChange[]; nextCursor: string | null }> {
+): Promise<{
+  changes: RecentChange[];
+  nextCursor: string | null;
+  changeCursors: string[];
+}> {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   const limit = Math.max(
     1,
     Math.min(input.limit ?? RECENT_CHANGES_LIMIT, RECENT_CHANGES_LIMIT),
   );
-  if (input.cursor !== undefined && !SHA_RE.test(input.cursor))
-    throw invalidCursorError();
+  const since = input.since;
+  const sinceTime = since?.getTime() ?? null;
+  const cursor =
+    input.cursor === undefined
+      ? null
+      : decodeRecentChangesCursor(input.cursor, input.projectId, sinceTime);
+  const empty = { changes: [], nextCursor: null, changeCursors: [] };
   const repo = await openProjectRepo(input.projectId);
-  if (!repo) return { changes: [], nextCursor: null };
+  if (!repo) return empty;
   let head: string;
   try {
     head = await repo.resolveHead();
   } catch {
-    return { changes: [], nextCursor: null };
+    return empty;
   }
-  if (
-    input.cursor !== undefined &&
-    !(await repo.isAncestor(input.cursor, head))
-  )
+  const tip = cursor?.[1] ?? head;
+  const start = cursor?.[2] ?? 0;
+  if (tip !== head && !(await repo.isAncestor(tip, head)))
     throw invalidCursorError();
-  const since = input.since;
-  let kept: GitChangeEntry[];
-  let nextCursor: string | null;
-  if (since === undefined) {
-    const entries = await repo.logChangesBefore(input.cursor ?? head, {
-      limit: limit + 1,
-    });
-    if (input.cursor !== undefined && entries[0]?.sha !== input.cursor)
-      throw invalidCursorError();
-    kept = entries.slice(0, limit);
-    nextCursor = entries.length <= limit ? null : entries[limit]!.sha;
-  } else {
-    // Untrusted dates cannot end the walk: the boundary is a trusted first-parent ancestor.
-    const boundary = await repo.firstParentTrustedBefore(head, since);
-    const shas = await repo.listCommitShas(head, {
-      exclude: boundary,
-      maxCount: MAX_RANGE_COMMITS,
-    });
-    const start = input.cursor === undefined ? 0 : shas.indexOf(input.cursor);
-    if (start === -1) throw invalidCursorError();
-    const entries = await repo.logChangesForShas(
-      shas.slice(start, start + limit),
-    );
-    kept = entries.filter(
-      (entry) => !(entry.trustedAuthor === true && entry.date < since),
-    );
-    nextCursor = shas[start + limit] ?? null;
-  }
+  const window =
+    since === undefined
+      ? limit + 1
+      : Math.min(limit + 1, MAX_RANGE_COMMITS - start);
+  if (window < 1) throw invalidCursorError();
+  // Untrusted dates cannot end the walk: the boundary is a trusted first-parent ancestor.
+  const boundary =
+    since === undefined
+      ? null
+      : await repo.firstParentTrustedBefore(tip, since);
+  const shas = await repo.listCommitShas(tip, {
+    exclude: boundary,
+    maxCount: window,
+    skip: start,
+  });
+  if (cursor && shas.length === 0) throw invalidCursorError();
+  const encode = (position: number) =>
+    Buffer.from(
+      JSON.stringify([
+        input.projectId,
+        tip,
+        position,
+        sinceTime,
+      ] satisfies RecentChangesCursor),
+    ).toString("base64url");
+  const entries = await repo.logChangesForShas(shas.slice(0, limit));
+  const kept = entries.flatMap((entry, index) =>
+    since !== undefined && entry.trustedAuthor === true && entry.date < since
+      ? []
+      : [{ entry, position: start + index }],
+  );
   const paths = new Set(
-    kept.flatMap((entry) =>
+    kept.flatMap(({ entry }) =>
       entry.changes.slice(0, MAX_CHANGES_PER_COMMIT).map((c) => c.path),
     ),
   );
@@ -364,7 +406,7 @@ export async function listRecentChanges(
   });
   const idByPath = new Map(documents.map((row) => [row.path, row.id]));
   return {
-    changes: kept.map((entry) => ({
+    changes: kept.map(({ entry }) => ({
       sha: entry.sha,
       date: entry.date.toISOString(),
       kind: changeKindOf(entry),
@@ -378,7 +420,8 @@ export async function listRecentChanges(
       })),
       moreChanges: entry.changes.length > MAX_CHANGES_PER_COMMIT,
     })),
-    nextCursor,
+    nextCursor: shas.length <= limit ? null : encode(start + limit),
+    changeCursors: kept.map(({ position }) => encode(position)),
   };
 }
 

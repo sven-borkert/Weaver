@@ -361,6 +361,7 @@ async function resolveOutputTarget(
   db: PrismaClient,
   input: TaskDefinitionInput,
   taskId: string | null,
+  retainedDocumentId?: string | null,
 ): Promise<{ documentId: string | null | undefined; title: string | null }> {
   const rawTitle = input.outputTitle?.trim() ?? "";
   if (rawTitle && !documentTitleSchema.safeParse(rawTitle).success)
@@ -372,17 +373,26 @@ async function resolveOutputTarget(
       field: "outputMode",
     });
   const documentId = input.outputDocumentId;
-  if (documentId) {
+  const chosenId = documentId === undefined ? retainedDocumentId : documentId;
+  if (chosenId) {
     const document = await db.document.findFirst({
-      where: { id: documentId, projectId: input.outputProjectId },
-      select: { id: true },
+      where: { id: chosenId, projectId: input.outputProjectId },
+      select: { kind: true },
     });
-    if (!document)
+    if (!document && documentId)
       throw new CoreError(
         "BAD_REQUEST",
         "The target document does not exist in this project",
         { field: "outputDocumentId" },
       );
+    if (document && document.kind !== "markdown")
+      throw new CoreError(
+        "BAD_REQUEST",
+        "Choose a Markdown document for the report",
+        { field: "outputDocumentId" },
+      );
+  }
+  if (documentId) {
     const other = await db.scheduledTask.findFirst({
       where: {
         outputDocumentId: documentId,
@@ -726,7 +736,14 @@ export async function updateTask(
     if (outputChanged)
       await assertProjectRole(db, input.outputProjectId, actor, "Editor");
     await assertOutputFolder(input.outputProjectId, input.outputFolderPath);
-    const target = await resolveOutputTarget(db, input, input.taskId);
+    const folderChanged =
+      existing.outputFolderPath.join("/") !== input.outputFolderPath.join("/");
+    const target = await resolveOutputTarget(
+      db,
+      input,
+      input.taskId,
+      outputChanged || folderChanged ? null : existing.outputDocumentId,
+    );
     const scopeSnapshot = await resolveScopeSnapshot(
       db,
       actor,
@@ -734,8 +751,6 @@ export async function updateTask(
     );
     const scheduleChanged =
       existing.cron !== valid.cron || existing.timezone !== valid.timezone;
-    const folderChanged =
-      existing.outputFolderPath.join("/") !== input.outputFolderPath.join("/");
     const externalInputs = await validateTaskExternalInputs(
       tx,
       existing.ownerId,

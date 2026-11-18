@@ -1,10 +1,13 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import type { ComponentProps } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted((): { role: string | null; error: unknown } => ({
-  role: "trainee",
-  error: null,
-}));
+const mocks = vi.hoisted(
+  (): { role: string | null; error: unknown; unavailableCatalog: boolean } => ({
+    role: "trainee",
+    error: null,
+    unavailableCatalog: false,
+  }),
+);
 const now = new Date();
 vi.mock("next/link", () => ({
   default: (props: ComponentProps<"a">) => <a {...props} />,
@@ -30,19 +33,41 @@ vi.mock("~/trpc/react", () => ({
       get: { useQuery: () => ({ data: { myTrainingRole: mocks.role } }) },
     },
     exam: {
-      listAvailable: {
+      listOwnAttempts: {
         useQuery: () => ({
           data: [
-            {
-              id: "exam",
-              title: "Safety",
-              attempts: [
-                attempt,
-                { ...attempt, id: "open", status: "in_progress" },
-              ],
-            },
+            { ...attempt, examTitle: "Safety at the time of the exam" },
+            ...(mocks.unavailableCatalog
+              ? [
+                  {
+                    ...attempt,
+                    id: "open-draft",
+                    status: "in_progress",
+                    examTitle: "Previous title",
+                  },
+                ]
+              : []),
           ],
           error: mocks.error,
+        }),
+      },
+      listAvailable: {
+        useQuery: () => ({
+          data: mocks.unavailableCatalog
+            ? undefined
+            : [
+                {
+                  id: "exam",
+                  title: "Safety",
+                  attempts: [
+                    attempt,
+                    { ...attempt, id: "open", status: "in_progress" },
+                  ],
+                },
+              ],
+          error: mocks.unavailableCatalog
+            ? new Error("Catalog unavailable")
+            : mocks.error,
         }),
       },
       listAttempts: {
@@ -82,6 +107,7 @@ afterEach(async () => {
   renderer = undefined;
   mocks.role = "trainee";
   mocks.error = null;
+  mocks.unavailableCatalog = false;
 });
 async function mount() {
   await act(async () => {
@@ -96,6 +122,9 @@ it("puts completed trainee attempts on Results and leaves ongoing attempts on Ex
   await mount();
   expect(renderer!.root.findAllByType("table")).toHaveLength(1);
   expect(links()).toContain("/projects/project/exams/attempts/result");
+  expect(JSON.stringify(renderer!.toJSON())).toContain(
+    "Safety at the time of the exam",
+  );
   expect(links()).not.toContain("/projects/project/exams/attempts/open");
 });
 it("replaces inline trainee result links on Exams with navigation to Results", async () => {
@@ -104,6 +133,15 @@ it("replaces inline trainee result links on Exams with navigation to Results", a
   });
   expect(links()).toContain("/projects/project/exams/results");
   expect(links()).not.toContain("/projects/project/exams/attempts/result");
+});
+
+it("shows the resume link for an ongoing attempt independently of its catalog entry", async () => {
+  mocks.unavailableCatalog = true;
+  await act(async () => {
+    renderer = create(<ExamsScreen projectId="project" />);
+  });
+  expect(links()).toContain("/projects/project/exams/attempts/open-draft");
+  expect(JSON.stringify(renderer!.toJSON())).toContain("Previous title");
 });
 it("paginates trainer results and resets pagination when the status changes", async () => {
   mocks.role = "trainer";

@@ -91,7 +91,9 @@ for i in $(seq 1 30); do
   if [ "$revision" = "$expected_sha" ] &&
     compose ps --format json agent-worker ingestion-worker mcp-server |
       jq -se 'map(if type == "array" then .[] else . end) | length == 3 and all(.[]; .State == "running" and .Health == "healthy")' >/dev/null; then
-    remove_old_images
+    if [ "$previous_tag" != "$image_tag" ]; then
+      remove_old_images
+    fi
     echo "upgraded to $expected_sha"
     exit 0
   fi

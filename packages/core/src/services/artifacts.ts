@@ -16,12 +16,8 @@ import {
 } from "../artifacts/filenames";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
-import { isBlobReferenced, retainedBytes } from "../ingestion/blobReferences";
-import {
-  deleteBlob,
-  openBlobStream,
-  promoteUpload,
-} from "../ingestion/blobStore";
+import { retainedBytes } from "../ingestion/blobReferences";
+import { openBlobStream, promoteUpload } from "../ingestion/blobStore";
 import { blobPath, DIGEST_RE, UUID_RE } from "../ingestion/paths";
 import { MAX_INGESTION_UPLOAD_FILES } from "../ingestion/limits";
 import {
@@ -34,7 +30,10 @@ import {
   requestNotebookPreparation,
   sweepArtifactNotebook,
 } from "./artifactNotebookJobs";
-import { withProjectIngestionLifecycleLock } from "./ingestion";
+import {
+  reclaimUnreferencedBlobs,
+  withProjectIngestionLifecycleLock,
+} from "./ingestion";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 
 type Db = PrismaClient | Prisma.TransactionClient;
@@ -223,24 +222,6 @@ export async function authorizeArtifactUpload(
   return { projectId: await projectIdFor(db, actor, projectId, "Editor") };
 }
 
-async function unlinkUnreferenced(
-  db: PrismaClient,
-  projectId: string,
-  digests: readonly string[],
-  dataDir: string,
-): Promise<number> {
-  if (digests.length === 0) return 0;
-  return withProjectIngestionLifecycleLock(db, projectId, async (tx) => {
-    let removed = 0;
-    for (const digest of new Set(digests)) {
-      if (await isBlobReferenced(tx, projectId, digest)) continue;
-      await deleteBlob(dataDir, projectId, digest);
-      removed += 1;
-    }
-    return removed;
-  });
-}
-
 async function reconcileLater(work: () => Promise<unknown>): Promise<void> {
   try {
     await work();
@@ -406,13 +387,11 @@ export async function finalizeArtifactUpload(
   );
 
   await reconcileLater(() => requestNotebookPreparation(stored.notebookJobs));
-  await reconcileLater(() =>
-    unlinkUnreferenced(
-      db,
-      stored.projectId,
-      stored.replacedDigests,
-      options.dataDir,
-    ),
+  await reclaimUnreferencedBlobs(
+    db,
+    stored.projectId,
+    stored.replacedDigests,
+    options.dataDir,
   );
   for (const job of stored.notebookJobs)
     if (job)
@@ -572,18 +551,29 @@ export async function deleteArtifact(
       };
     },
   );
-  const count = await unlinkUnreferenced(
+  const count = await reclaimUnreferencedBlobs(
     db,
     removed.projectId,
     [removed.digest],
     options.dataDir,
   );
-  await sweepArtifactNotebook(
-    db,
-    options.dataDir,
-    removed.projectId,
-    removed.artifactId,
-  );
+  try {
+    await sweepArtifactNotebook(
+      db,
+      options.dataDir,
+      removed.projectId,
+      removed.artifactId,
+    );
+  } catch {
+    emitDiagnostic({
+      event: "storage.cleanup.deferred",
+      severity: "warn",
+      message: "Notebook cleanup was deferred to reconciliation",
+      projectId: removed.projectId,
+      outcome: "error",
+      details: { artifactId: removed.artifactId },
+    });
+  }
   emitDiagnostic({
     event: "artifact.deleted",
     severity: "info",

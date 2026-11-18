@@ -36,6 +36,7 @@ export type WikiRunEnd = {
   summary?: string;
   /** A worker that lost its lease must not end the run its successor holds. */
   leaseToken?: string | null;
+  leaseExpiresAfter?: Date;
   leaseExpiresAtOrBefore?: Date;
   planExpiredAtOrBefore?: Date;
 };
@@ -96,9 +97,12 @@ export async function endRunInTx(
       id: runId,
       status: { in: [...from] },
       ...(end.leaseToken !== undefined ? { leaseToken: end.leaseToken } : {}),
-      ...(end.leaseExpiresAtOrBefore
-        ? { leaseExpiresAt: { lte: end.leaseExpiresAtOrBefore } }
-        : {}),
+      ...((end.leaseExpiresAfter ?? end.leaseExpiresAtOrBefore) && {
+        leaseExpiresAt: {
+          gt: end.leaseExpiresAfter,
+          lte: end.leaseExpiresAtOrBefore,
+        },
+      }),
       ...(end.planExpiredAtOrBefore
         ? {
             OR: [

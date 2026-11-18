@@ -207,6 +207,7 @@ describe("exam tools", () => {
       attemptId: attempt.id,
       answer: {
         questionId: f.exam.questions[1]!.id,
+        baseSequence: 0,
         sequence: 1,
         text: "Because",
       },

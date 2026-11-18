@@ -39,6 +39,7 @@ import {
   isTableDirName,
   tableDirPath,
   slugFromTableDir,
+  tableSlugWithSuffix,
 } from "@weaver/core/tables/paths";
 import { documentSlugFromPath } from "./documents";
 import {
@@ -246,7 +247,7 @@ async function nextFreeTableDir(
   takenSlugs: ReadonlySet<string>,
 ): Promise<{ slug: string; dir: string }> {
   for (let i = 2; i < 1000; i++) {
-    const slug = `${baseSlug}-${i}`;
+    const slug = tableSlugWithSuffix(baseSlug, i);
     if (takenSlugs.has(slug)) continue;
     const dir = tableDirPath(folder, slug);
     if (isTaken(dir, taken, takenDirs)) continue;

@@ -100,6 +100,7 @@ export const examDefinitionInputSchema = z
 export type ExamDefinitionInput = z.input<typeof examDefinitionInputSchema>;
 export const examAnswerInputSchema = z.object({
   questionId: uuid,
+  baseSequence: z.number().int().min(0).max(2147483647),
   sequence: z.number().int().min(1).max(2147483647),
   selectedChoiceIds: z.array(uuid).max(10).optional(),
   text: z.string().max(20000).nullable().optional(),

@@ -66,6 +66,7 @@ import {
   classifyRunError,
   redactSecrets,
   RunCancelledError,
+  RunContentFilteredError,
   RunTimeoutError,
 } from "./errors";
 import { createAssistantLanguageModel } from "./model";
@@ -544,19 +545,35 @@ async function runTurn(input: {
   );
   let text = "";
   let buffer = "";
+  const emitChunk = async (end: number) => {
+    // In Unicode mode this range matches unpaired surrogates only.
+    const chunk = buffer.slice(0, end).replace(/[\uD800-\uDFFF]/gu, "\uFFFD");
+    buffer = buffer.slice(end);
+    text += chunk;
+    await emit({ type: "text.delta", text: chunk });
+  };
   const flushFull = async () => {
     while (buffer.length >= flushChars) {
-      const chunk = buffer.slice(0, flushChars);
-      buffer = buffer.slice(flushChars);
-      await emit({ type: "text.delta", text: chunk });
+      let end = flushChars;
+      const boundary = buffer.codePointAt(end - 1)!;
+      if (boundary > 0xffff) end += end === 1 ? 1 : -1;
+      else if (
+        end === buffer.length &&
+        boundary >= 0xd800 &&
+        boundary <= 0xdbff
+      )
+        return;
+      await emitChunk(end);
     }
   };
-  const flushAll = async () => {
+  const flushAll = async (final = false) => {
     await flushFull();
-    if (!buffer) return;
-    const chunk = buffer;
-    buffer = "";
-    await emit({ type: "text.delta", text: chunk });
+    const last = buffer.charCodeAt(buffer.length - 1);
+    const end =
+      !final && last >= 0xd800 && last <= 0xdbff
+        ? buffer.length - 1
+        : buffer.length;
+    if (end) await emitChunk(end);
   };
 
   const emitToolEvent = async (event: AssistantEvent) => {
@@ -741,7 +758,6 @@ async function runTurn(input: {
   for await (const part of result.stream) {
     const delta = textDelta(part);
     if (delta !== null) {
-      text += delta;
       buffer += delta;
       await flushFull();
       continue;
@@ -764,6 +780,7 @@ async function runTurn(input: {
       throw input.signal.reason ?? new RunCancelledError();
   }
   const finishReason = await result.finishReason;
+  if (finishReason === "content-filter") throw new RunContentFilteredError();
   const steps = await result.steps;
   const note =
     finishReason === "length"
@@ -772,9 +789,8 @@ async function runTurn(input: {
           finishReason === "tool-calls"
         ? "\n\n[The assistant reached its tool-step limit before finishing. Ask to continue.]"
         : "";
-  text += note;
   buffer += note;
-  await flushAll();
+  await flushAll(true);
   const usage = usageFromSdk(await result.totalUsage, Date.now() - startedAt);
   return {
     text,

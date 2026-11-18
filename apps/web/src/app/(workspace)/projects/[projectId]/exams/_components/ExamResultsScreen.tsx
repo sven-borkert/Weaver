@@ -9,30 +9,18 @@ import { ExamNavigation } from "./ExamNavigation";
 import { AttemptResultsTable } from "./AttemptResultsTable";
 
 function TraineeResults({ projectId }: { projectId: string }) {
-  const q = api.exam.listAvailable.useQuery(
+  const q = api.exam.listOwnAttempts.useQuery(
     { projectId },
     { refetchOnMount: "always" },
   );
-  const exams = dataUnlessAccessError(q.data, q.error);
-  if (!exams)
+  const attempts = dataUnlessAccessError(q.data, q.error);
+  if (!attempts)
     return (
       <ExamQueryState
         loading={q.isLoading}
         error={q.error}
         retry={() => void q.refetch()}
       />
-    );
-  const attempts = exams
-    .flatMap((e) =>
-      e.attempts
-        .filter((a) => a.status !== "in_progress")
-        .map((a) => ({ ...a, examTitle: e.title })),
-    )
-    .sort(
-      (a, b) =>
-        new Date(b.submittedAt ?? b.startedAt).getTime() -
-          new Date(a.submittedAt ?? a.startedAt).getTime() ||
-        a.id.localeCompare(b.id),
     );
   return (
     <>
@@ -41,7 +29,9 @@ function TraineeResults({ projectId }: { projectId: string }) {
       ) : null}
       <AttemptResultsTable
         projectId={projectId}
-        attempts={attempts}
+        attempts={attempts.filter(
+          (attempt) => attempt.status !== "in_progress",
+        )}
         trainer={false}
       />
     </>

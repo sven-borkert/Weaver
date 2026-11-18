@@ -298,6 +298,9 @@ capped at a quarter of the input budget and charged against the scope content).
 A document can be the target of one task only: the nullable unique
 `ScheduledTask.outputDocumentId` index arbitrates concurrent create/retarget
 requests, which map its collision to `CONFLICT` on `outputDocumentId`.
+Only Markdown documents are valid targets. Filter the picker before pagination,
+reject other kinds on save, and check committed kind before calling the model
+so legacy Python targets fail with `OUTPUT_KIND`.
 Migration `20261115090000_scheduled_task_output_owner` refuses existing duplicate
 targets without changing tasks or history; retarget extra tasks before retrying.
 Update runs retain the target identity and revision used in their prompt and

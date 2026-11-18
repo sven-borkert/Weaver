@@ -5,7 +5,7 @@ import { classifyRunError } from "@weaver/ai/errors";
 import { modelOutputFailure } from "@weaver/ai/completion";
 import { recordAiUsageSafely } from "@weaver/core/services/aiUsageBestEffort";
 import { createAssistantLanguageModel } from "@weaver/ai/model";
-import { usageFromSdk } from "@weaver/ai/usage";
+import { usageFromError, usageFromSdk } from "@weaver/ai/usage";
 import { emptyUsage } from "@weaver/core/ai/http";
 import { createDbCredentialSource } from "@weaver/core/ai/registry";
 import {
@@ -222,18 +222,23 @@ export function createIngestionAnalyzeRunner(
             : ANALYZE_MAX_OUTPUT_TOKENS,
         });
       } catch (error) {
+        const durationMs = Date.now() - callStarted;
+        const usage = usageFromError(error, durationMs);
+        if (usage || !execution.signal.aborted)
+          await recordAiUsageSafely(
+            deps.db,
+            {
+              ...accounting,
+              usage: usage ?? emptyUsage(durationMs),
+              outcome: execution.signal.aborted
+                ? "stale_discarded"
+                : "provider_failure",
+            },
+            recordUsage,
+          );
         if (execution.signal.aborted) throw error;
         const failure = classifyRunError(error);
         const reserved = reserveDiagnosticEvent("warn");
-        await recordAiUsageSafely(
-          deps.db,
-          {
-            ...accounting,
-            usage: emptyUsage(Date.now() - callStarted),
-            outcome: "provider_failure",
-          },
-          recordUsage,
-        );
         const committed = await failFile(deps.db, {
           fileId: file.id,
           attemptCount: file.attemptCount,
@@ -263,14 +268,21 @@ export function createIngestionAnalyzeRunner(
           });
         return;
       }
-      execution.signal.throwIfAborted();
-      analysis = modelOutputFailure(result) ? null : parseAnalysis(result.text);
+      const cancelled = execution.signal.aborted;
+      analysis =
+        cancelled || modelOutputFailure(result)
+          ? null
+          : parseAnalysis(result.text);
       await recordAiUsageSafely(
         deps.db,
         {
           ...accounting,
           usage: usageFromSdk(result.usage, Date.now() - callStarted),
-          outcome: analysis ? "success" : "validation_failure",
+          outcome: cancelled
+            ? "stale_discarded"
+            : analysis
+              ? "success"
+              : "validation_failure",
         },
         recordUsage,
       );

@@ -58,7 +58,8 @@ This skill records what has shipped.
 
 - `services/wikiReads.ts`: `findPages` (exact normalized title, slug, path; sources hidden
   unless `includeSources`), `inspectLinks` (orphans, dangling, backlinks; keyset cursors),
-  `listRecentChanges` (commit-sha cursor, inclusive). All need Viewer.
+  `listRecentChanges` (cursor binds project, original Git tip, traversal position,
+  and the optional `since` cutoff). All need Viewer.
 - Kinds come from `wiki/changeKinds.ts` and only for ledger-trusted commits
   (`trustedAuthor === true`); untrusted commits are `external` with no author name.
 - `packages/assistant-tools/src/tools/wiki.ts` registers `WIKI_TOOLS` (the three reads plus
@@ -267,7 +268,7 @@ project's queue from the mutation variables.
   `revert` run, so it works without the injected runner and while the wiki is disabled, revoked or paused. No tool reaches it. It acts as the starter (task context, Editor re-checked in `beforeCommit`).
 - A page is written only if every commit from the run's first commit on that page to head is a trusted commit of that run or of this revert; otherwise it is skipped and listed in `WikiRun.report`
   (`edited_after_run`, `later_run`, `gone`, `source_page`). Created pages are soft-deleted because a first version has nothing to restore; others restore to the run's first base with
-  `exactProperties`, so properties and `reviewExempt` return exactly. Items move to `reverted`.
+  `exactProperties`, so properties and `reviewExempt` return exactly. The active lease fences one final transaction that stores the report, moves processed source items to `reverted`, and ends the run. Success diagnostics follow the winning commit.
 - Ids `wiki-revert:<runId>:<nnnn>` with `Weaver-Wiki-Request-Hash`, the Editor as author, no agent trailer and no `Weaver-Run-Id`; recovery uses the `wikiRevertRequestHash` identity (`trustedAuthor === true`,
   no agent trailer, matching hash). Revert operations do not count toward the 24-hour sum.
 - `wikiRunViews.ts`: `listRuns`, `getRun`, `wikiUsageSummary`. Viewer+ read; `indexingCostMicros` is null below Maintainer. The "Wiki agent" badge needs `verified`: the commit's trust, operation id and agent

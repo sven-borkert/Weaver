@@ -165,6 +165,41 @@ describe("sending to a remote instance", () => {
     vi.mocked(getSessionUser).mockImplementation(() => Promise.resolve(null)),
   );
 
+  it("returns the confirmed copy when the local connection timestamp cannot be recorded", async () => {
+    const { db, actor, source, target, remote } = await connected("receipt");
+    const document = await createDocument(
+      db,
+      {
+        projectId: source.id,
+        folderPath: [],
+        title: "Send once",
+        content: { kind: "markdown", contentJson: parseDocumentBody("Body") },
+      },
+      actor,
+    );
+    const timestamp = vi
+      .spyOn(db.remoteInstanceConnection, "updateMany")
+      .mockRejectedValueOnce(new Error("connection timestamp unavailable"));
+    try {
+      const sent = await sendDocumentToRemote(deps(), actor, {
+        projectId: source.id,
+        documentId: document.id,
+        remoteInstanceId: remote.id,
+        targetProjectId: target.id,
+        targetFolderPath: [],
+      });
+      expect(sent.url).toBe(`${B}/projects/${target.id}/documents/${sent.id}`);
+      expect(
+        await db.document.findMany({
+          where: { projectId: target.id },
+          select: { id: true, path: true, title: true },
+        }),
+      ).toEqual([{ id: sent.id, path: sent.path, title: "Send once" }]);
+    } finally {
+      timestamp.mockRestore();
+    }
+  });
+
   it("old_peer_rejected_before_content_post", async () => {
     const { db, actor, source, target, remote } = await connected("old-peer");
     const { setContentAppearance } =

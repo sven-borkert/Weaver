@@ -1238,6 +1238,7 @@ const historicPathCache = new WeakMap<
   ProjectRepoReader,
   Map<string, string | null>
 >();
+const MAX_DOCUMENT_HISTORY_CANDIDATES = 10_000;
 
 export async function pathAtCommit(
   repo: ProjectRepoReader,
@@ -1251,7 +1252,7 @@ export async function pathAtCommit(
   if (snapshotSha !== "HEAD" && cache.has(key)) return cache.get(key)!;
   const entries = await repo.logForPath(currentPath, {
     skip: 0,
-    limit: 10_000,
+    limit: MAX_DOCUMENT_HISTORY_CANDIDATES,
     commitish: snapshotSha,
   });
   const result = entries.find((entry) => entry.sha === sha)?.pathAtSha ?? null;
@@ -1418,9 +1419,8 @@ export async function writeDocumentInRepo(
         `this is a ${DOCUMENT_KINDS[row.kind].label}; send ${row.kind} content`,
         { field: "content" },
       );
-    const lastSha = await repo.lastCommitForPath(row.path);
-    if (!lastSha) throw new CoreError("NOT_FOUND");
-    if (lastSha !== request.baseCommitSha) {
+    const oldFile = await requireCommittedDocumentAtPath(repo, row);
+    if (oldFile.baseCommitSha !== request.baseCommitSha) {
       const snapshotSha = await repo.resolveHead();
       const basePath = await pathAtCommit(
         repo,
@@ -1428,7 +1428,7 @@ export async function writeDocumentInRepo(
         request.baseCommitSha,
         snapshotSha,
       );
-      const blobNow = await repo.blobShaAt(lastSha, row.path);
+      const blobNow = await repo.blobShaAt(snapshotSha, row.path);
       const blobBase = basePath
         ? await repo.blobShaAt(request.baseCommitSha, basePath)
         : null;
@@ -1438,10 +1438,6 @@ export async function writeDocumentInRepo(
     }
 
     const oldPath = row.path;
-    const oldFile = parseDocumentFile(
-      await repo.readFileFromWorktree(oldPath),
-      documentKindOfPath(oldPath),
-    );
     const title = request.title ?? oldFile.meta.title;
     assertDocumentTitle(title);
     let path = oldPath;
@@ -1544,9 +1540,10 @@ async function writeDocument(
   actor: EnrichedActor,
   metadata: WriteMetadata,
 ): Promise<DocumentResult> {
-  const result = await withProjectRepo(projectId, (repo) =>
-    writeDocumentInRepo(db, repo, projectId, request, actor, metadata),
-  );
+  const result = await withProjectRepo(projectId, async (repo) => {
+    await assertProjectRole(db, projectId, actor, "Editor");
+    return writeDocumentInRepo(db, repo, projectId, request, actor, metadata);
+  });
   void notifyProjectContentChanged(db, projectId);
   return result;
 }
@@ -1855,6 +1852,99 @@ export async function saveDocument(
   );
 }
 
+function matchesDocumentId(
+  path: string,
+  content: string | undefined,
+  documentId: string,
+): boolean {
+  if (content === undefined || !isDocumentFilePath(path)) return false;
+  try {
+    return (
+      parseDocumentFile(content, documentKindOfPath(path)).meta.id ===
+      documentId
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function locateDocumentHistoryPath(
+  repo: ProjectRepoReader,
+  snapshotSha: string,
+  document: Document,
+): Promise<string> {
+  const direct = await repo.readBlobsAt(
+    snapshotSha,
+    [document.path],
+    MAX_FILE_BYTES,
+  );
+  if (matchesDocumentId(document.path, direct.get(document.path), document.id))
+    return document.path;
+
+  const files = (await repo.listTrackedFiles(snapshotSha)).filter(
+    isDocumentFilePath,
+  );
+  let found: string | undefined;
+  for (let offset = 0; offset < files.length; offset += 32) {
+    const batch = await repo.readBlobsAt(
+      snapshotSha,
+      files.slice(offset, offset + 32),
+      MAX_FILE_BYTES,
+    );
+    for (const [path, content] of batch) {
+      if (!matchesDocumentId(path, content, document.id)) continue;
+      if (found) throw new CoreError("NOT_FOUND");
+      found = path;
+    }
+  }
+  if (!found) throw new CoreError("NOT_FOUND");
+  return found;
+}
+
+async function validatedDocumentHistory(
+  repo: ProjectRepoReader,
+  snapshotSha: string,
+  path: string,
+  documentId: string,
+  want: number,
+): Promise<GitLogEntry[]> {
+  const entries: GitLogEntry[] = [];
+  let scanned = 0;
+  let window = want;
+  for (;;) {
+    const raw = await repo.logForPath(path, {
+      skip: scanned,
+      limit: window - scanned + 1,
+      commitish: snapshotSha,
+    });
+    for (const entry of raw.slice(0, window - scanned)) {
+      const blob = await repo.readBlobsAt(
+        entry.sha,
+        [entry.pathAtSha],
+        MAX_FILE_BYTES,
+      );
+      if (
+        !matchesDocumentId(
+          entry.pathAtSha,
+          blob.get(entry.pathAtSha),
+          documentId,
+        )
+      )
+        continue;
+      entries.push(entry);
+      if (entries.length >= want) return entries;
+    }
+    if (raw.length <= window - scanned) return entries;
+    if (window >= MAX_DOCUMENT_HISTORY_CANDIDATES)
+      throw new CoreError(
+        "PRECONDITION_FAILED",
+        "document history exceeds the supported scan limit",
+      );
+    scanned = window;
+    window = Math.min(window * 2, MAX_DOCUMENT_HISTORY_CANDIDATES);
+  }
+}
+
 export async function getHistory(
   db: Db,
   input: {
@@ -1879,12 +1969,16 @@ export async function getHistory(
   const repo = await openProjectRepo(input.projectId);
   if (!repo) throw new CoreError("NOT_FOUND");
   const snapshotSha = await repo.resolveHead();
-  const raw = await repo.logForPath(row.path, {
-    skip: input.offset,
-    limit: input.limit + 1,
-    commitish: snapshotSha,
-  });
-  const entries = raw.slice(0, input.limit);
+  const path = await locateDocumentHistoryPath(repo, snapshotSha, row);
+  const end = input.offset + input.limit;
+  const raw = await validatedDocumentHistory(
+    repo,
+    snapshotSha,
+    path,
+    row.id,
+    end + 1,
+  );
+  const entries = raw.slice(input.offset, end);
   const attribution = await resolveAttribution(db, entries);
   const summaries = await loadChangeSummaries(
     db,
@@ -1892,7 +1986,7 @@ export async function getHistory(
     entries.map((entry) => entry.sha),
   );
   return {
-    hasMore: raw.length > input.limit,
+    hasMore: raw.length > end,
     entries: entries.map((entry, index) => {
       const resolved = attribution[index];
       return {
@@ -2686,9 +2780,10 @@ export async function deleteDocument(
   actor: EnrichedActor,
 ): Promise<void> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  await withProjectRepo(input.projectId, (repo) =>
-    deleteDocumentInRepo(db, repo, input, actor),
-  );
+  await withProjectRepo(input.projectId, async (repo) => {
+    await assertProjectRole(db, input.projectId, actor, "Editor");
+    return deleteDocumentInRepo(db, repo, input, actor);
+  });
   void notifyProjectContentChanged(db, input.projectId);
 }
 
@@ -2814,6 +2909,7 @@ export async function listDocuments(
     search?: string;
     folderPath?: string[];
     type?: string;
+    kind?: DocumentKind;
     tag?: string;
     includeSummary?: boolean;
     sort: "title" | "lastEditedAt" | "createdAt" | "updatedAt";
@@ -2827,6 +2923,7 @@ export async function listDocuments(
     : undefined;
   const where: Prisma.DocumentWhereInput = {
     projectId: input.projectId,
+    ...(input.kind ? { kind: input.kind } : {}),
     ...(folderPrefix ? { path: { startsWith: folderPrefix } } : {}),
     ...(input.search
       ? { title: { contains: input.search, mode: "insensitive" as const } }

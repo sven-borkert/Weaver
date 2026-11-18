@@ -455,6 +455,7 @@ describe("apiKey router", () => {
 
     const updated = await callerFor(user).apiKey.update({
       keyId: created.key.id,
+      expectedPolicyRevision: created.key.policyRevision,
       name: "Writer",
       capabilities: ["content:write"],
       projectIds: [alsoMine.id],
@@ -492,6 +493,7 @@ describe("apiKey router", () => {
 
     const relaxed = await callerFor(user).apiKey.update({
       keyId: created.key.id,
+      expectedPolicyRevision: updated.policyRevision,
       name: "Writer",
       capabilities: [],
       projectIds: [],
@@ -505,6 +507,38 @@ describe("apiKey router", () => {
     ]);
   });
 
+  it("rejects a stale rename after the owner narrows a key's policy", async () => {
+    const user = await makeUser("User", "ak-stale");
+    const project = await makeProject("Restricted");
+    await addMembership(project.id, user.id, "Editor");
+    const caller = callerFor(user);
+    const { key } = await caller.apiKey.create({
+      name: "Writer",
+      capabilities: ["content:write"],
+    });
+    const initial = {
+      keyId: key.id,
+      expectedPolicyRevision: key.policyRevision,
+    };
+    await caller.apiKey.update({
+      ...initial,
+      name: key.name,
+      projectIds: [project.id],
+    });
+    await expect(
+      caller.apiKey.update({
+        ...initial,
+        name: "Renamed in an older tab",
+        capabilities: ["content:write"],
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect((await caller.apiKey.list())[0]).toMatchObject({
+      name: key.name,
+      projectIds: [project.id],
+      capabilities: expect.not.arrayContaining(["content:write"]),
+    });
+  });
+
   it("refuses to update another user's key, a foreign project, or an Admin grant from a User", async () => {
     const alice = await makeUser("User", "ak-update-a");
     const bob = await makeUser("User", "ak-update-b");
@@ -512,6 +546,7 @@ describe("apiKey router", () => {
     const aliceKey = await callerFor(alice).apiKey.create({ name: "A" });
     const base = {
       keyId: aliceKey.key.id,
+      expectedPolicyRevision: aliceKey.key.policyRevision,
       name: "A",
       capabilities: [] as ("content:write" | "system:admin")[],
       projectIds: [] as string[],

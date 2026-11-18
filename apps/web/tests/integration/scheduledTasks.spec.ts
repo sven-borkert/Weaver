@@ -2468,6 +2468,54 @@ describe("scheduled task runner", () => {
     ).toBe(0);
   });
 
+  it("rejects Python output at admission and before generating legacy reports", async () => {
+    await seedTestLlmRouting({ jobs: true });
+    const { owner, project } = await fixture("python-target");
+    const db = getPrisma();
+    const actor = securityContextFor(owner);
+    const python = await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Script",
+        content: { kind: "python", text: "print('hello')\n" },
+      },
+      enriched(owner),
+    );
+    const input = definition(project.id);
+    const withPython = { ...input, outputDocumentId: python.id };
+    const error = {
+      code: "BAD_REQUEST",
+      details: { field: "outputDocumentId" },
+    };
+    await expect(createTask(db, actor, withPython)).rejects.toMatchObject(
+      error,
+    );
+    const task = await createTask(db, actor, input);
+    await expect(
+      updateTask(db, actor, { ...withPython, taskId: task.id }),
+    ).rejects.toMatchObject(error);
+
+    await db.scheduledTask.update({
+      where: { id: task.id },
+      data: { outputDocumentId: python.id },
+    });
+    const queued = await runTaskNow(db, actor, task.id);
+    const prompts: string[] = [];
+    const deps = runnerDeps(reportModel(prompts));
+    const modelFactory = vi.spyOn(deps, "modelFactory");
+    await executeScheduledTaskRun(deps, queued.runId);
+    expect(modelFactory).not.toHaveBeenCalled();
+    const run = await db.scheduledTaskRun.findUniqueOrThrow({
+      where: { id: queued.runId },
+    });
+    expect(run).toMatchObject({
+      status: "failed",
+      errorCode: "OUTPUT_KIND",
+    });
+  });
+
   it("writes into a chosen document, revises it in update mode, and names a created one", async () => {
     await seedTestLlmRouting({ jobs: true });
     const { owner, project } = await fixture("target");

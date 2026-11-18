@@ -1,6 +1,8 @@
 import type { ApiKeyIssuer } from "@weaver/auth";
-import { parseServerEnv } from "@weaver/config/server";
-import { Client } from "pg";
+import {
+  UserCredentialLockLostError,
+  withUserCredentialLock,
+} from "@weaver/auth/credential-lock";
 import { CoreError } from "@weaver/core/errors";
 import {
   API_KEY_CAPABILITIES,
@@ -29,6 +31,7 @@ const MINUTE_MS = 60_000;
 
 export type ApiKeySummary = {
   id: string;
+  policyRevision: number;
   name: string;
   start: string | null;
   capabilities: Capability[];
@@ -50,6 +53,7 @@ export type CreateApiKeyInput = {
 
 export type UpdateApiKeyInput = {
   keyId: string;
+  expectedPolicyRevision: number;
   name: string;
   capabilities: readonly ApiKeyCapability[];
   projectIds: readonly string[];
@@ -86,6 +90,7 @@ function toSummary(row: ApiKeyRow): ApiKeySummary {
       : null;
   return {
     id: row.id,
+    policyRevision: row.policyRevision,
     name: row.name ?? "",
     start: row.start,
     capabilities: [
@@ -206,79 +211,59 @@ export async function createApiKey(
   issuer: ApiKeyIssuer,
 ): Promise<{ key: ApiKeySummary; secret: string }> {
   assertSessionActor(actor);
-  const lock = new Client({
-    connectionString: parseServerEnv(process.env).DATABASE_URL,
-    connectionTimeoutMillis: 15_000,
-    statement_timeout: 15_000,
-    query_timeout: 16_000,
-    application_name: "weaver-api-key-issuance",
-  });
-  let lost = false;
-  lock.on("error", () => {
-    lost = true;
-  });
-  lock.on("end", () => {
-    lost = true;
-  });
-  const assertLock = async () => {
-    if (!lost) await lock.query("SELECT 1");
-    if (lost)
-      throw new CoreError(
-        "CONFLICT",
-        "Credential issuance lost its lock. Retry the request.",
-      );
-  };
-  let issuedId: string | undefined;
-  try {
-    await lock.connect();
-    await lock.query("SELECT pg_advisory_lock(hashtextextended($1, 0))", [
-      `weaver:user-credentials:${actor.userId}`,
-    ]);
-    const session = await db.session.findFirst({
-      where: {
-        id: actor.credentialId,
-        userId: actor.userId,
-        expiresAt: { gt: new Date() },
-      },
-      select: {
-        user: {
-          select: {
-            role: true,
-            banned: true,
-            banExpires: true,
-            mustChangePassword: true,
+  return withUserCredentialLock(
+    actor.userId,
+    "weaver-api-key-issuance",
+    async (assertHeld) => {
+      const session = await db.session.findFirst({
+        where: {
+          id: actor.credentialId,
+          userId: actor.userId,
+          expiresAt: { gt: new Date() },
+        },
+        select: {
+          user: {
+            select: {
+              role: true,
+              banned: true,
+              banExpires: true,
+              mustChangePassword: true,
+            },
           },
         },
-      },
-    });
-    if (
-      !session ||
-      session.user.mustChangePassword ||
-      (session.user.banned &&
-        (!session.user.banExpires || session.user.banExpires > new Date()))
-    )
-      throw new CoreError("FORBIDDEN", "Session was revoked. Sign in again.");
-    const result = await issueApiKey(
-      db,
-      {
-        ...actor,
-        globalRole: session.user.role === "Admin" ? "Admin" : "User",
-      },
-      input,
-      issuer,
-      async (id) => {
-        issuedId = id;
-        await assertLock();
-      },
-    );
-    await assertLock();
-    return result;
-  } catch (error) {
-    if (issuedId) await discardIssuedKey(db, issuedId);
-    throw error;
-  } finally {
-    await lock.end().catch(() => undefined);
-  }
+      });
+      if (
+        !session ||
+        session.user.mustChangePassword ||
+        (session.user.banned &&
+          (!session.user.banExpires || session.user.banExpires > new Date()))
+      )
+        throw new CoreError("FORBIDDEN", "Session was revoked. Sign in again.");
+      let issuedId: string | undefined;
+      try {
+        const result = await issueApiKey(
+          db,
+          {
+            ...actor,
+            globalRole: session.user.role === "Admin" ? "Admin" : "User",
+          },
+          input,
+          issuer,
+          async (id) => {
+            issuedId = id;
+            await assertHeld();
+          },
+        );
+        await assertHeld();
+        return result;
+      } catch (error) {
+        if (issuedId) await discardIssuedKey(db, issuedId);
+        if (error instanceof UserCredentialLockLostError)
+          throw new CoreError("CONFLICT", error.message);
+        throw error;
+      }
+    },
+  );
 }
 
 async function discardIssuedKey(db: PrismaClient, id: string): Promise<void> {
@@ -341,7 +326,6 @@ export async function updateApiKey(
   input: UpdateApiKeyInput,
 ): Promise<ApiKeySummary> {
   assertSessionActor(actor);
-  const { name, projectIds } = await validateKeyPolicy(db, actor, input);
   const rateLimit =
     input.rateLimitPerMinute === null
       ? DEFAULT_RATE_LIMIT
@@ -352,8 +336,21 @@ export async function updateApiKey(
         };
   // Permissions are read from the row on every bearer request, so the change is immediate.
   const row = await db.$transaction(async (tx) => {
+    const where = { id: input.keyId, referenceId: actor.userId };
+    const current = await tx.apiKey.findFirst({
+      where,
+      select: { policyRevision: true },
+    });
+    if (!current) throw new CoreError("NOT_FOUND");
+    const stale = () =>
+      new CoreError(
+        "CONFLICT",
+        "This API key changed. Reopen it to edit the current policy.",
+      );
+    if (current.policyRevision !== input.expectedPolicyRevision) throw stale();
+    const { name, projectIds } = await validateKeyPolicy(tx, actor, input);
     const { count } = await tx.apiKey.updateMany({
-      where: { id: input.keyId, referenceId: actor.userId },
+      where: { ...where, policyRevision: input.expectedPolicyRevision },
       data: {
         name,
         permissions: JSON.stringify(
@@ -361,9 +358,10 @@ export async function updateApiKey(
         ),
         ...rateLimit,
         updatedAt: new Date(),
+        policyRevision: { increment: 1 },
       },
     });
-    if (count === 0) throw new CoreError("NOT_FOUND");
+    if (count === 0) throw stale();
     await tx.apiKeyProject.deleteMany({ where: { apiKeyId: input.keyId } });
     if (projectIds.length > 0) {
       await tx.apiKeyProject.createMany({

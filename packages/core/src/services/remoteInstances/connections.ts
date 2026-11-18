@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Prisma, PrismaClient } from "@weaver/db/client";
+import { emitDiagnostic } from "../../diagnostics/writer";
 import { CoreError } from "../../errors";
 import { generatePkce, randomState } from "../../remotes/pkce";
 import { remoteJson, RemoteHttpError } from "../../remotes/http";
@@ -468,11 +469,21 @@ export async function withRemoteToken<T>(
   const result = await (onError
     ? call().catch((error: unknown) => onError(error, ref))
     : call());
-  // updateMany: a disconnect while fn ran must not turn its success into an error.
-  await deps.db.remoteInstanceConnection.updateMany({
-    where: { id: row.id },
-    data: { lastUsedAt: now },
-  });
+  try {
+    await deps.db.remoteInstanceConnection.updateMany({
+      where: { id: row.id },
+      data: { lastUsedAt: now },
+    });
+  } catch {
+    emitDiagnostic({
+      event: "remote.connection.usage_update_failed",
+      severity: "warn",
+      message: "Could not update the peer connection's last-used time",
+      outcome: "error",
+      userId: input.userId,
+      details: { remoteInstanceId: remote.id },
+    });
+  }
   return result;
 }
 

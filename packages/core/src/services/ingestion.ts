@@ -23,6 +23,7 @@ import type {
   PrismaClient,
 } from "@weaver/db/client";
 import { Prisma } from "@weaver/db/client";
+import { emitDiagnostic } from "../diagnostics/writer";
 import { MAX_MARKDOWN_CHARS } from "../documents/limits";
 import { assertSafeSegments, PathError } from "../documents/paths";
 import { documentTitleSchema } from "../documents/title";
@@ -541,6 +542,35 @@ export async function withProjectIngestionLifecycleLock<T>(
     },
     { timeout: 30_000, maxWait: 30_000 },
   );
+}
+
+export async function reclaimUnreferencedBlobs(
+  db: PrismaClient,
+  projectId: string,
+  digests: Iterable<string>,
+  dataDir: string,
+): Promise<number> {
+  const unique = new Set(digests);
+  if (unique.size === 0) return 0;
+  let removed = 0;
+  try {
+    await withProjectIngestionLifecycleLock(db, projectId, async (tx) => {
+      for (const digest of unique) {
+        if (await isBlobReferenced(tx, projectId, digest)) continue;
+        await deleteBlob(dataDir, projectId, digest);
+        removed += 1;
+      }
+    });
+  } catch {
+    emitDiagnostic({
+      event: "storage.cleanup.deferred",
+      severity: "warn",
+      message: "Blob cleanup was deferred to reconciliation",
+      projectId,
+      outcome: "error",
+    });
+  }
+  return removed;
 }
 
 async function loadBatch(db: Db, actor: UserSecurityContext, batchId: string) {
@@ -1176,27 +1206,19 @@ export async function deleteBatch(
           "CONFLICT",
           "Processing is in progress; wait for the active file before deleting the batch",
         );
-      const digests = [
-        ...new Set(batch.files.map((file) => file.contentDigest)),
-      ];
+      const digests = batch.files.map((file) => file.contentDigest);
       await tx.ingestionBatch.delete({ where: { id: batch.id } });
       return { projectId: batch.projectId, digests };
     },
   );
 
-  return withProjectIngestionLifecycleLock(
+  const deletedBlobs = await reclaimUnreferencedBlobs(
     db,
     removed.projectId,
-    async (tx) => {
-      let deletedBlobs = 0;
-      for (const digest of removed.digests) {
-        if (await isBlobReferenced(tx, removed.projectId, digest)) continue;
-        await deleteBlob(options.dataDir, removed.projectId, digest);
-        deletedBlobs += 1;
-      }
-      return { deletedBlobs };
-    },
+    removed.digests,
+    options.dataDir,
   );
+  return { deletedBlobs };
 }
 
 // ---- Worker-facing; the durable job payload is the authorization (spec §3.2). ----

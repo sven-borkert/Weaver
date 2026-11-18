@@ -42,6 +42,11 @@ export const examRouter = createTRPCRouter({
     .query(({ ctx, input }) =>
       exams.listExamsForTrainee(ctx.db, ctx.security, input.projectId),
     ),
+  listOwnAttempts: authedProcedure
+    .input(schemas.projectIdInput)
+    .query(({ ctx, input }) =>
+      attempts.listOwnAttempts(ctx.db, ctx.security, input.projectId),
+    ),
   listAttempts: authedProcedure
     .input(schemas.attemptListInput)
     .query(({ ctx, input }) =>

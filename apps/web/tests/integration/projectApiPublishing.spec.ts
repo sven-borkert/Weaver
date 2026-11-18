@@ -24,7 +24,7 @@ import {
 import { resetDb } from "./_harness";
 import { withProjectRepo } from "@weaver/core/services/projectRepo";
 import { loadFolderIdentityIndex } from "@weaver/core/projectApi/folderIdentity";
-import { moveDocument } from "@weaver/core/services/documents";
+import { createDocument, moveDocument } from "@weaver/core/services/documents";
 async function failAfterCommit(operation: () => Promise<unknown>) {
   const original = projectRepos.withProjectRepo;
   const injected = vi
@@ -594,6 +594,72 @@ describe("project machine publishing", () => {
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
     expect(await f.db.projectApiOperation.count()).toBe(0);
   });
+  it("preserves both committed documents when the requested path cannot be projected", async () => {
+    const f = await makeMachineFixture();
+    const other = await createDocument(
+      f.db,
+      {
+        projectId: f.project.id,
+        folderPath: f.documentFolder,
+        title: "Other audit",
+        content: { kind: "markdown", contentJson: { type: "doc" } },
+      },
+      f.actor,
+    );
+    const k = await seedProjectMachineKey(f, [
+      {
+        kind: "document",
+        targetId: f.document.id,
+        root: false,
+        actions: ["update"],
+      },
+    ]);
+    const movedPath = [...f.documentFolder, "moved-audit.md"].join("/");
+    const state = await withProjectRepo(f.project.id, async (repo) => {
+      const moved = (await repo.showFileAt("HEAD", f.document.path)).replace(
+        /^# Latest audit$/m,
+        `# ${"A".repeat(201)}`,
+      );
+      const occupant = await repo.showFileAt("HEAD", other.path);
+      await repo.rm(other.path);
+      await repo.writeFileAtomic(movedPath, moved);
+      await repo.writeFileAtomic(f.document.path, occupant);
+      const head = await repo.commitAll("Move audit and replace old contents", {
+        userId: f.owner.id,
+        email: f.owner.email,
+        name: f.actor.name,
+      });
+      expect(await repo.lastCommitForPath(movedPath)).toBe(head);
+      expect(await repo.lastCommitForPath(f.document.path)).toBe(head);
+      return { head, moved, occupant };
+    });
+
+    await expect(
+      publishProjectMachineContent(
+        f.db,
+        k.context,
+        {
+          kind: "document.replace",
+          id: f.document.id,
+          markdown: "Incoming audit",
+        },
+        {
+          requestId: randomUUID(),
+          idempotencyKey: "replace-unprojectable-audit",
+          method: "PUT",
+          ifMatch: `"${state.head}"`,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    await withProjectRepo(f.project.id, async (repo) => {
+      expect(await repo.resolveHead()).toBe(state.head);
+      expect(await repo.showFileAt("HEAD", movedPath)).toBe(state.moved);
+      expect(await repo.showFileAt("HEAD", f.document.path)).toBe(
+        state.occupant,
+      );
+    });
+  });
+
   it("replaces a fixed document once, replays without Read, rejects changed requests and revoked replay", async () => {
     const f = await makeMachineFixture();
     const k = await seedProjectMachineKey(f, [
@@ -668,14 +734,26 @@ describe("project machine publishing", () => {
         id: f.table.id,
       }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    const staleMeta = { ...meta, idempotencyKey: "different-audit-key" };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(
+        publishProjectMachineContent(f.db, k.context, command, staleMeta),
+      ).rejects.toMatchObject({
+        code: "PRECONDITION_FAILED",
+        details: { status: 412 },
+      });
+    }
     await expect(
       publishProjectMachineContent(f.db, k.context, command, {
-        ...meta,
-        idempotencyKey: "different-audit-key",
+        ...staleMeta,
+        ifMatch: `"${receipt.revision}"`,
       }),
     ).rejects.toMatchObject({
-      code: "PRECONDITION_FAILED",
-      details: { status: 412 },
+      code: "CONFLICT",
+      details: { reason: "IDEMPOTENCY_KEY_REUSED" },
+    });
+    await withProjectRepo(f.project.id, async (repo) => {
+      expect(await repo.resolveHead()).toBe(receipt.revision);
     });
     await expect(
       publishProjectMachineContent(f.db, k.context, command, {
@@ -684,5 +762,12 @@ describe("project machine publishing", () => {
         ifMatch: null,
       }),
     ).rejects.toMatchObject({ details: { status: 428 } });
+    await f.db.projectApiKey.update({
+      where: { id: k.keyId },
+      data: { revokedAt: new Date() },
+    });
+    await expect(
+      publishProjectMachineContent(f.db, k.context, command, staleMeta),
+    ).rejects.toMatchObject({ code: "UNAUTHORIZED" });
   });
 });

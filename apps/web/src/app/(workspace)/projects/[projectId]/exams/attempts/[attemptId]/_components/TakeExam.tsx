@@ -53,6 +53,7 @@ export function TakeExam({
         },
         status: "idle",
         sequence: q.answer?.sequence ?? 0,
+        baseSequence: q.answer?.sequence ?? 0,
         savedAt: q.answer?.savedAt ?? null,
         attempts: 0,
       } satisfies AnswerSlot,
@@ -80,7 +81,10 @@ export function TakeExam({
     try {
       await saves.flush();
       await submit.mutateAsync({ attemptId: attempt.id });
-      await utils.exam.listAvailable.invalidate();
+      await Promise.all([
+        utils.exam.listAvailable.invalidate(),
+        utils.exam.listOwnAttempts.invalidate(),
+      ]);
       toast.success(
         timeout
           ? "Time is up — your answers were submitted"

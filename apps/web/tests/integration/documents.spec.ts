@@ -17,8 +17,14 @@ import {
   markdownContent,
 } from "./_harness";
 import { encryptSecret, secretAad } from "@weaver/core/security/encryption";
-import { openProjectRepo, repoDir, withProjectRepo } from "@weaver/git-store";
+import {
+  openProjectRepo,
+  repoDir,
+  withProjectRepo,
+  type ProjectRepoWriter,
+} from "@weaver/git-store";
 import * as gitStore from "@weaver/git-store";
+import * as projectRepos from "@weaver/core/services/projectRepo";
 import {
   createDocument,
   getDocument,
@@ -3097,7 +3103,58 @@ it("queues a distinct projection repair after a committed create loses its proje
   }
 });
 
-it("rejects restore and diff of a different document at a reused historical path", async () => {
+it.each(["save", "delete"] as const)(
+  "rejects a queued document %s after the editor loses membership",
+  async (operation) => {
+    const { project, caller, actor } = await setupProjectWith(
+      "Editor",
+      `queued-${operation}-membership`,
+    );
+    const created = await caller.document.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Before membership removal",
+      contentJson: PARA("Original body"),
+    });
+    const db = getPrisma();
+    const { organizationId } = await db.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { organizationId: true },
+    });
+    const lock = vi
+      .spyOn(projectRepos, "withProjectRepo")
+      .mockImplementationOnce(async function <T>(
+        projectId: string,
+        write: (repo: ProjectRepoWriter) => Promise<T>,
+      ) {
+        return withProjectRepo(projectId, async (repo) => {
+          await db.member.deleteMany({
+            where: { organizationId, userId: actor.id },
+          });
+          return write(repo);
+        });
+      });
+    const input = { projectId: project.id, documentId: created.id };
+    try {
+      await expect(
+        operation === "save"
+          ? caller.document.update({
+              ...input,
+              baseCommitSha: created.headCommitSha,
+              content: { kind: "markdown", contentJson: PARA("Updated body") },
+              changeSummary: "Update after removal",
+            })
+          : caller.document.delete(input),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    } finally {
+      lock.mockRestore();
+    }
+    const repo = (await openProjectRepo(project.id))!;
+    expect(await repo.resolveHead()).toBe(created.headCommitSha);
+  },
+);
+
+it("excludes a different document at a reused historical path from history, restore and diff", async () => {
   const { project, caller, actor } = await setupProjectWith(
     "Editor",
     "historic-identity-review",
@@ -3130,6 +3187,21 @@ it("rejects restore and diff of a different document at a reused historical path
     projectId: project.id,
     documentId: created.id,
   });
+  const historyInput = {
+    projectId: project.id,
+    documentId: created.id,
+    limit: 1,
+  };
+  const first = await caller.document.history({ ...historyInput, offset: 0 });
+  expect(first.entries.map((entry) => entry.sha)).toEqual([
+    current.baseCommitSha,
+  ]);
+  expect(first.hasMore).toBe(true);
+  const second = await caller.document.history({ ...historyInput, offset: 1 });
+  expect(second.entries.map((entry) => entry.sha)).toEqual([
+    created.headCommitSha,
+  ]);
+  expect(second.hasMore).toBe(false);
   await expect(
     caller.document.diff({
       projectId: project.id,
@@ -3146,6 +3218,27 @@ it("rejects restore and diff of a different document at a reused historical path
       expectedHeadCommitSha: current.baseCommitSha,
     }),
   ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  const movedSha = await withProjectRepo(project.id, async (writer) => {
+    await writer.writeFileAtomic("moved-identity.md", original);
+    await writer.writeFileAtomic(created.path, foreign);
+    return writer.commitAll("move original and reuse its old path", {
+      name: null,
+      email: actor.email,
+      userId: actor.id,
+    });
+  });
+  const moved = await caller.document.history({ ...historyInput, offset: 0 });
+  expect(moved.entries.map((entry) => entry.sha)).toEqual([movedSha]);
+  await expect(
+    caller.document.update({
+      projectId: project.id,
+      documentId: created.id,
+      baseCommitSha: movedSha,
+      content: { kind: "markdown", contentJson: PARA("Incoming text") },
+      changeSummary: "Change after move",
+    }),
+  ).rejects.toMatchObject({ code: "CONFLICT" });
+  expect(await repo.resolveHead()).toBe(movedSha);
 });
 
 describe("explicit local attribution trust", () => {

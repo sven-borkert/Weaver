@@ -125,7 +125,7 @@ export const listRecentChangesTool = defineSharedReadTool({
         changes: items,
         nextCursor:
           truncated && items.length > 0 && items.length < result.changes.length
-            ? result.changes[items.length]!.sha
+            ? result.changeCursors[items.length]!
             : result.nextCursor,
       },
     };

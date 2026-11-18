@@ -355,6 +355,18 @@ export async function saveAnswer(
       throw new CoreError("BAD_REQUEST", "Answer does not match the question", {
         field: q.kind === "multiple_choice" ? "selectedChoiceIds" : "text",
       });
+    if (
+      existing?.sequence === answer.sequence &&
+      existing.text === (answer.text ?? null) &&
+      existing.selectedChoiceIds.length === selected.length &&
+      selected.every((id) => existing.selectedChoiceIds.includes(id))
+    )
+      return result("saved");
+    if (
+      answer.baseSequence !== (existing?.sequence ?? 0) ||
+      answer.sequence <= answer.baseSequence
+    )
+      return result("stale");
     const saved = await tx.$queryRaw<Array<{ sequence: number }>>`
       INSERT INTO "ExamAnswer" ("id", "attemptId", "questionId", "kind", "selectedChoiceIds", "text", "sequence", "savedAt")
       VALUES (${randomUUID()}::uuid, ${row.id}::uuid, ${q.id}::uuid, ${q.kind}::"ExamQuestionKind",
@@ -363,7 +375,7 @@ export async function saveAnswer(
       ON CONFLICT ("attemptId", "questionId") DO UPDATE SET
         "selectedChoiceIds" = EXCLUDED."selectedChoiceIds", "text" = EXCLUDED."text",
         "sequence" = EXCLUDED."sequence", "savedAt" = EXCLUDED."savedAt"
-      WHERE "ExamAnswer"."sequence" < EXCLUDED."sequence"
+      WHERE "ExamAnswer"."sequence" = ${answer.baseSequence}
       RETURNING "sequence"
     `;
     return saved.length
@@ -408,6 +420,28 @@ export async function finalizeExpiredAttempts(
   }
 }
 const attemptTitleSchema = examSnapshotSchema.pick({ title: true });
+
+export async function listOwnAttempts(
+  db: Db,
+  actor: ProjectActor,
+  projectId: string,
+  now = new Date(),
+): Promise<Array<TraineeAttemptSummary & { examTitle: string }>> {
+  await assertTrainee(db, projectId, actor);
+  const rows = await db.examAttempt.findMany({
+    where: { projectId, traineeId: actor.userId },
+  });
+  return rows
+    .map((row) => ({
+      ...traineeSummary(row, now),
+      examTitle: attemptTitleSchema.parse(row.definitionSnapshot).title,
+    }))
+    .sort(
+      (a, b) =>
+        (b.submittedAt ?? b.startedAt).getTime() -
+          (a.submittedAt ?? a.startedAt).getTime() || a.id.localeCompare(b.id),
+    );
+}
 
 async function listItems(
   db: Db,

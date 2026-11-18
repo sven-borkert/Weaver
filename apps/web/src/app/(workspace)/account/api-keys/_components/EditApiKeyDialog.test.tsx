@@ -3,6 +3,7 @@ import { createRef } from "react";
 import type { ReactNode } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Dialog } from "~/components/ui/dialog";
 
 const mocked = vi.hoisted(() => ({ mutate: vi.fn() }));
 
@@ -32,6 +33,7 @@ import { EditApiKeyDialog } from "./EditApiKeyDialog";
 
 const apiKey = {
   id: "11111111-1111-4111-8111-111111111111",
+  policyRevision: 2,
   name: "Claude Code",
   start: "wvr_abcd",
   capabilities: ["mcp:use", "content:read", "content:write", "system:admin"],
@@ -92,30 +94,37 @@ describe("EditApiKeyDialog", () => {
 const A = "44444444-4444-4444-8444-444444444444";
 const B = "33333333-3333-4333-8333-333333333333";
 
+function editor(
+  projectIds: string[],
+  memberOf: { id: string }[],
+  policyRevision: number = apiKey.policyRevision,
+) {
+  return (
+    <EditApiKeyDialog
+      apiKey={{ ...apiKey, projectIds, policyRevision } as never}
+      isAdmin
+      projects={memberOf.map((p) => ({ ...p, name: "Open" })) as never}
+      fallbackFocusRef={createRef<HTMLElement>()}
+    />
+  );
+}
+
 async function mount(projectIds: string[], memberOf: { id: string }[]) {
   let renderer!: ReactTestRenderer;
   await act(async () => {
-    renderer = create(
-      <EditApiKeyDialog
-        apiKey={{ ...apiKey, projectIds } as never}
-        isAdmin
-        projects={memberOf.map((p) => ({ ...p, name: "Open" })) as never}
-        fallbackFocusRef={createRef<HTMLElement>()}
-      />,
-      {
-        createNodeMock: (element) => {
-          const props = element.props as { name?: string; type?: string };
-          return {
-            name: props.name ?? "",
-            type: props.type ?? "text",
-            value: "",
-            checked: false,
-            focus: vi.fn(),
-            select: vi.fn(),
-          };
-        },
+    renderer = create(editor(projectIds, memberOf), {
+      createNodeMock: (element) => {
+        const props = element.props as { name?: string; type?: string };
+        return {
+          name: props.name ?? "",
+          type: props.type ?? "text",
+          value: "",
+          checked: false,
+          focus: vi.fn(),
+          select: vi.fn(),
+        };
       },
-    );
+    });
   });
   return renderer;
 }
@@ -143,6 +152,24 @@ async function submit(renderer: ReactTestRenderer) {
 
 describe("EditApiKeyDialog unavailable project restrictions", () => {
   beforeEach(() => mocked.mutate.mockReset());
+
+  it("submits the policy revision captured when the dialog opened", async () => {
+    const renderer = await mount([A, B], [{ id: A }, { id: B }]);
+    await act(async () => {
+      const { onOpenChange } = renderer.root.findByType(Dialog).props as {
+        onOpenChange: (open: boolean) => void;
+      };
+      onOpenChange(true);
+    });
+    await act(async () =>
+      renderer.update(editor([B], [{ id: A }, { id: B }], 3)),
+    );
+    expect(await submit(renderer)).toEqual([A, B]);
+    expect(mocked.mutate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ expectedPolicyRevision: 2 }),
+    );
+    await act(async () => renderer.unmount());
+  });
 
   it("lists a lost project as removable and submits the rest once it is unchecked", async () => {
     const renderer = await mount([A, B], [{ id: B }]);

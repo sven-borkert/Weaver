@@ -2407,6 +2407,39 @@ describe("wiki read tools", () => {
     ).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
+  it("resumes the change feed after the tool output budget cuts a page", async () => {
+    const f = await fixture();
+    await withProjectRepo(f.project.id, async (repo) => {
+      for (let batch = 0; batch < 3; batch++) {
+        for (let file = 0; file < 20; file++)
+          await repo.writeFileAtomic(
+            `${"a".repeat(220)}-${batch}-${file}.txt`,
+            "text\n",
+          );
+        await repo.commitAll(`Add batch ${batch}`, {
+          name: "Tool User",
+          email: f.user.email,
+          userId: f.user.id,
+        });
+      }
+    });
+    const input = { projectId: f.project.id };
+    const all = await listRecentChanges(f.db, input, f.actor);
+    const first = await run(f.ctx, "list_recent_changes", input);
+    expect(first.changes.length).toBeLessThan(all.changes.length);
+    expect(first.nextCursor).toBeTruthy();
+    const rest = await run(f.ctx, "list_recent_changes", {
+      ...input,
+      cursor: first.nextCursor,
+    });
+    expect(
+      [...first.changes, ...rest.changes].map(
+        (change: { sha: string }) => change.sha,
+      ),
+    ).toEqual(all.changes.map((change) => change.sha));
+    expect(rest.nextCursor).toBeNull();
+  });
+
   it("keeps wiki tool output within the page budget and resumes after the last page returned", async () => {
     const f = await fixture();
     for (let i = 0; i < 30; i++)

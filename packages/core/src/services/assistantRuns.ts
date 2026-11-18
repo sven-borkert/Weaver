@@ -12,6 +12,7 @@ import { hasExternalDispatch } from "./externalMcp/calls";
 import { invalidateExternalApprovals } from "./externalMcp/approvals";
 import { settleExternalRun } from "./externalMcp/retention";
 import type { Prisma, PrismaClient } from "@weaver/db/client";
+import { emitDiagnostic } from "../diagnostics/writer";
 import {
   deserializeSecurityContext,
   serializeSecurityContext,
@@ -109,12 +110,25 @@ export async function dispatchAssistantRun(
   db: PrismaClient,
   runId: string,
 ): Promise<string | null> {
-  const jobId = await requestKnowledgeJob("assistant.run", { runId });
-  if (jobId)
-    await db.assistantRun.updateMany({
-      where: { id: runId, jobId: null },
-      data: { jobId },
+  let jobId: string | null = null;
+  try {
+    jobId = await requestKnowledgeJob("assistant.run", { runId });
+    if (jobId)
+      await db.assistantRun.updateMany({
+        where: { id: runId, jobId: null },
+        data: { jobId },
+      });
+  } catch (error) {
+    emitDiagnostic({
+      event: "assistant.run.dispatch_failed",
+      severity: "warn",
+      message: "Could not finish dispatching a queued assistant run",
+      outcome: "error",
+      runId,
+      details: { stage: jobId ? "receipt" : "publication" },
     });
+    throw error;
+  }
   return jobId;
 }
 
@@ -206,7 +220,7 @@ export async function submitUserMessage(
     return { message, run };
   });
   // Commit/publish gap is closed by reconcileAssistantRuns (assistant.reconcile).
-  await dispatchAssistantRun(db, created.run.id);
+  await dispatchAssistantRun(db, created.run.id).catch(() => undefined);
   return {
     userMessage: toMessageView({
       ...created.message,
@@ -1162,7 +1176,8 @@ export async function reconcileAssistantRuns(
       data: { jobId: null, queuedAt: now },
     });
     if (claimed.count !== 1) continue;
-    if (await dispatchAssistantRun(db, run.id)) republished += 1;
+    const jobId = await dispatchAssistantRun(db, run.id).catch(() => null);
+    if (jobId) republished += 1;
   }
   return {
     republished,

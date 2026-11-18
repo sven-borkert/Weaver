@@ -142,6 +142,43 @@ describe("samplePlotCurve", () => {
   });
 
   it.each([
+    ["tan(x)", "tan(t)", [0, 3]],
+    ["1/(x-0.001)", "1/(t-0.001)", [-1, 1]],
+  ])(
+    "breaks equivalent Cartesian and parametric curves for %s",
+    (expression, parametric, range) => {
+      const cartesian = parse({ type: "cartesian", expression, x: range });
+      const parametricY = parse({
+        type: "parametric",
+        xExpression: "t",
+        yExpression: parametric,
+        t: range,
+      });
+      const parametricX = parse({
+        type: "parametric",
+        xExpression: parametric,
+        yExpression: "-t",
+        t: range,
+      });
+      if (
+        cartesian.type !== "cartesian" ||
+        parametricY.type !== "parametric" ||
+        parametricX.type !== "parametric"
+      )
+        throw new Error("Unexpected plot type");
+      const points = samplePlotCurve(cartesian);
+      const gaps = points.map((point) => Boolean(point?.breakBefore));
+      expect(gaps.filter(Boolean)).toHaveLength(1);
+      expect(samplePlotCurve(parametricY)).toEqual(points);
+      expect(
+        samplePlotCurve(parametricX).map((point) =>
+          Boolean(point?.breakBefore),
+        ),
+      ).toEqual(gaps);
+    },
+  );
+
+  it.each([
     "1e8*(x-0.001)/(1+abs(x))",
     "(2*floor(x-0.001)+1)/(2*floor(x-0.001)+1)",
   ])("keeps a continuous curve connected: %s", (expression) => {

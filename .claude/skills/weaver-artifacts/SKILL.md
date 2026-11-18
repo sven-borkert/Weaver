@@ -61,9 +61,11 @@ Imports.
 - Deletion and replacement are two-phase: the row change (delete, or the
   `contentDigest` update on a replace) commits first inside the lock; a
   **separate** lifecycle-locked pass then rechecks `isBlobReferenced` before
-  unlinking the old blob (`unlinkUnreferenced` in `services/artifacts.ts`).
+  unlinking the old blob (`reclaimUnreferencedBlobs` in `services/ingestion.ts`).
   Never unlink before the row change commits — a rolled-back transaction could
   otherwise resurrect a reference whose blob is already gone.
+  After a committed deletion, failed blob or notebook cleanup emits
+  `storage.cleanup.deferred` and remains eligible for `system.reconcile`.
 - `packages/core/src/ingestion/blobReferences.ts` is the **only** definition
   of "this digest is still referenced" and of retained bytes for the quota.
   `referencedDigests`/`isBlobReferenced` union `IngestionFile` and `Artifact`;
@@ -994,6 +996,9 @@ license and patch provenance. The native CLI and TypeScript validation share
 `artifacts/notebookSchema.ts`: CAB input and snapshots are each capped at 512 MiB;
 only PNG/JPEG/GIF/WebP assets with matching hashes and signatures are served.
 Do not turn parser output into HTML or expose native diagnostic text.
+
+Parser version 4 budgets each table to half the 2 MiB page limit. The manifest
+search text comes from the text blocks and table cells present in the page file.
 
 Page images: OneNote often stores a picture in a container browsers cannot show
 (ZIP-based) or not at all, plus a PNG "web picture"; the reader

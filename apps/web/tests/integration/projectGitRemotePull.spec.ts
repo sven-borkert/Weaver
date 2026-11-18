@@ -1498,97 +1498,104 @@ describe("mergeFetchedBranch", () => {
     expect(movedData!.content).toContain("milk");
   });
 
-  it("re-slugs a table past a slug another local folder already holds, because slugs are unique project-wide", async () => {
-    const { caller, project, author } = await ownerProject(
-      "pull-table-reslug-slug",
-      "Table Reslug Slug Project",
-    );
-    for (const name of ["z", "a"]) {
-      await caller.tableFolder.create({
-        projectId: project.id,
-        parentPath: [],
-        name,
-      });
-    }
-    const localTable = await caller.table.create({
-      projectId: project.id,
-      folderPath: ["z"],
-      title: "Budget",
-      columns: [TEXT_COL],
-      rows: [{ id: ROW_1, cells: { [TEXT_COL.id]: "milk" } }],
-    });
-    const otherTable = await caller.table.create({
-      projectId: project.id,
-      folderPath: ["a"],
-      title: "Budget",
-      columns: [TEXT_COL],
-      rows: [],
-    });
-    const rowsBefore = await getPrisma().dataTable.findMany({
-      where: { projectId: project.id },
-      orderBy: { path: "asc" },
-      select: { id: true, path: true },
-    });
-    expect(rowsBefore).toEqual([
-      { id: otherTable.id, path: "tables/a/budget-2.table" },
-      { id: localTable.id, path: "tables/z/budget.table" },
-    ]);
-
-    const remoteTableId = randomUUID();
-    const { bareDirectory, remoteHead } = await buildRemoteRepo(
-      async (source) => {
-        await writeFile(path.join(source, "project.json"), "{}\n");
-        await mkdir(path.join(source, "tables/z/budget.table"), {
-          recursive: true,
+  it.each([
+    { slug: "budget", suffixStem: "budget" },
+    { slug: "b".repeat(79), suffixStem: "b".repeat(78) },
+    { slug: "c".repeat(80), suffixStem: "c".repeat(78) },
+  ])(
+    "re-slugs $slug past a suffix held in another local folder",
+    async ({ slug, suffixStem }) => {
+      const { caller, project, author } = await ownerProject(
+        "pull-table-reslug-slug",
+        "Table Reslug Slug Project",
+      );
+      for (const name of ["z", "a"]) {
+        await caller.tableFolder.create({
+          projectId: project.id,
+          parentPath: [],
+          name,
         });
-        await writeFile(
-          path.join(source, "tables/z/budget.table/schema.json"),
-          serializeSchemaFile({
-            id: remoteTableId,
-            title: "Budget",
-            sourceOfTruth: "git",
-            columns: [],
-            created: T0,
-            updated: T0,
-          }),
-        );
-        await writeFile(
-          path.join(source, "tables/z/budget.table/data.jsonl"),
-          "",
-        );
-      },
-    );
-
-    const outcome = (await withExistingProjectRepo(project.id, (repo) =>
-      mergeFetchedBranch(getPrisma(), repo, {
+      }
+      const localTable = await caller.table.create({
         projectId: project.id,
-        bareDirectory,
-        branch: "main",
-        remoteHead,
-        author,
-      }),
-    ))!;
-    expect(outcome.reslugged).toEqual([
-      {
-        kind: "table",
-        from: "tables/z/budget.table",
-        to: "tables/z/budget-3.table",
-      },
-    ]);
+        folderPath: ["z"],
+        title: slug,
+        columns: [TEXT_COL],
+        rows: [{ id: ROW_1, cells: { [TEXT_COL.id]: "milk" } }],
+      });
+      const otherTable = await caller.table.create({
+        projectId: project.id,
+        folderPath: ["a"],
+        title: slug,
+        columns: [TEXT_COL],
+        rows: [],
+      });
+      const rowsBefore = await getPrisma().dataTable.findMany({
+        where: { projectId: project.id },
+        orderBy: { path: "asc" },
+        select: { id: true, path: true },
+      });
+      expect(rowsBefore).toEqual([
+        { id: otherTable.id, path: `tables/a/${suffixStem}-2.table` },
+        { id: localTable.id, path: `tables/z/${slug}.table` },
+      ]);
 
-    const repo = (await openProjectRepo(project.id))!;
-    const idAt = async (dir: string) =>
-      parseSchemaFile(
-        (await repo.readCommittedFile(`${dir}/schema.json`))!.content,
-      ).id;
-    expect(await idAt("tables/z/budget.table")).toBe(remoteTableId);
-    expect(await idAt("tables/z/budget-3.table")).toBe(localTable.id);
-    expect(await idAt("tables/a/budget-2.table")).toBe(otherTable.id);
-    const movedData = await repo.readCommittedFile(
-      "tables/z/budget-3.table/data.jsonl",
-    );
-    expect(movedData!.content).toContain("milk");
-  });
+      const remoteTableId = randomUUID();
+      const { bareDirectory, remoteHead } = await buildRemoteRepo(
+        async (source) => {
+          await writeFile(path.join(source, "project.json"), "{}\n");
+          await mkdir(path.join(source, `tables/z/${slug}.table`), {
+            recursive: true,
+          });
+          await writeFile(
+            path.join(source, `tables/z/${slug}.table/schema.json`),
+            serializeSchemaFile({
+              id: remoteTableId,
+              title: slug,
+              sourceOfTruth: "git",
+              columns: [],
+              created: T0,
+              updated: T0,
+            }),
+          );
+          await writeFile(
+            path.join(source, `tables/z/${slug}.table/data.jsonl`),
+            "",
+          );
+        },
+      );
+
+      const outcome = (await withExistingProjectRepo(project.id, (repo) =>
+        mergeFetchedBranch(getPrisma(), repo, {
+          projectId: project.id,
+          bareDirectory,
+          branch: "main",
+          remoteHead,
+          author,
+        }),
+      ))!;
+      expect(outcome.reslugged).toEqual([
+        {
+          kind: "table",
+          from: `tables/z/${slug}.table`,
+          to: `tables/z/${suffixStem}-3.table`,
+        },
+      ]);
+
+      const repo = (await openProjectRepo(project.id))!;
+      const idAt = async (dir: string) =>
+        parseSchemaFile(
+          (await repo.readCommittedFile(`${dir}/schema.json`))!.content,
+        ).id;
+      expect(await idAt(`tables/z/${slug}.table`)).toBe(remoteTableId);
+      expect(await idAt(`tables/z/${suffixStem}-3.table`)).toBe(localTable.id);
+      expect(await idAt(`tables/a/${suffixStem}-2.table`)).toBe(otherTable.id);
+      const movedData = await repo.readCommittedFile(
+        `tables/z/${suffixStem}-3.table/data.jsonl`,
+      );
+      expect(movedData!.content).toContain("milk");
+    },
+  );
 
   it("preserves both table versions when unrelated histories share an id", async () => {
     const { caller, project, author } = await ownerProject(

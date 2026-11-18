@@ -3,6 +3,7 @@ import pgvector from "pgvector";
 import { Prisma, type PrismaClient } from "@weaver/db/client";
 import { normalizeKnowledgeName } from "@weaver/core/knowledge/extraction";
 import { reciprocalRankFusion } from "@weaver/core/knowledge/ranking";
+import { MAX_KNOWLEDGE_CHUNKS } from "@weaver/core/knowledge/chunking";
 import {
   MAX_SEARCH_ALIASES,
   MAX_SEARCH_ALIAS_CHARACTERS,
@@ -32,6 +33,7 @@ const RRF_K = 60;
 const EXACT_MATCH_BOOST = 0.25;
 const SEARCH_SNIPPET_LIMIT = 240;
 const TABLE_COLUMN_MATCH_LIMIT = 5;
+const SEMANTIC_DOCUMENT_CHUNK_BUDGET = 4_096;
 /** Interactive searches fall back to keyword results instead of queueing behind indexing. */
 export const QUERY_EMBEDDING_TIMEOUT_MS = 5_000;
 
@@ -223,6 +225,7 @@ export async function searchKnowledge(
                 vector,
                 generationIds,
                 candidateLimit,
+                limit,
                 semanticContext.embeddingDimensions,
               ),
               loadSemanticEntities(
@@ -521,6 +524,7 @@ async function loadSemanticDocuments(
   vector: number[],
   generationIds: string[],
   limit: number,
+  resultLimit: number,
   dimensions: number,
 ): Promise<DocumentCandidate[]> {
   const allowedProjects = parameterizedProjectIds(projectIds);
@@ -529,7 +533,8 @@ async function loadSemanticDocuments(
   return db.$transaction(async (tx) => {
     await tx.$executeRaw`SET LOCAL hnsw.iterative_scan = 'strict_order'`;
     await tx.$executeRaw`SET LOCAL hnsw.ef_search = 100`;
-    return tx.$queryRaw<DocumentCandidate[]>(Prisma.sql`
+    const load = (chunkLimit: number) =>
+      tx.$queryRaw<DocumentCandidate[]>(Prisma.sql`
     WITH nearest_embeddings AS MATERIALIZED (
       SELECT e.* FROM "KnowledgeEmbedding" AS e
       WHERE e."projectId" IN (${allowedProjects})
@@ -538,7 +543,7 @@ async function loadSemanticDocuments(
         AND e."embeddingDimensions" = ${dimensions}
         AND EXISTS (SELECT 1 FROM "KnowledgeGeneration" g WHERE g."id" = e."generationId" AND g."projectId" = e."projectId" AND g."status" = 'active')
       ORDER BY (e."embedding"::${vectorType} <=> ${queryVector}::${vectorType}) ASC
-      LIMIT ${limit * 20}
+      LIMIT ${chunkLimit}
     ), ranked_chunks AS (
       SELECT document."id" AS "documentId",
              document."projectId" AS "projectId",
@@ -603,6 +608,18 @@ async function loadSemanticDocuments(
     ORDER BY "distance" ASC, "title" ASC, "documentId" ASC
     LIMIT ${limit}
   `);
+    const initialLimit = Math.min(limit * 20, SEMANTIC_DOCUMENT_CHUNK_BUDGET);
+    const initial = await load(initialLimit);
+    if (
+      initial.length >= resultLimit ||
+      initialLimit === SEMANTIC_DOCUMENT_CHUNK_BUDGET
+    )
+      return initial;
+    const expandedLimit = Math.min(
+      SEMANTIC_DOCUMENT_CHUNK_BUDGET,
+      Math.max(initialLimit * 2, resultLimit * MAX_KNOWLEDGE_CHUNKS),
+    );
+    return load(expandedLimit);
   });
 }
 

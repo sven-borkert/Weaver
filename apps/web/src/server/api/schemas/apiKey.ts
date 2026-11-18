@@ -43,4 +43,4 @@ export const apiKeyIdInput = z.object({ keyId: z.uuid() });
 /** Expiry is fixed at creation; changing it means a new key. */
 export const updateApiKeyInput = createApiKeyInput
   .omit({ expiresInDays: true })
-  .extend({ keyId: z.uuid() });
+  .extend({ keyId: z.uuid(), expectedPolicyRevision: z.number().int().min(0) });

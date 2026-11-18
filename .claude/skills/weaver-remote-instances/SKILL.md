@@ -68,7 +68,7 @@ outbound network policy.
 - Secret rotation uses ciphertext/version compare-and-swap so it cannot
   overwrite tokens refreshed concurrently. Callback holds the endpoint lock
   while atomically consuming same-generation authorization state and storing
-  tokens. Disconnect deletes the connection and pending authorization state.
+  tokens. Disconnect deletes the connection and pending authorization state. An authenticated peer result survives failure to record its connection's last-used timestamp, which emits a separate diagnostic.
 
 ## Transfer boundaries
 

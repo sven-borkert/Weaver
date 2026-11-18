@@ -17,6 +17,13 @@ export class RunTimeoutError extends Error {
   }
 }
 
+export class RunContentFilteredError extends Error {
+  constructor() {
+    super("The model provider filtered the response.");
+    this.name = "RunContentFilteredError";
+  }
+}
+
 export type RunFailure = { code: string; message: string; retryable: boolean };
 
 /** Error summaries are persisted verbatim (AssistantRun.errorMessage, the run.failed payload). */
@@ -41,6 +48,12 @@ export function classifyRunError(error: unknown): RunFailure {
   }
   if (error instanceof RunCancelledError)
     return { code: "CANCELLED", message: "cancelled", retryable: false };
+  if (error instanceof RunContentFilteredError)
+    return {
+      code: "CONTENT_FILTERED",
+      message: error.message,
+      retryable: false,
+    };
   if (error instanceof RunTimeoutError)
     return {
       code: "PROVIDER_UNAVAILABLE",

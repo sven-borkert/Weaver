@@ -202,6 +202,16 @@ for alias in $missing_aliases; do
   publish_alias "$IMAGE/$ref" "$IMAGE/${ref%:*}@${alias#*=}"
 done
 
+if [ "$floating" = 1 ] || [ "${PUSH_CACHE:-0}" = 1 ]; then
+  # Both CI workflows serialize registry releases. Recheck the branch after staging and repair.
+  branch_ref="$(git ls-remote --exit-code origin "refs/heads/$CI_DEFAULT_BRANCH")" ||
+    fail "cannot verify the default branch tip before publishing floating aliases"
+  if [ "${branch_ref%%[[:space:]]*}" != "$COMMIT_SHA" ]; then
+    echo "Skipping floating aliases for $COMMIT_SHA: the default branch has moved on."
+    exit 0
+  fi
+fi
+
 if [ "$floating" = 1 ]; then
   completed_ref="$manifest_repo:weaver-ci-latest-$COMMIT_SHA"
   completed_digest="$(registry_digest "$completed_ref")"

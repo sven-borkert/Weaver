@@ -26,7 +26,9 @@ import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
 import {
   closedFence,
+  emitRunEnded,
   endRun,
+  endRunInTx,
   heartbeatWikiRun,
   isClosedFence,
   leaseWikiRun,
@@ -553,7 +555,7 @@ export async function executeWikiRevert(
     WIKI_RUN_CAPS.revert.wallClockMs,
   );
   const end = (
-    status: "succeeded" | "failed" | "stopped",
+    status: "failed" | "stopped",
     detail: { errorCode?: string; errorMessage?: string; stopReason?: string },
   ) =>
     endRun(db, lease.id, ["running"], {
@@ -564,23 +566,36 @@ export async function executeWikiRevert(
     });
   try {
     const report = await runRevert(db, lease, controller.signal);
-    const sourceRun = (
-      await db.wikiRun.findUniqueOrThrow({
-        where: { id: lease.id },
-        select: { revertsRunId: true },
-      })
-    ).revertsRunId!;
-    await db.$transaction(async (tx) => {
-      await tx.wikiRun.update({
-        where: { id: lease.id },
-        data: {
-          report,
+    const finalized = await db.$transaction(async (tx) => {
+      controller.signal.throwIfAborted();
+      const now = new Date();
+      const ended = await endRunInTx(
+        tx,
+        lease.id,
+        ["running"],
+        {
+          status: "succeeded",
+          leaseToken: lease.leaseToken,
+          leaseExpiresAfter: now,
+          note: "The revert ended.",
           summary: `Restored ${report.restored.length} and removed ${report.deleted.length} pages; skipped ${report.skipped.length}.`,
         },
+        now,
+      );
+      if (!ended) return null;
+      const { revertsRunId } = await tx.wikiRun.update({
+        where: { id: lease.id },
+        data: { report },
+        select: { revertsRunId: true },
       });
+      if (!revertsRunId)
+        throw new CoreError(
+          "PRECONDITION_FAILED",
+          "The source wiki run no longer exists",
+        );
       await tx.wikiInputItem.updateMany({
         where: {
-          runId: sourceRun,
+          runId: revertsRunId,
           projectId: lease.projectId,
           status: "processed",
         },
@@ -590,8 +605,10 @@ export async function executeWikiRevert(
           revision: { increment: 1 },
         },
       });
+      return { ended, revertsRunId };
     });
-    await end("succeeded", {});
+    if (!finalized) return;
+    emitRunEnded(finalized.ended);
     emitDiagnostic({
       event: "wiki.revert.completed",
       message: "wiki revert completed",
@@ -599,7 +616,7 @@ export async function executeWikiRevert(
       projectId: lease.projectId,
       details: {
         runId: lease.id,
-        revertsRunId: sourceRun,
+        revertsRunId: finalized.revertsRunId,
         restored: report.restored.length,
         deleted: report.deleted.length,
         skipped: report.skipped.length,

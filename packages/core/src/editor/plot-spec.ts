@@ -290,24 +290,9 @@ function sampleCoordinate(
   return index === count - 1 ? max : min + (max - min) * (index / (count - 1));
 }
 
-function divisionPoleCandidate(
-  before: readonly number[],
-  after: readonly number[],
-) {
-  for (const [index, right] of after.entries()) {
-    const left = before[index];
-    if (left === undefined || left < 0 === right < 0) continue;
-    const leftMagnitude = Math.abs(left);
-    const rightMagnitude = Math.abs(right);
-    const scale = Math.max(leftMagnitude, rightMagnitude);
-    const fraction =
-      leftMagnitude / scale / (leftMagnitude / scale + rightMagnitude / scale);
-    return {
-      index,
-      fraction,
-      tolerance: Math.min(leftMagnitude, rightMagnitude) / 4,
-    };
-  }
+function curveCoordinate(evaluate: ReturnType<typeof compilePlotExpression>) {
+  const factors: [number[], number[]] = [[], []];
+  return { evaluate, factors };
 }
 
 export function samplePlotCurve(
@@ -324,45 +309,76 @@ export function samplePlotCurve(
   const range = cartesian ? spec.x : spec.t;
   const evaluateX = cartesian
     ? null
-    : compilePlotExpression(spec.xExpression, variableNames);
-  const evaluateY = compilePlotExpression(
-    cartesian ? spec.expression : spec.yExpression,
-    variableNames,
+    : curveCoordinate(compilePlotExpression(spec.xExpression, variableNames));
+  const evaluateY = curveCoordinate(
+    compilePlotExpression(
+      cartesian ? spec.expression : spec.yExpression,
+      variableNames,
+    ),
   );
   const samples = sampleCount(count, 401, 1_025);
-  const denominators: [number[], number[]] = [[], []];
   const probe: number[] = [];
   let probesRemaining = maxPoleProbes;
   let previous: PlotPoint | null = null;
+  let previousCoordinate = range[0];
+
+  function crossesPole(
+    expression: ReturnType<typeof curveCoordinate>,
+    buffer: 0 | 1,
+    coordinate: number,
+  ): boolean {
+    const before = expression.factors[buffer === 0 ? 1 : 0];
+    const after = expression.factors[buffer];
+    for (let index = 0; index < after.length && probesRemaining > 0; index++) {
+      const left = before[index];
+      const right = after[index];
+      if (
+        left === undefined ||
+        right === undefined ||
+        !Number.isFinite(left) ||
+        !Number.isFinite(right) ||
+        left < 0 === right < 0
+      )
+        continue;
+      const scale = Math.max(Math.abs(left), Math.abs(right));
+      const leftMagnitude = Math.abs(left) / scale;
+      const rightMagnitude = Math.abs(right) / scale;
+      const fraction = leftMagnitude / (leftMagnitude + rightMagnitude);
+      const crossing =
+        previousCoordinate + (coordinate - previousCoordinate) * fraction;
+      if (crossing <= previousCoordinate || crossing >= coordinate) continue;
+      probesRemaining -= 1;
+      values[0] = crossing;
+      expression.evaluate(values, probe);
+      // A sign change alone can come from a jump without a nearby zero.
+      if (
+        Math.abs(probe[index] ?? NaN) <=
+        Math.min(Math.abs(left), Math.abs(right)) / 4
+      )
+        return true;
+    }
+    return false;
+  }
 
   return Array.from({ length: samples }, (_, index) => {
     const coordinate = sampleCoordinate(range, index, samples);
     values[0] = coordinate;
-    const x = evaluateX ? evaluateX(values) : coordinate;
     const buffer = index % 2 === 0 ? 0 : 1;
-    const currentDenominators = denominators[buffer];
-    const y = evaluateY(values, cartesian ? currentDenominators : undefined);
+    const x = evaluateX
+      ? evaluateX.evaluate(values, evaluateX.factors[buffer])
+      : coordinate;
+    const y = evaluateY.evaluate(values, evaluateY.factors[buffer]);
     const point: PlotPoint | null =
       Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
-    if (cartesian && point && previous && probesRemaining > 0) {
-      const previousDenominators = denominators[buffer === 0 ? 1 : 0];
-      const candidate = divisionPoleCandidate(
-        previousDenominators,
-        currentDenominators,
-      );
-      if (candidate) {
-        const crossing = previous.x + (x - previous.x) * candidate.fraction;
-        if (crossing > previous.x && crossing < x) {
-          probesRemaining -= 1;
-          values[0] = crossing;
-          evaluateY(values, probe);
-          // A jump in the denominator alone does not confirm a nearby zero.
-          if (Math.abs(probe[candidate.index] ?? NaN) <= candidate.tolerance)
-            point.breakBefore = true;
-        }
-      }
-    }
+    if (
+      point &&
+      previous &&
+      (crossesPole(evaluateY, buffer, coordinate) ||
+        (evaluateX && crossesPole(evaluateX, buffer, coordinate)))
+    )
+      point.breakBefore = true;
     previous = point;
+    previousCoordinate = coordinate;
     return point;
   });
 }

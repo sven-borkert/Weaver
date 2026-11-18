@@ -58,6 +58,9 @@ See `weaver-admin` for the operational insight services and shared paging contra
   success. `services/aiUsageBestEffort.ts` is the shared non-transactional helper;
   never catch a failed query inside a database transaction and continue that
   aborted transaction.
+- `assistant.run.dispatch_failed` records the run ID and the publication or
+  receipt stage. `remote.connection.usage_update_failed` records peer connection
+  timestamp failures. Both preserve the result of the committed operation.
 - `system:admin` implies `llm:admin`, is effective on a personal key only while its owner remains a global Admin, and is never an OAuth scope. Admin contracts live in `ADMIN_TOOLS`, never `ASSISTANT_TOOLS`; admin services begin with `assertSystemAdmin` (LLM services use `assertLlmAdmin`).
 - The Diagnostics page uses React Hook Form plus Zod, preserves dirty fields across refetch, and synchronously serializes save/prune from validation or confirmation through mutation settlement.
 - The Events list defaults to Info and above using `excludeDebug: true` before pagination. Exact severity takes precedence; Debug and All severities are explicit choices. Unfiltered service/MCP reads retain all severities. Routine `project.git-sync`, `task.tick`, and `assistant.reconcile` start/completion rows use debug; failures stay error. Debug remains captured at Standard/Verbose and follows normal event retention. Migration `20260921001300_routine_job_diagnostic_severity` reclassifies historical info rows for those checks without deleting them.

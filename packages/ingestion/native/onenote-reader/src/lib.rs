@@ -2,8 +2,8 @@ use onenote_parser::Parser;
 use onenote_parser::contents::{
     Content, EmbeddedFile, Image, Outline, OutlineElement, OutlineItem, Table,
 };
-use onenote_parser::page::PageContent;
 use onenote_parser::errors::Error as ParseError;
+use onenote_parser::page::PageContent;
 use onenote_parser::section::Section;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -26,7 +26,13 @@ const MAX_PAGES: usize = 20_000;
 const MAX_PATH_DEPTH: usize = 20;
 const MAX_BLOCKS: usize = 25_000;
 const MAX_TEXT_CHARS: usize = 200_000;
+const MAX_CELL_CHARS: usize = 20_000;
+const MAX_TABLE_ROWS: usize = 5_000;
+const MAX_TABLE_COLUMNS: usize = 200;
+const MAX_TABLE_BYTES: usize = PAGE_MAX_BYTES / 2;
 const MAX_WARNINGS: usize = 100;
+const PAGE_SIZE_WARNING: &str = "page blocks were truncated to the serialized size limit";
+const SEARCH_TEXT_WARNING: &str = "searchable page text was truncated";
 pub const EMPTY_SECTION_WARNING: &str =
     "section has no saved content; open it in OneNote and export the notebook again";
 // The parser's only signal for a section whose content revision was never stored,
@@ -149,9 +155,26 @@ struct SnapshotWriter {
 
 struct PageBuild {
     blocks: Vec<Block>,
+    block_bytes: usize,
     warnings: Vec<String>,
-    text: String,
     error: Option<ReaderError>,
+}
+
+impl PageBuild {
+    fn push_block(&mut self, block: Block) -> bool {
+        let Ok(bytes) = serde_json::to_vec(&block) else {
+            self.error = Some(ReaderError::Io);
+            return false;
+        };
+        let next = self.block_bytes + bytes.len() + 1;
+        if next > PAGE_MAX_BYTES {
+            push_warning(&mut self.warnings, PAGE_SIZE_WARNING.to_owned());
+            return false;
+        }
+        self.block_bytes = next;
+        self.blocks.push(block);
+        true
+    }
 }
 
 struct CabEntry {
@@ -452,8 +475,8 @@ fn build_section(
             let level = page.level().clamp(0, 20);
             let mut build = PageBuild {
                 blocks: Vec::new(),
+                block_bytes: 0,
                 warnings: Vec::new(),
-                text: String::new(),
                 error: None,
             };
             for content in page.contents() {
@@ -466,7 +489,6 @@ fn build_section(
             if let Some(error) = build.error.take() {
                 return Err(error);
             }
-            let text = build.text;
             let page_file = PageFile {
                 id: page_id.clone(),
                 section_id: id.clone(),
@@ -475,7 +497,7 @@ fn build_section(
                 blocks: build.blocks,
                 warnings: build.warnings,
             };
-            let bytes = bounded_page_json(page_file)?;
+            let (bytes, text) = bounded_page_json(page_file)?;
             writer.add_bytes(bytes.len() as u64)?;
             write_new(
                 &writer.output.join("pages").join(format!("{page_id}.json")),
@@ -546,8 +568,7 @@ fn extract_element(element: &OutlineElement, build: &mut PageBuild, writer: &mut
                     );
                 }
                 if !value.is_empty() {
-                    append_search_text(&mut build.text, &value, &mut build.warnings);
-                    build.blocks.push(Block::Text { text: value });
+                    build.push_block(Block::Text { text: value });
                 }
                 if !text.math_inline_objects().is_empty() {
                     push_warning(&mut build.warnings, "math content was omitted".to_owned());
@@ -577,49 +598,80 @@ fn extract_element(element: &OutlineElement, build: &mut PageBuild, writer: &mut
 }
 
 fn extract_table(table: &Table, build: &mut PageBuild, writer: &mut SnapshotWriter) {
-    let mut rows = Vec::new();
-    for row in table.contents().iter().take(5_000) {
-        let mut cells = Vec::new();
-        for cell in row.contents().iter().take(200) {
-            let mut text = String::new();
+    let rows = table.contents().iter().take(MAX_TABLE_ROWS).map(|row| {
+        row.contents().iter().take(MAX_TABLE_COLUMNS).map(|cell| {
+            let mut text = BoundedText::new(MAX_CELL_CHARS);
             for element in cell.contents() {
                 collect_element_text(element, &mut text);
+                if text.truncated {
+                    break;
+                }
             }
-            let value = clamp(&text, 20_000);
-            if utf16_len(&text) > utf16_len(&value) {
-                push_warning(
-                    &mut build.warnings,
-                    "table cell text was truncated to the character limit".to_owned(),
-                );
-            }
-            cells.push(value);
-        }
-        rows.push(cells);
+            text
+        })
+    });
+    let Ok((rows, size_limited, cell_limited)) = bounded_table_rows(rows) else {
+        build.error = Some(ReaderError::Io);
+        return;
+    };
+    if cell_limited {
+        push_warning(
+            &mut build.warnings,
+            "table cell text was truncated to the character limit".to_owned(),
+        );
     }
-    if table.contents().len() > 5_000
+    if size_limited
+        || table.contents().len() > MAX_TABLE_ROWS
         || table
             .contents()
             .iter()
-            .any(|row| row.contents().len() > 200)
+            .any(|row| row.contents().len() > MAX_TABLE_COLUMNS)
     {
         push_warning(
             &mut build.warnings,
             "table was truncated to reader limits".to_owned(),
         );
     }
-    for row in &rows {
-        for cell in row {
-            append_search_text(&mut build.text, cell, &mut build.warnings);
-        }
+    let cell_counts: Vec<_> = rows.iter().map(Vec::len).collect();
+    if !build.push_block(Block::Table { rows }) {
+        return;
     }
-    build.blocks.push(Block::Table { rows });
-    for row in table.contents().iter().take(5_000) {
-        for cell in row.contents().iter().take(200) {
+    for (row, cell_count) in table.contents().iter().zip(cell_counts) {
+        for cell in row.contents().iter().take(cell_count) {
             for element in cell.contents() {
                 extract_element_media(element, build, writer);
             }
         }
     }
+}
+
+fn bounded_table_rows(
+    source: impl IntoIterator<Item = impl IntoIterator<Item = BoundedText>>,
+) -> Result<(Vec<Vec<String>>, bool, bool), serde_json::Error> {
+    let mut rows = Vec::new();
+    let mut cell_limited = false;
+    let mut remaining = MAX_TABLE_BYTES - b"{\"kind\":\"table\",\"rows\":[]}".len();
+    for source_row in source {
+        if remaining < 3 {
+            return Ok((rows, true, cell_limited));
+        }
+        remaining -= 3; // Row brackets and a separator.
+        let mut cells = Vec::new();
+        for cell in source_row {
+            let bytes = serde_json::to_vec(&cell.value)?.len() + 1;
+            if bytes > remaining {
+                if !cells.is_empty() {
+                    rows.push(cells);
+                }
+                return Ok((rows, true, cell_limited));
+            }
+            remaining -= bytes;
+            cell_limited |= cell.truncated;
+            cells.push(cell.value);
+        }
+        rows.push(cells);
+    }
+    Ok((rows, false, cell_limited))
 }
 
 fn extract_element_media(
@@ -683,33 +735,45 @@ fn extract_item_media(item: &OutlineItem, build: &mut PageBuild, writer: &mut Sn
     }
 }
 
-fn collect_element_text(element: &OutlineElement, output: &mut String) {
+fn collect_element_text(element: &OutlineElement, output: &mut BoundedText) {
     for content in element.contents() {
         match content {
-            Content::RichText(text) => append_line(output, text.text()),
+            Content::RichText(text) => output.append(text.text()),
             Content::Table(table) => {
                 for row in table.contents() {
                     for cell in row.contents() {
                         for nested in cell.contents() {
                             collect_element_text(nested, output);
+                            if output.truncated {
+                                return;
+                            }
                         }
                     }
                 }
             }
             _ => {}
         }
+        if output.truncated {
+            return;
+        }
     }
     for child in element.children() {
         collect_item_text(child, output);
+        if output.truncated {
+            return;
+        }
     }
 }
 
-fn collect_item_text(item: &OutlineItem, output: &mut String) {
+fn collect_item_text(item: &OutlineItem, output: &mut BoundedText) {
     match item {
         OutlineItem::Element(element) => collect_element_text(element, output),
         OutlineItem::Group(group) => {
             for nested in group.outlines() {
                 collect_item_text(nested, output);
+                if output.truncated {
+                    return;
+                }
             }
         }
     }
@@ -738,10 +802,12 @@ fn extract_image(image: &Image, build: &mut PageBuild, writer: &mut SnapshotWrit
         }
     };
     match writer.write_asset(&bytes, content_type) {
-        Ok(asset_id) => build.blocks.push(Block::Image {
-            asset_id,
-            alt: clamp(image.alt_text().unwrap_or(""), 1_000),
-        }),
+        Ok(asset_id) => {
+            build.push_block(Block::Image {
+                asset_id,
+                alt: clamp(image.alt_text().unwrap_or(""), 1_000),
+            });
+        }
         Err(error) => build.error = Some(error),
     }
 }
@@ -804,7 +870,7 @@ pub fn choose_image_payload(primary: ImagePayload, web: ImagePayload) -> ImagePa
 }
 
 fn extract_attachment(file: &EmbeddedFile, build: &mut PageBuild) {
-    build.blocks.push(Block::Attachment {
+    build.push_block(Block::Attachment {
         name: clamp(file.filename(), 500),
         byte_size: file.size(),
     });
@@ -841,20 +907,47 @@ impl SnapshotWriter {
     }
 }
 
-fn bounded_page_json(mut page: PageFile) -> Result<Vec<u8>, ReaderError> {
-    loop {
-        let bytes = serde_json::to_vec(&page).map_err(|_| ReaderError::Io)?;
-        if bytes.len() <= PAGE_MAX_BYTES {
-            return Ok(bytes);
+fn bounded_page_json(mut page: PageFile) -> Result<(Vec<u8>, String), ReaderError> {
+    let blocks = std::mem::take(&mut page.blocks);
+    let warning_count = page.warnings.len();
+    push_warning(&mut page.warnings, PAGE_SIZE_WARNING.to_owned());
+    push_warning(&mut page.warnings, SEARCH_TEXT_WARNING.to_owned());
+    let mut size = serde_json::to_vec(&page)
+        .map_err(|_| ReaderError::Io)?
+        .len();
+    page.warnings.truncate(warning_count);
+    for block in blocks {
+        size += serde_json::to_vec(&block)
+            .map_err(|_| ReaderError::Io)?
+            .len()
+            + 1;
+        if size > PAGE_MAX_BYTES {
+            push_warning(&mut page.warnings, PAGE_SIZE_WARNING.to_owned());
+            break;
         }
-        if page.blocks.pop().is_none() {
-            return Err(ReaderError::ResourceLimit);
-        }
-        push_warning(
-            &mut page.warnings,
-            "page blocks were truncated to the serialized size limit".to_owned(),
-        );
+        page.blocks.push(block);
     }
+    let mut text = BoundedText::new(MAX_TEXT_CHARS);
+    for block in &page.blocks {
+        match block {
+            Block::Text { text: paragraph } => text.append(paragraph),
+            Block::Table { rows } => {
+                for cell in rows.iter().flatten() {
+                    text.append(cell);
+                    if text.truncated {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+        if text.truncated {
+            push_warning(&mut page.warnings, SEARCH_TEXT_WARNING.to_owned());
+            break;
+        }
+    }
+    let bytes = serde_json::to_vec(&page).map_err(|_| ReaderError::Io)?;
+    Ok((bytes, text.value))
 }
 
 fn write_new(path: &Path, bytes: &[u8]) -> Result<(), ReaderError> {
@@ -866,34 +959,36 @@ fn write_new(path: &Path, bytes: &[u8]) -> Result<(), ReaderError> {
     file.write_all(bytes).map_err(|_| ReaderError::Io)
 }
 
-fn append_search_text(target: &mut String, value: &str, warnings: &mut Vec<String>) {
-    if value.is_empty() {
-        return;
-    }
-    if utf16_len(target) >= MAX_TEXT_CHARS {
-        push_warning(warnings, "searchable page text was truncated".to_owned());
-        return;
-    }
-    if !target.is_empty() {
-        target.push('\n');
-    }
-    let remaining = MAX_TEXT_CHARS.saturating_sub(utf16_len(target));
-    let original = utf16_len(value);
-    let value = clamp(value, remaining);
-    target.push_str(&value);
-    if utf16_len(&value) < original {
-        push_warning(warnings, "searchable page text was truncated".to_owned());
-    }
+struct BoundedText {
+    value: String,
+    remaining: usize,
+    truncated: bool,
 }
 
-fn append_line(target: &mut String, value: &str) {
-    if value.is_empty() {
-        return;
+impl BoundedText {
+    fn new(remaining: usize) -> Self {
+        Self {
+            value: String::new(),
+            remaining,
+            truncated: false,
+        }
     }
-    if !target.is_empty() {
-        target.push('\n');
+
+    fn append(&mut self, value: &str) {
+        if value.is_empty() || self.truncated {
+            return;
+        }
+        let separator = usize::from(!self.value.is_empty());
+        let bounded = clamp(value, self.remaining.saturating_sub(separator));
+        self.truncated = bounded.len() < value.len();
+        if !bounded.is_empty() {
+            if separator > 0 {
+                self.value.push('\n');
+            }
+            self.value.push_str(&bounded);
+            self.remaining -= utf16_len(&bounded) + separator;
+        }
     }
-    target.push_str(value);
 }
 
 fn push_warning(warnings: &mut Vec<String>, warning: String) {
@@ -1014,12 +1109,14 @@ mod tests {
 
     #[test]
     fn payloads_are_classified_by_their_bytes() {
-        let read = |bytes: &[u8]| {
-            read_payload(Some(Box::new(std::io::Cursor::new(bytes.to_vec()))))
-        };
+        let read =
+            |bytes: &[u8]| read_payload(Some(Box::new(std::io::Cursor::new(bytes.to_vec()))));
         assert_eq!(read(b""), ImagePayload::Missing);
         assert_eq!(read(b"PK\x03\x04zip"), ImagePayload::Unsupported);
-        assert!(matches!(read(b"GIF89a..."), ImagePayload::Image(_, "image/gif")));
+        assert!(matches!(
+            read(b"GIF89a..."),
+            ImagePayload::Image(_, "image/gif")
+        ));
         assert_eq!(read_payload(None), ImagePayload::Missing);
     }
 
@@ -1186,6 +1283,71 @@ mod tests {
     }
 
     #[test]
+    fn oversized_first_table_keeps_the_following_paragraph() {
+        let rows = (0..32).map(|index| {
+            [if index == 31 {
+                "omitted cell only".to_owned()
+            } else {
+                "\u{1}".repeat(12_000)
+            }]
+            .into_iter()
+            .map(|value| {
+                let mut cell = BoundedText::new(MAX_CELL_CHARS);
+                cell.append(&value);
+                cell
+            })
+        });
+        let (rows, size_limited, _) = bounded_table_rows(rows).unwrap();
+        assert!(size_limited);
+        assert_eq!(rows.len(), 14);
+        let page = PageFile {
+            id: "page-1".to_owned(),
+            section_id: "section-1".to_owned(),
+            title: "Budgeted table".to_owned(),
+            level: 0,
+            blocks: vec![
+                Block::Table { rows },
+                Block::Text {
+                    text: "A readable paragraph".to_owned(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        let (bytes, search_text) = bounded_page_json(page).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(bytes.len() <= PAGE_MAX_BYTES);
+        assert_eq!(parsed["blocks"][1]["text"], "A readable paragraph");
+        assert!(search_text.ends_with("A readable paragraph"));
+        assert!(!search_text.contains("omitted cell only"));
+    }
+
+    #[test]
+    fn skipped_page_blocks_are_not_searchable() {
+        let page = PageFile {
+            id: "page-1".to_owned(),
+            section_id: "section-1".to_owned(),
+            title: "Capped page".to_owned(),
+            level: 0,
+            blocks: vec![
+                Block::Text {
+                    text: "First paragraph".to_owned(),
+                },
+                Block::Text {
+                    text: "\u{1}".repeat(PAGE_MAX_BYTES / 6),
+                },
+                Block::Text {
+                    text: "omitted paragraph".to_owned(),
+                },
+            ],
+            warnings: Vec::new(),
+        };
+        let (bytes, search_text) = bounded_page_json(page).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(parsed["warnings"][0], PAGE_SIZE_WARNING);
+        assert_eq!(search_text, "First paragraph");
+    }
+
+    #[test]
     fn string_limits_count_utf16_code_units() {
         assert_eq!(clamp("a😀b", 3), "a😀");
         assert_eq!(clamp("a😀b", 2), "a");
@@ -1194,11 +1356,11 @@ mod tests {
 
     #[test]
     fn full_search_text_reports_additional_omitted_text() {
-        let mut text = "a".repeat(MAX_TEXT_CHARS);
-        let mut warnings = Vec::new();
-        append_search_text(&mut text, "omitted", &mut warnings);
-        assert_eq!(utf16_len(&text), MAX_TEXT_CHARS);
-        assert_eq!(warnings, ["searchable page text was truncated"]);
+        let mut text = BoundedText::new(MAX_TEXT_CHARS);
+        text.append(&"a".repeat(MAX_TEXT_CHARS));
+        text.append("omitted");
+        assert_eq!(utf16_len(&text.value), MAX_TEXT_CHARS);
+        assert!(text.truncated);
     }
 
     #[test]

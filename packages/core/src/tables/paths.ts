@@ -4,6 +4,12 @@ export const TABLES_ROOT = "tables";
 export const TABLE_DIR_SUFFIX = ".table";
 export const TABLE_DIR_RE = /^[a-z0-9][a-z0-9-]{0,79}\.table$/;
 
+export function tableSlugWithSuffix(base: string, index: number): string {
+  const suffix = index === 1 ? "" : `-${index}`;
+  const stem = base.slice(0, 80 - suffix.length).replace(/-+$/g, "");
+  return `${stem}${suffix}`;
+}
+
 export function tableDirName(slug: string): string {
   return `${slug}${TABLE_DIR_SUFFIX}`;
 }

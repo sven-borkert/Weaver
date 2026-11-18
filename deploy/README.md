@@ -135,10 +135,12 @@ Project access tokens expire. Rotate `/srv/weaver/gitlab-token` and re-run
 loudly, but the boot-time pull in `weaver-docker.service` ignores the failure
 and starts silently with stale images.
 
-Every push to `main` publishes `:latest`, `:<short sha>` and
-`:<package.json version>` for the four application images; a git tag
-publishes `:<tag>`. The three build-cache repositories
-(`onenote-reader-build`, `worker-build`, `mcp-build`) publish `:latest` only.
+The `main` pipeline publishes `:<short sha>` and `:<package.json version>`
+for the four application images. A git tag pipeline publishes `:<tag>`.
+The build job rechecks the tip of `main` before promoting `:latest` for the
+application images and the three build caches (`onenote-reader-build`,
+`worker-build`, `mcp-build`). Retrying an older pipeline can repair its
+immutable tags.
 The web image is built for `WEAVER_BASE_PATH=/weaver`; another base path needs
 the pipeline variable `WEAVER_BASE_PATH` changed and a rebuild.
 
@@ -248,8 +250,9 @@ echo 'WEAVER_IMAGE_TAG=<short sha or version>' >> /srv/weaver/web.env
 systemctl reload weaver-docker.service
 ```
 
-The previous release's images are still on the host. Older releases are
-pulled from the registry during the reload, so the registry must be reachable.
+The host keeps the previous release's images even if the current upgrade is
+repeated. Older releases are pulled from the registry during the reload, so
+the registry must be reachable.
 
 Remove the line to follow `:latest` again. The `migrations` service runs the
 pinned `tools` image, so rolling back across a migration is only safe when

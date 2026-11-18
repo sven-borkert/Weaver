@@ -33,6 +33,7 @@ import {
 
 /** Client-side mirror of the server's apiKey.update input. */
 const editApiKeyFormSchema = apiKeyPolicyFormSchema.extend({
+  expectedPolicyRevision: z.number().int().min(0),
   name: z
     .string()
     .trim()
@@ -46,6 +47,7 @@ type ApiKeyRow = RouterOutputs["apiKey"]["list"][number];
 
 function valuesFor(apiKey: ApiKeyRow): EditApiKeyFormValues {
   return {
+    expectedPolicyRevision: apiKey.policyRevision,
     name: apiKey.name,
     propose: apiKey.capabilities.includes("content:propose"),
     write: apiKey.capabilities.includes("content:write"),
@@ -102,6 +104,7 @@ export function EditApiKeyDialog({
       setOpen(false);
     },
     onError: (err) => {
+      if (err.data?.code === "CONFLICT") void utils.apiKey.list.invalidate();
       if (err.data?.field) {
         applyTrpcErrorToForm(err, (name, error) =>
           setError(name as Parameters<typeof setError>[0], error),
@@ -116,6 +119,7 @@ export function EditApiKeyDialog({
     if (!projectsReady) return;
     updateKey.mutate({
       keyId: apiKey.id,
+      expectedPolicyRevision: values.expectedPolicyRevision,
       name: values.name,
       // A non-Admin never sees the admin checkbox, so saving drops a dormant grant.
       capabilities: policyCapabilities({

@@ -20,6 +20,7 @@ function runBuild(env, expectedStatus = 0) {
   try {
     const log = join(dir, "calls.log");
     const stub = join(dir, "docker");
+    const git = join(dir, "git");
     const local = join(dir, "local");
     const registry = join(dir, "registry");
     mkdirSync(local);
@@ -95,9 +96,14 @@ if (command === "build") {
 `,
     );
     chmodSync(stub, 0o755);
+    writeFileSync(
+      git,
+      '#!/bin/sh\n[ "$1 $2 $3 $4" = "ls-remote --exit-code origin refs/heads/main" ] || exit 1\nprintf "%s\\trefs/heads/main\\n" "${TEST_BRANCH_TIP:-$COMMIT_SHA}"\n',
+      { mode: 0o755 },
+    );
     const result = spawnSync("sh", ["deploy/ci/build-images.sh"], {
       env: {
-        PATH: process.env.PATH,
+        PATH: `${dir}:${process.env.PATH}`,
         CI_COMMIT_BRANCH: "main",
         CI_DEFAULT_BRANCH: "main",
         CI_COMMIT_TAG: "",
@@ -361,6 +367,29 @@ test("does not republish latest when rerunning a completed older release", () =>
     assert.deepEqual(pushes(runBuild({ ...env, TEST_BUILD_ID: "retry" })), []);
     for (const name of runtimeImages)
       assert.equal(readImage(registry, name, "latest").buildId, "newer");
+  });
+});
+
+test("an interrupted older release repairs immutable aliases without moving latest backward", () => {
+  withRegistry((registry, env) => {
+    const newer = "fedcba9876543210fedcba9876543210fedcba98";
+    runBuild(
+      { ...env, TEST_BUILD_ID: "first", TEST_FAILED_PUSH: "web:latest" },
+      1,
+    );
+    runBuild({
+      ...env,
+      COMMIT_SHA: newer,
+      SHORT_SHA: "fedcba98",
+      PUSH_TAGS: "latest 0.1.118",
+      TEST_BUILD_ID: "newer",
+    });
+    rmSync(join(registry, "web:0.1.117"));
+    const calls = runBuild({ ...env, TEST_BRANCH_TIP: newer, PUSH_CACHE: "1" });
+    assert.deepEqual(pushes(calls), ["push registry.test/weaver/web:0.1.117"]);
+    assert.equal(readImage(registry, "web", "0.1.117").commit, commit);
+    for (const name of runtimeImages)
+      assert.equal(readImage(registry, name, "latest").commit, newer);
   });
 });
 

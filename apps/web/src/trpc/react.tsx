@@ -16,6 +16,8 @@ import { createQueryClient, retireQueryClient } from "./query-client";
 
 const PrincipalContext = createContext<string | null>(null);
 export const usePrincipalId = () => useContext(PrincipalContext);
+const SessionExpiredContext = createContext(false);
+export const useSessionExpired = () => useContext(SessionExpiredContext);
 
 export const api = createTRPCReact<AppRouter>();
 
@@ -62,7 +64,9 @@ export function TRPCReactProvider(props: {
   return (
     <PrincipalContext.Provider value={principalId}>
       <PrincipalTRPCProvider key={principalId ?? "anonymous"}>
-        {props.children}
+        <SessionExpiredContext.Provider value={sessionExpired}>
+          {props.children}
+        </SessionExpiredContext.Provider>
         {sessionExpired ? (
           <div
             role="alert"

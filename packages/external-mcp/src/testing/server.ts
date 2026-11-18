@@ -9,6 +9,7 @@ export type FixtureOptions = {
   protocolVersion?: string;
   responseMode?: "json" | "sse";
   requireSession?: boolean;
+  refuseSessionTermination?: boolean;
   toolCount?: number;
   tools?: unknown[];
   pageSize?: number;
@@ -21,6 +22,8 @@ export type FixtureOptions = {
 
 export async function startMcpFixture(options: FixtureOptions = {}) {
   let counter = 0;
+  let nextSession = 0;
+  const liveSessions = new Set<string>();
   const calls: { name: string; arguments: Record<string, unknown> }[] = [];
   const requests: {
     method: string;
@@ -57,6 +60,11 @@ export async function startMcpFixture(options: FixtureOptions = {}) {
         return;
       }
       if (req.method === "DELETE") {
+        if (options.refuseSessionTermination) {
+          res.writeHead(405).end();
+          return;
+        }
+        if (record.session) liveSessions.delete(record.session);
         res.writeHead(200).end();
         return;
       }
@@ -90,7 +98,7 @@ export async function startMcpFixture(options: FixtureOptions = {}) {
       if (
         options.requireSession &&
         message.method !== "initialize" &&
-        record.session !== "fixture-session"
+        (!record.session || !liveSessions.has(record.session))
       ) {
         res.writeHead(400).end();
         return;
@@ -102,8 +110,14 @@ export async function startMcpFixture(options: FixtureOptions = {}) {
           capabilities: { tools: {}, resources: {} },
           serverInfo: { name: "synthetic-counter", version: "1" },
         };
-        if (options.requireSession)
-          res.setHeader("mcp-session-id", "fixture-session");
+        if (options.requireSession) {
+          const id =
+            nextSession++ === 0
+              ? "fixture-session"
+              : `fixture-session-${nextSession}`;
+          liveSessions.add(id);
+          res.setHeader("mcp-session-id", id);
+        }
       } else if (message.method === "tools/list") {
         const count = options.tools?.length ?? options.toolCount ?? 2;
         const start = Number(message.params?.cursor ?? 0);
@@ -182,6 +196,9 @@ export async function startMcpFixture(options: FixtureOptions = {}) {
     url: `${options.tls ? "https" : "http"}://127.0.0.1:${address.port}/mcp`,
     calls,
     requests,
+    get liveSessionCount() {
+      return liveSessions.size;
+    },
     close: async () => {
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) =>

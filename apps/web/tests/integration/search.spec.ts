@@ -657,82 +657,87 @@ describe("permission-aware hybrid search", () => {
     expect(result.tables[0]?.tableId).toBe(table.tableId);
   });
 
-  it("limits semantic candidates after choosing each document's best chunk", async () => {
-    const db = getPrisma();
-    const user = await makeUser("User", "search-semantic-crowding");
-    const fingerprint = routing.configFingerprint;
-    const project = await seedProject(db, {
-      name: "Semantic crowding",
-      fingerprint,
-    });
-    await addMembership(project.id, user.id, "Viewer");
+  it.each([
+    { limit: 4, crowdedChunks: 19 },
+    { limit: 2, crowdedChunks: 160 },
+  ])(
+    "limits semantic candidates by document with $crowdedChunks close chunks",
+    async ({ limit, crowdedChunks }) => {
+      const db = getPrisma();
+      const user = await makeUser("User", "search-semantic-crowding");
+      const fingerprint = routing.configFingerprint;
+      const project = await seedProject(db, {
+        name: "Semantic crowding",
+        fingerprint,
+      });
+      await addMembership(project.id, user.id, "Viewer");
 
-    const crowded = await seedDocument(db, project, {
-      slug: "crowded",
-      title: "Crowded source",
-      content: "The deterministic best semantic passage.",
-      headingPath: ["Crowded", "Best"],
-      vector: directionVector(1, 0),
-    });
-    await seedAdditionalSemanticChunks(db, project, crowded, 19);
-    const distinctDocuments = await Promise.all([
-      seedDocument(db, project, {
-        slug: "distinct-1",
-        title: "Distinct source 1",
-        content: "First independent semantic source.",
-        headingPath: ["Distinct 1"],
-        vector: directionVector(0.9, 0.44),
-      }),
-      seedDocument(db, project, {
-        slug: "distinct-2",
-        title: "Distinct source 2",
-        content: "Second independent semantic source.",
-        headingPath: ["Distinct 2"],
-        vector: directionVector(0.8, 0.6),
-      }),
-      seedDocument(db, project, {
-        slug: "distinct-3",
-        title: "Distinct source 3",
-        content: "Third independent semantic source.",
-        headingPath: ["Distinct 3"],
-        vector: directionVector(0.7, 0.71),
-      }),
-      seedDocument(db, project, {
-        slug: "distinct-4",
-        title: "Distinct source 4",
-        content: "Fourth independent semantic source.",
-        headingPath: ["Distinct 4"],
-        vector: directionVector(0.6, 0.8),
-      }),
-    ]);
-    const observations: RawQueryObservation[] = [];
+      const crowded = await seedDocument(db, project, {
+        slug: "crowded",
+        title: "Crowded source",
+        content: "The deterministic best semantic passage.",
+        headingPath: ["Crowded", "Best"],
+        vector: directionVector(1, 0),
+      });
+      await seedAdditionalSemanticChunks(db, project, crowded, crowdedChunks);
+      const distinctDocuments = await Promise.all([
+        seedDocument(db, project, {
+          slug: "distinct-1",
+          title: "Distinct source 1",
+          content: "First independent semantic source.",
+          headingPath: ["Distinct 1"],
+          vector: directionVector(0.9, 0.44),
+        }),
+        seedDocument(db, project, {
+          slug: "distinct-2",
+          title: "Distinct source 2",
+          content: "Second independent semantic source.",
+          headingPath: ["Distinct 2"],
+          vector: directionVector(0.8, 0.6),
+        }),
+        seedDocument(db, project, {
+          slug: "distinct-3",
+          title: "Distinct source 3",
+          content: "Third independent semantic source.",
+          headingPath: ["Distinct 3"],
+          vector: directionVector(0.7, 0.71),
+        }),
+        seedDocument(db, project, {
+          slug: "distinct-4",
+          title: "Distinct source 4",
+          content: "Fourth independent semantic source.",
+          headingPath: ["Distinct 4"],
+          vector: directionVector(0.6, 0.8),
+        }),
+      ]);
+      const observations: RawQueryObservation[] = [];
 
-    const result = await searchKnowledge(
-      observeRawQueries(db, observations),
-      { query: "Nebula", limitPerGroup: 4 },
-      securityContextFor(user),
-      queryProvider(queryVector()),
-    );
+      const result = await searchKnowledge(
+        observeRawQueries(db, observations),
+        { query: "Nebula", limitPerGroup: limit },
+        securityContextFor(user),
+        queryProvider(queryVector()),
+      );
 
-    expect(result.documents.map((item) => item.documentId)).toEqual([
-      crowded.documentId,
-      distinctDocuments[0].documentId,
-      distinctDocuments[1].documentId,
-      distinctDocuments[2].documentId,
-    ]);
-    expect(result.documents[0]).toMatchObject({
-      headingPath: ["Crowded", "Best"],
-      snippet: "The deterministic best semantic passage.",
-    });
-    const semanticRows = findObservedQuery(
-      observations,
-      "e.\"ownerType\" = 'document_chunk'",
-    ).rows as Array<{ documentId: string }>;
-    expect(semanticRows.length).toBeLessThanOrEqual(16);
-    expect(new Set(semanticRows.map((row) => row.documentId)).size).toBe(
-      semanticRows.length,
-    );
-  });
+      expect(result.documents.map((item) => item.documentId)).toEqual(
+        [crowded, ...distinctDocuments]
+          .slice(0, limit)
+          .map((item) => item.documentId),
+      );
+      expect(result.documents[0]).toMatchObject({
+        headingPath: ["Crowded", "Best"],
+        snippet: "The deterministic best semantic passage.",
+      });
+      const semanticRows = findObservedQuery(
+        observations,
+        "e.\"ownerType\" = 'document_chunk'",
+      ).rows as Array<{ documentId: string }>;
+      expect(semanticRows.length).toBeLessThanOrEqual(16);
+      expect(new Set(semanticRows.map((row) => row.documentId)).size).toBe(
+        semanticRows.length,
+      );
+    },
+  );
 
   it("bounds exact-title execution while keeping the match in the candidate window", async () => {
     const fixture = await setupSearchFixture("candidate-window");
@@ -1747,7 +1752,7 @@ async function seedAdditionalSemanticChunks(
       ownerId: chunkId,
       contentHash,
       configFingerprint: project.fingerprint,
-      vector: directionVector(1, index / 100),
+      vector: directionVector(1, index / 1000),
     });
   }
 }

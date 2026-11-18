@@ -78,6 +78,30 @@ describe("renderStaticMathPlotHtml", () => {
     expect(path?.match(/M/g)).toHaveLength(2);
   });
 
+  it.each([
+    { type: "cartesian", expression: "tan(x)", x: [0, 3] },
+    {
+      type: "parametric",
+      xExpression: "t",
+      yExpression: "tan(t)",
+      t: [0, 3],
+      x: [0, 3],
+    },
+    {
+      type: "parametric",
+      xExpression: "t",
+      yExpression: "1/(t-1.573)",
+      t: [0, 3],
+      x: [0, 3],
+    },
+  ])("leaves an off-grid pole out of PDF plot paths for %j", (spec) => {
+    const html = renderStaticMathPlotHtml(
+      JSON.stringify({ ...spec, y: [-2, 2] }),
+    );
+    const path = /data-plot-curve="" d="([^"]+)"/.exec(html)?.[1];
+    expect(path?.match(/M/g)).toHaveLength(2);
+  });
+
   it("labels distinct ticks on a narrow range with a large offset", () => {
     const html = renderStaticMathPlotHtml(
       JSON.stringify({
