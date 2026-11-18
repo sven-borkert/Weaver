@@ -58,8 +58,8 @@ export function DocumentAssistantInsertDialog({
         <DialogHeader>
           <DialogTitle>Insert with assistant</DialogTitle>
           <DialogDescription>
-            Describe what you want to add, such as a formula, a diagram, or a
-            code snippet.
+            Describe what you want to add, such as a formula, a plot, a diagram,
+            or a code snippet.
           </DialogDescription>
         </DialogHeader>
         {open ? <AssistantInsertForm {...formProps} /> : null}

@@ -901,6 +901,11 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   `DocumentAssistantInsertDialog` previews the response using the canonical
   Markdown renderer. `generated-markdown.ts` inserts at the mapped cursor or
   selection end in one undoable draft transaction.
+- Math plots are `mathPlot` atoms in canonical fenced `plot` blocks. Use
+  `packages/core/src/editor/plot-spec.ts` for the browser-safe arithmetic grammar,
+  schema validation, and bounded sampling. The editor and reader share
+  `MathPlot`. Sliders and rotation affect the view, while the JSON spec owns
+  the saved defaults. PDF uses the same SVG renderer at those defaults.
 - `DocumentSourceView` is a bare, auto-growing textarea in the document body:
   no box, heading, helper copy, or extra buttons. Editor+ edits raw Markdown;
   Viewers see a read-only field. Source and Cmd/Ctrl+Alt+S toggle WYSIWYG/raw.

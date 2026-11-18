@@ -4,6 +4,12 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.244] - 2026-11-18
+
+### Added
+
+- Markdown documents can show interactive math plots. Insert a 2D Cartesian function, a parametric curve, or a rotatable 3D surface from the toolbar or ask the assistant to create one. Named parameters can have sliders, and PDF exports show each plot at its saved defaults.
+
 ## [0.1.243] - 2026-11-18
 
 ### Added

@@ -37,6 +37,11 @@ p.meta { color: var(--text-2); font-size: 9pt; margin: 0 0 18pt; }
 .document-prose :where(pre.mermaid svg) { max-width: 100%; height: auto; }
 .document-prose [data-inline-math] { display: inline-block; position: relative; max-width: 100%; overflow: clip; overflow-clip-margin: 0.25em; }
 .document-prose [data-math-block] { position: relative; overflow: hidden; }
+.document-prose :where([data-math-plot]) { margin: 1.25em 0; break-inside: avoid; }
+.document-prose :where([data-math-plot] figcaption) { color: var(--text-2); font-weight: 600; }
+.document-prose :where([data-plot-chart]) { display: block; width: 100%; height: auto; }
+.document-prose :where([data-plot-error]) { color: var(--danger); }
+.document-prose :where([data-plot-parameters]) { color: var(--text-2); font-size: 9pt; }
 .document-prose :where(table) { border-collapse: collapse; margin: 1.25em 0; width: 100%; }
 .document-prose :where(th, td) { border: 1px solid var(--line); padding: 0.4rem 0.6rem; text-align: start; vertical-align: top; }
 .document-prose :where(th) { background: var(--surface-2); color: var(--text-2); font-weight: 600; }

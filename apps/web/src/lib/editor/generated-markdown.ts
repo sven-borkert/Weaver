@@ -18,12 +18,20 @@ import {
   serializeDocumentBody,
   validateDocumentContent,
 } from "@weaver/core/editor/markdown";
+import { parsePlotSpec } from "@weaver/core/editor/plot-spec";
 
 export function parseGeneratedMarkdown(schema: Schema, markdown: string): Node {
   const parsed = parseDocumentBody(markdown);
   validateDocumentContent(parsed);
   const node = schema.nodeFromJSON(parsed);
   node.check();
+  node.descendants((child) => {
+    if (child.type.name !== "mathPlot") return;
+    const result = parsePlotSpec(
+      typeof child.attrs.source === "string" ? child.attrs.source : "",
+    );
+    if (!result.ok) throw new Error(result.error);
+  });
   const first = node.firstChild;
   if (
     !first ||

@@ -40,6 +40,7 @@ import {
   quotedTitle,
 } from "./markdownEscapes";
 import { InlineMath, MathBlock } from "./math";
+import { MathPlot } from "./math-plot";
 import { Mermaid } from "./mermaid";
 import { MarkdownOrderedList } from "./orderedList";
 
@@ -185,6 +186,7 @@ export function documentExtensions(
     codeBlock?: AnyExtension;
     inlineMath?: AnyExtension;
     mathBlock?: AnyExtension;
+    mathPlot?: AnyExtension;
   } = {},
 ): AnyExtension[] {
   return [
@@ -208,6 +210,7 @@ export function documentExtensions(
     overrides.mermaid ?? Mermaid,
     overrides.mathBlock ?? MathBlock,
     overrides.inlineMath ?? InlineMath,
+    overrides.mathPlot ?? MathPlot,
     (overrides.codeBlock ?? MarkdownCodeBlock).configure({
       lowlight: codeBlockLowlight,
     }),

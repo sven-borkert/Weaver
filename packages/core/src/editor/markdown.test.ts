@@ -60,6 +60,10 @@ const x: number = 1;
 graph TD; A-->B;
 \`\`\`
 
+\`\`\`plot
+{"type":"cartesian","expression":"a*sin(x)"}
+\`\`\`
+
 
 | a   | b   |
 | --- | --- |
@@ -184,6 +188,83 @@ describe("markdown round-trip", () => {
     } as unknown as HTMLElement;
 
     expect(rule?.getAttrs?.(element)).toEqual({ source });
+  });
+
+  it("round-trips math plot source with backticks and Markdown punctuation", () => {
+    const source = '{"title":"` ``` & < > | $x$", "expression":"x^2"}\n';
+    const json = {
+      type: "doc",
+      content: [{ type: "mathPlot", attrs: { source } }],
+    };
+
+    const markdown = serializeDocumentBody(json);
+    expect(markdown).toBe(`\`\`\`\`plot\n${source}\n\`\`\`\`\n`);
+    expect(() => validateDocumentContent(json)).not.toThrow();
+    expect(parseDocumentBody(markdown)).toEqual(json);
+  });
+
+  it.each(["plotish", "plot-v2", "plot json", "PLOT"])(
+    "keeps the language %s as generic code",
+    (language) => {
+      const markdown = `\`\`\`${language}\n{}\n\`\`\`\n`;
+      const json = parseDocumentBody(markdown);
+
+      expect(nodesOfType(json, "mathPlot")).toHaveLength(0);
+      expect(nodesOfType(json, "codeBlock")[0]).toMatchObject({
+        type: "codeBlock",
+        attrs: { language },
+      });
+      expect(serializeDocumentBody(json)).toBe(markdown);
+    },
+  );
+
+  it("keeps a plot-looking fence inside a code block as code", () => {
+    const markdown = "````markdown\n```plot\n{}\n```\n````\n";
+    const json = parseDocumentBody(markdown);
+
+    expect(nodesOfType(json, "mathPlot")).toHaveLength(0);
+    expect(serializeDocumentBody(json)).toBe(markdown);
+  });
+
+  it("retains the source of an invalid or empty fenced plot", () => {
+    const invalid = parseDocumentBody("```plot\n{broken\n```\n");
+    const empty = parseDocumentBody("```plot\n```\n");
+
+    expect(nodesOfType(invalid, "mathPlot")[0]).toMatchObject({
+      attrs: { source: "{broken" },
+    });
+    expect(nodesOfType(empty, "mathPlot")[0]).toMatchObject({
+      attrs: { source: "" },
+    });
+  });
+
+  it("uses only plain source for math plot clipboard HTML", () => {
+    const type = getSchema(documentExtensions()).nodes.mathPlot!;
+    const source = '{"title":"<em>&"}';
+    const node = type.create({ source });
+    expect(type.spec.toDOM?.(node)).toEqual([
+      "pre",
+      { "data-math-plot": "" },
+      ["code", {}, source],
+    ]);
+    const rule = type.spec.parseDOM?.[0];
+    if (!rule || !("tag" in rule)) throw new Error("Missing plot HTML rule");
+    const element = {
+      getAttribute: () => null,
+      querySelector: (selector: string) =>
+        selector === "code" ? { textContent: source } : null,
+    } as unknown as HTMLElement;
+    expect(rule.tag).toBe("pre[data-math-plot]");
+    expect(rule.getAttrs?.(element)).toEqual({ source });
+  });
+
+  it("rejects a math plot where a Markdown table would drop it", () => {
+    const json = parseDocumentBody("| Header |\n| --- |\n| Data |\n");
+    const cell = nodesOfType(json, "tableCell")[0]!;
+    cell.content = [{ type: "mathPlot", attrs: { source: "{}" } }];
+    expect(() => validateDocumentContent(json)).toThrow(
+      "math plots must be outside table cells",
+    );
   });
 
   it("keeps plain blockquotes distinct from callouts", () => {

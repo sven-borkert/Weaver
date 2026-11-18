@@ -884,7 +884,9 @@ Markdown document kind, then passes only the instruction to the configured
 Assistant model. Best-effort `document.generate_content` accounting uses the
 routed model's pricing and omits the request and generated content. The editor
 previews the returned Markdown and inserts it in the local draft after
-confirmation.
+confirmation. Keep the plot examples in the system prompt aligned with
+`packages/core/src/editor/plot-spec.ts`, which defines fenced `plot` blocks for
+Cartesian functions, parametric curves, and surfaces.
 
 ## Exams
 

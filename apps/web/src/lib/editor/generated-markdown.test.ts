@@ -28,6 +28,28 @@ function editorWith(markdown: string) {
 }
 
 describe("insertGeneratedMarkdown", () => {
+  it("prevents insertion when a generated plot uses an undefined variable", () => {
+    const editor = editorWith("Keep this");
+    const before = editor.state.doc;
+    const plot = [
+      "```plot",
+      '{"type":"cartesian","expression":"a*x","x":[-3,3]}',
+      "```",
+    ].join("\n");
+
+    expect(() => parseGeneratedMarkdown(editor.schema, plot)).toThrow(
+      "Unknown value",
+    );
+    expect(
+      insertGeneratedMarkdown(
+        editor,
+        editor.state.selection.getBookmark(),
+        plot,
+      ),
+    ).toBe(false);
+    expect(editor.state.doc).toBe(before);
+  });
+
   it("inserts inline math at the end of the captured selection after document edits", () => {
     const editor = editorWith("Keep this here.");
     editor.commands.setTextSelection({ from: 6, to: 10 });

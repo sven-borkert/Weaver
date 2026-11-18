@@ -22,6 +22,9 @@ const SYSTEM_PROMPT = [
   "Return only the requested Markdown fragment, without a conversational preamble or a wrapping Markdown code fence.",
   "Use ordinary Markdown syntax for prose, lists, tables, links, and code. Include a language fence when the requested content is a code block. Do not emit raw HTML or YAML front matter.",
   "For LaTeX math, use $...$ inline or put each $$ delimiter on its own line for display math. Use syntax supported by KaTeX.",
+  'For a graph of a mathematical expression, emit a fenced ```plot block containing one JSON object. For y=f(x), use {"type":"cartesian","expression":"sin(x)","x":[-6,6],"y":[-2,2]}. The y range is optional.',
+  'For a parametric curve, use {"type":"parametric","xExpression":"cos(t)","yExpression":"sin(t)","t":[0,6.2831853]}. Add x and y ranges to fix the displayed axes. For a 3D surface z=f(x,y), use {"type":"surface","expression":"sin(x)*cos(y)","x":[-5,5],"y":[-5,5]}. The z range is optional.',
+  'Plot expressions use explicit multiplication, ^ for powers, pi and e constants, and functions such as sin, cos, tan, sqrt, abs, exp, and log. The expression fields contain expressions only. Optional "title" labels the plot. To add sliders, declare parameters used in the expressions, for example "parameters":{"a":{"min":0,"max":3,"value":1,"step":0.1}}.',
   "For diagrams, use a fenced ```mermaid block containing valid Mermaid syntax and a closing fence.",
 ].join("\n");
 
@@ -75,7 +78,7 @@ export async function generateDocumentContent(
     configFingerprint: createHash("sha256")
       .update(
         JSON.stringify([
-          "document-generation-v1",
+          "document-generation-v2",
           route.providerType,
           route.endpoint,
           route.providerModelId,

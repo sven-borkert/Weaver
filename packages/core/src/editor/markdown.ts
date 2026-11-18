@@ -34,12 +34,12 @@ const MAX_DOCUMENT_NODES = 25_000;
 const encoder = new TextEncoder();
 
 function validateContentBounds(json: unknown): void {
-  const pending = [{ value: json, depth: 0 }];
+  const pending = [{ value: json, depth: 0, inTableCell: false }];
   let values = 0;
   let nodes = 0;
   let bytes = 0;
   while (pending.length) {
-    const { value, depth } = pending.pop()!;
+    const { value, depth, inTableCell } = pending.pop()!;
     if (++values > MAX_CONTENT_VALUES) throw new Error("document too large");
     if (depth > 100) throw new Error("document too deeply nested");
     if (typeof value === "string") {
@@ -83,7 +83,16 @@ function validateContentBounds(json: unknown): void {
         if (attrs.source.length > MAX_MATH_CHARS)
           throw new Error("formula too long");
       }
-      if (object.type === "tableCell" || object.type === "tableHeader") {
+      if (object.type === "mathPlot") {
+        const attrs = object.attrs as Record<string, unknown> | undefined;
+        if (typeof attrs?.source !== "string")
+          throw new Error("invalid math plot attributes");
+        if (inTableCell)
+          throw new Error("math plots must be outside table cells");
+      }
+      const tableCell =
+        object.type === "tableCell" || object.type === "tableHeader";
+      if (tableCell) {
         const attrs = object.attrs as Record<string, unknown> | undefined;
         if (Number(attrs?.colspan ?? 1) > 1 || Number(attrs?.rowspan ?? 1) > 1)
           throw new Error("merged table cells are not supported");
@@ -94,7 +103,11 @@ function validateContentBounds(json: unknown): void {
       for (const [key, child] of entries) {
         bytes += key.length;
         if (bytes > MAX_CONTENT_BYTES) throw new Error("document too large");
-        pending.push({ value: child, depth: depth + 1 });
+        pending.push({
+          value: child,
+          depth: depth + 1,
+          inTableCell: inTableCell || tableCell,
+        });
       }
     }
   }

@@ -5,6 +5,7 @@ import {
 } from "@weaver/core/editor/callout";
 import {
   Bold,
+  ChartSpline,
   Code,
   FileSymlink,
   Heading1,
@@ -37,12 +38,17 @@ import {
   Workflow,
   type LucideIcon,
 } from "lucide-react";
+import { toast } from "sonner";
 import {
   activeCalloutVariant,
   applyCallout,
   canApplyCallout,
   removeCallout,
 } from "~/lib/editor/callout-commands";
+import { insertGeneratedMarkdown } from "~/lib/editor/generated-markdown";
+import { DEFAULT_MATH_PLOT_SOURCE } from "./math-plot-examples";
+
+const DEFAULT_MATH_PLOT_MARKDOWN = `\`\`\`plot\n${DEFAULT_MATH_PLOT_SOURCE}\n\`\`\``;
 
 export type DocumentCommand = (editor: Editor) => void;
 
@@ -518,6 +524,28 @@ export function documentToolbarGroups({
         onSelect: () => onMath("mathBlock"),
       },
     );
+  insertEntries.push(
+    item(
+      "Math plot",
+      (current) => {
+        // Markdown table cells only hold inline content.
+        if (current.isActive("table")) return;
+        const bookmark = current.state.selection.getBookmark();
+        if (
+          !insertGeneratedMarkdown(
+            current,
+            bookmark,
+            DEFAULT_MATH_PLOT_MARKDOWN,
+          )
+        )
+          toast.error(
+            "Try inserting the math plot in a paragraph outside the list.",
+          );
+      },
+      editor.isActive("table"),
+      ChartSpline,
+    ),
+  );
 
   const can = editor.can();
   return [

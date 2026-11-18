@@ -29,7 +29,10 @@ import {
   writeDocumentInRepo,
 } from "@weaver/core/services/documents";
 import { composeDocumentFile } from "@weaver/core/documents/frontmatter";
-import { serializeDocumentBody } from "@weaver/core/editor/markdown";
+import {
+  parseDocumentBody,
+  serializeDocumentBody,
+} from "@weaver/core/editor/markdown";
 import {
   FakeJobQueue,
   setJobQueueForTests,
@@ -214,7 +217,10 @@ describe("document router", () => {
         model: "inline-chat",
         max_tokens: 2_000,
         messages: [
-          { role: "system", content: expect.stringContaining("```mermaid") },
+          {
+            role: "system",
+            content: expect.stringMatching(/(?=.*```mermaid)(?=.*```plot)/s),
+          },
           { role: "user", content: input.instruction.trim() },
         ],
       });
@@ -308,6 +314,38 @@ describe("document router", () => {
   });
 
   describe("create", () => {
+    it("commits a math plot as a reusable Markdown block", async () => {
+      const { project, caller } = await setupProjectWith("Editor", "plot");
+      const source = JSON.stringify({
+        type: "parametric",
+        title: "Circle",
+        xExpression: "cos(t)",
+        yExpression: "sin(t)",
+        t: [0, 2 * Math.PI],
+      });
+      const markdown = ["```plot", source, "```"].join("\n");
+      const contentJson = parseDocumentBody(markdown);
+      const document = await caller.document.create({
+        projectId: project.id,
+        folderPath: [],
+        title: "Math plot",
+        contentJson,
+      });
+
+      const saved = await caller.document.get({
+        projectId: project.id,
+        documentId: document.id,
+      });
+      expect(saved.content).toMatchObject({
+        kind: "markdown",
+        contentJson: { content: [{ type: "mathPlot", attrs: { source } }] },
+      });
+      const repo = (await openProjectRepo(project.id))!;
+      expect((await repo.readCommittedFile(document.path))?.content).toContain(
+        markdown,
+      );
+    });
+
     it("creates file + commit + index row; returns the save contract", async () => {
       const { project, caller } = await setupProjectWith("Editor", "dc1");
       await addEligibleGitRemote(project.id);

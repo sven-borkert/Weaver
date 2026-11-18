@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { documentExtensions } from "@weaver/core/editor/extensions";
 import { documentHeadingAnchors } from "./document-heading-anchors";
 import { mathSource, renderMathHtml } from "./math-render";
+import { MathPlot } from "./MathPlot";
 
 type RenderOptions = NonNullable<
   Parameters<typeof renderToReactElement>[0]["options"]
@@ -30,6 +31,7 @@ const mathMapping: RenderMappings = {
       }}
     />
   ),
+  mathPlot: ({ node }) => <MathPlot source={mathSource(node.attrs)} />,
 };
 
 export function renderDocumentContent(

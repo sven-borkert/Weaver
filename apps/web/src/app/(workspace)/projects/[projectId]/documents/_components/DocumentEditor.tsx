@@ -20,6 +20,7 @@ import {
 } from "react";
 import { documentExtensions } from "@weaver/core/editor/extensions";
 import { InlineMath, MathBlock } from "@weaver/core/editor/math";
+import { MathPlot } from "@weaver/core/editor/math-plot";
 import { Mermaid } from "@weaver/core/editor/mermaid";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
@@ -56,6 +57,7 @@ import { DocumentHeader } from "./DocumentHeader";
 import { DocumentSectionStatus } from "./DocumentSectionStatus";
 import { DocumentSourceView } from "./DocumentSourceView";
 import { MathNodeView } from "./MathNodeView";
+import { MathPlotNodeView } from "./MathPlotNodeView";
 import { MermaidNodeView } from "./MermaidNodeView";
 import { useDocumentPresentation } from "./useDocumentPresentation";
 
@@ -83,6 +85,12 @@ const MathBlockWithNodeView = MathBlock.extend({
   },
 });
 
+const MathPlotWithNodeView = MathPlot.extend({
+  addNodeView() {
+    return ReactNodeViewRenderer(MathPlotNodeView);
+  },
+});
+
 type DocumentEditorProps = {
   projectId: string;
   document: MarkdownDocument;
@@ -105,6 +113,7 @@ export function DocumentEditor(props: DocumentEditorProps) {
         mermaid: MermaidWithNodeView,
         inlineMath: InlineMathWithNodeView,
         mathBlock: MathBlockWithNodeView,
+        mathPlot: MathPlotWithNodeView,
         crossref: DocumentCrossref,
         image: ImageWithNodeView,
         codeBlock: CodeBlockWithCopy,

@@ -31,6 +31,17 @@ function html(
 }
 
 describe("buildDocumentPrintHtml", () => {
+  it("prints a plot at its default parameters without browser scripts", () => {
+    const page = html(
+      '```plot\n{"type":"cartesian","expression":"a*x","x":[-3,3],"parameters":{"a":{"min":1,"max":3,"value":2}},"title":"Slope < 3"}\n```',
+    );
+    expect(page).toContain("data-math-plot");
+    expect(page).toContain("<svg");
+    expect(page).toContain("Slope &lt; 3");
+    expect(page).not.toContain("<script");
+    expect(page).not.toContain('type="range"');
+  });
+
   it("prints formulas with the math styles", () => {
     const page = html("Sum $2 \\times 3$\n\n$$\\frac{a}{b}$$\n", {
       mathStyles: ".katex{font-size:1em}",

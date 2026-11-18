@@ -1196,8 +1196,8 @@ renders them in one compact row and moves groups that do not fit into a
 (re-measured from the full, More-less row when the groups change or gain room).
 Insert with assistant and Source stay fixed at the right. The
 [`DocumentAssistantInsertDialog`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentAssistantInsertDialog.tsx>)
-uses the document renderer to preview generated Markdown, including LaTeX and
-Mermaid. `document.generateContent` checks Editor access to the Markdown
+uses the document renderer to preview generated Markdown, including LaTeX,
+Mermaid and math plots. `document.generateContent` checks Editor access to the Markdown
 document, then [`documentGeneration.ts`](../packages/core/src/services/documentGeneration.ts)
 sends the instruction to the configured Assistant model without document
 content or tools. It records usage under `document.generate_content`.
@@ -1237,6 +1237,17 @@ and the PDF, whose [`mathStyles.ts`](../apps/web/src/server/documents/pdf/mathSt
 inlines the stylesheet and fonts.
 Mermaid source opens locally in
 [`MermaidNodeView`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/MermaidNodeView.tsx>).
+Math plots are `mathPlot` atoms from
+[`editor/math-plot.ts`](../packages/core/src/editor/math-plot.ts) and use JSON in
+fenced `plot` blocks. Insert one from **Insert → Math plot** or ask the
+assistant to plot an expression. [`plot-spec.ts`](../packages/core/src/editor/plot-spec.ts)
+validates and samples Cartesian functions, parametric curves, and surfaces
+using a bounded arithmetic parser. Optional named parameters define slider
+ranges and saved defaults. [`MathPlot`](../apps/web/src/lib/editor/MathPlot.tsx)
+renders the interactive chart in the editor, viewer, and assistant preview.
+Sliders and surface rotation change the current view. Edit the plot definition
+to change its saved defaults. [`plot-render.ts`](../apps/web/src/lib/editor/plot-render.ts)
+shares the SVG renderer with PDF export, which uses those defaults.
 Code blocks show a copy button from
 [`DocumentCodeBlock.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentCodeBlock.tsx>):
 a reader mapping and a client-only editor node view (the `codeBlock` override of

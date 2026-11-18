@@ -12,6 +12,17 @@ const existingTargetId = "11111111-1111-1111-1111-111111111111";
 const missingTargetId = "22222222-2222-2222-2222-222222222222";
 
 describe("renderDocumentContent", () => {
+  it("renders a fenced math plot as a graph", () => {
+    const content = parseDocumentBody(
+      '```plot\n{"type":"cartesian","expression":"x^2","x":[-3,3],"title":"Parabola"}\n```',
+    );
+    const html = renderToStaticMarkup(renderDocumentContent(content));
+    expect(html).toContain("data-math-plot");
+    expect(html).toContain("<svg");
+    expect(html).toContain("Parabola");
+    expect(html).not.toContain("language-plot");
+  });
+
   it("renders formulas in table headers, cells and blocks", () => {
     const html = renderToStaticMarkup(
       renderDocumentContent(

@@ -4,6 +4,7 @@ import { documentExtensions } from "@weaver/core/editor/extensions";
 import { imageWidth } from "@weaver/core/editor/imageTag";
 import { crossrefTargetKey } from "@weaver/core/editor/markdown";
 import { mathSource, renderMathHtml } from "~/lib/editor/math-render";
+import { renderStaticMathPlotHtml } from "~/lib/editor/plot-render";
 import { PRINT_STYLES } from "./styles";
 
 export type PrintImage = { contentType: string; bytes: Uint8Array };
@@ -87,6 +88,8 @@ function renderBody(input: PrintHtmlInput, mermaid: boolean): string {
           `<span data-inline-math="">${renderMathHtml(mathSource(node.attrs), false)}</span>`,
         mathBlock: ({ node }) =>
           `<div data-math-block="">${renderMathHtml(mathSource(node.attrs), true)}</div>`,
+        mathPlot: ({ node }) =>
+          renderStaticMathPlotHtml(mathSource(node.attrs)),
         crossref: ({ node }) => {
           const targetType =
             node.attrs.targetType === "table" ? "table" : "document";

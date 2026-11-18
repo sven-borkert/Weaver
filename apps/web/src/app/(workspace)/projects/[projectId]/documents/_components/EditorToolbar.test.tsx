@@ -1,5 +1,9 @@
 import { Editor } from "@tiptap/core";
 import { documentExtensions } from "@weaver/core/editor/extensions";
+import {
+  parseDocumentBody,
+  serializeDocumentBody,
+} from "@weaver/core/editor/markdown";
 import { Schema } from "@tiptap/pm/model";
 import { EditorState, TextSelection, type Transaction } from "@tiptap/pm/state";
 import type * as ReactModule from "react";
@@ -10,8 +14,10 @@ import {
   type ReactTestInstance,
   type ReactTestRenderer,
 } from "react-test-renderer";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 vi.mock("@tiptap/react", () => ({
   useEditorState: ({
     editor,
@@ -152,6 +158,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(() => tree?.unmount());
   generate.mockReset();
+  vi.mocked(toast.error).mockClear();
   overflow.visible = Number.POSITIVE_INFINITY;
   liveEditors.splice(0).forEach((editor) => editor.destroy());
   vi.unstubAllGlobals();
@@ -605,6 +612,7 @@ describe("EditorToolbar", () => {
       "Mermaid diagram",
       "Inline formula",
       "Formula block",
+      "Math plot",
       "Warning",
     ].map((label) => button(label).props as { onClick: () => void });
     const before = editor.getJSON();
@@ -751,11 +759,78 @@ describe("EditorToolbar", () => {
       "Image",
       "Reference",
       "Mermaid diagram",
+      "Math plot",
     ]);
     expect(
       tree!.root.findAllByProps({ "aria-label": "Table options" }),
     ).toHaveLength(0);
   });
+
+  it("inserts a parameterized math plot through the Insert menu", async () => {
+    const editor = realEditor();
+    await act(() => {
+      tree = create(
+        <EditorToolbar
+          projectId="project"
+          editor={editor}
+          disabled={false}
+          crossReferenceOpen={false}
+          onCrossReferenceOpenChange={vi.fn()}
+          onViewSource={vi.fn()}
+        />,
+      );
+    });
+
+    await act(() =>
+      (button("Math plot").props as { onClick: () => void }).onClick(),
+    );
+    const plot = editor.getJSON().content?.[0];
+    expect(plot?.type).toBe("mathPlot");
+    const source = plot?.attrs?.source as string;
+    expect(JSON.parse(source)).toMatchObject({
+      type: "cartesian",
+      expression: "a*sin(x)",
+      x: [-6.28, 6.28],
+      parameters: { a: { min: 0, max: 3, value: 1, step: 0.1 } },
+    });
+    const markdown = serializeDocumentBody(editor.getJSON());
+    expect(parseDocumentBody(markdown).content?.[0]).toEqual(plot);
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it.each(["bulletList", "orderedList"])(
+    "declines insertion at an empty %s item that would change on save",
+    async (type) => {
+      const editor = realEditor([
+        {
+          type,
+          content: [{ type: "listItem", content: [{ type: "paragraph" }] }],
+        },
+      ]);
+      const before = editor.getJSON();
+      await act(() => {
+        tree = create(
+          <EditorToolbar
+            projectId="project"
+            editor={editor}
+            disabled={false}
+            crossReferenceOpen={false}
+            onCrossReferenceOpenChange={vi.fn()}
+            onViewSource={vi.fn()}
+          />,
+        );
+      });
+
+      await act(() =>
+        (button("Math plot").props as { onClick: () => void }).onClick(),
+      );
+      expect(editor.getJSON()).toEqual(before);
+      expect(toast.error).toHaveBeenCalledWith(
+        "Try inserting the math plot in a paragraph outside the list.",
+      );
+    },
+  );
+
   it("opens the reference picker only after its menu has closed", async () => {
     const editor = realEditor();
     const reference = vi.fn();
