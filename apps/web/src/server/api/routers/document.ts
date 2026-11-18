@@ -1,9 +1,11 @@
 import type { JSONContent } from "@tiptap/core";
+import { generateDocumentContent } from "@weaver/core/services/documentGeneration";
 import {
   createDocumentInput,
   diffInput,
   documentIdInput,
   documentBacklinksInput,
+  generateDocumentContentInput,
   historyInput,
   importFileInput,
   listDocumentsInput,
@@ -73,6 +75,15 @@ export const documentRouter = createTRPCRouter({
         { ...input, content: input.content as DocumentContentInput },
         actorOf(ctx),
       ),
+    ),
+  generateContent: authedProcedure
+    .input(generateDocumentContentInput)
+    .mutation(({ ctx, input, signal }) =>
+      generateDocumentContent(ctx.db, input, actorOf(ctx), {
+        ring: ctx.encryptionKeys,
+        fetchImpl: ctx.llmFetch,
+        signal,
+      }),
     ),
   setProperties: authedProcedure
     .input(setPropertiesInput)

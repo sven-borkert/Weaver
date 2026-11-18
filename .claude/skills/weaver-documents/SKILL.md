@@ -876,7 +876,8 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   submenus) and stay mounted but `invisible`/`aria-hidden`/`inert`. A changed
   group list, a wider row, or a narrower group re-measures from the full,
   More-less row; never apply a stale visible count. Never add
-  horizontal scrolling. Source remains fixed at the right. Every command runs
+  horizontal scrolling. Insert with assistant and Source stay fixed at the right.
+  Formatting commands run
   through `runImmediate`; menu commands return focus to the editor without
   scrolling, modal-opening items leave focus to the dialog, items opening a
   non-modal layer (Reference) run only after the menu has closed
@@ -894,6 +895,12 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   `/` is ordinary text. Preserve mapped selections across forms and consult live
   editability before writes. Cmd/Ctrl+S saves, including from portaled toolbar
   controls through React event bubbling; Escape closes transient UI or blurs.
+- Insert with assistant is available in the formatted Markdown editor. The
+  toolbar maps its captured selection while the dialog is open and closes it
+  if the draft adopts a new baseline or editing becomes unavailable.
+  `DocumentAssistantInsertDialog` previews the response using the canonical
+  Markdown renderer. `generated-markdown.ts` inserts at the mapped cursor or
+  selection end in one undoable draft transaction.
 - `DocumentSourceView` is a bare, auto-growing textarea in the document body:
   no box, heading, helper copy, or extra buttons. Editor+ edits raw Markdown;
   Viewers see a read-only field. Source and Cmd/Ctrl+Alt+S toggle WYSIWYG/raw.

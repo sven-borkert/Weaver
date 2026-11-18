@@ -1,4 +1,5 @@
 export const MAX_MARKDOWN_CHARS = 200_000;
+export const MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS = 4_000;
 /** Images one document write may copy in. */
 export const MAX_IMPORTED_IMAGES = 100;
 /** Combined image bytes one imported document may carry. */

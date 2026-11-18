@@ -1,6 +1,9 @@
 import { validateDocumentContent } from "@weaver/core/editor/markdown";
 import { documentTitleSchema } from "@weaver/core/documents/title";
-import { MAX_MARKDOWN_CHARS } from "@weaver/core/documents/limits";
+import {
+  MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS,
+  MAX_MARKDOWN_CHARS,
+} from "@weaver/core/documents/limits";
 import { wikiPagePropertiesInputSchema } from "@weaver/core/wiki/properties";
 import { z } from "zod";
 import { isSingleLineChangeSummary } from "~/lib/documents/change-summary";
@@ -38,6 +41,14 @@ export const RESOLVE_REFS_MAX_IDS = 25_000;
 export const documentIdInput = z.object({
   projectId: z.uuid(),
   documentId: z.uuid(),
+});
+
+export const generateDocumentContentInput = documentIdInput.extend({
+  instruction: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS),
 });
 
 export const rebuildIndexInput = z.object({

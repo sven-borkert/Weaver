@@ -497,6 +497,14 @@ function DocumentDraftEditor({
         <DocumentWorkspaceToolbar>
           <EditorToolbar
             projectId={projectId}
+            assistantDocument={
+              canEdit
+                ? {
+                    id: document.id,
+                    baseCommitSha: draft.baseline.baseCommitSha,
+                  }
+                : undefined
+            }
             editor={editor}
             disabled={disabled}
             sourceOpen={sourceOpen}

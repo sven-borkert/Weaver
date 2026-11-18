@@ -35,6 +35,16 @@ vi.mock("~/components/ui/dialog", () => ({
     <p>{children}</p>
   ),
 }));
+const generate = vi.hoisted(() => vi.fn());
+vi.mock("~/trpc/react", () => ({
+  api: {
+    document: {
+      generateContent: {
+        useMutation: () => ({ mutateAsync: generate, isPending: false }),
+      },
+    },
+  },
+}));
 const overflow = vi.hoisted(() => ({ visible: Number.POSITIVE_INFINITY }));
 vi.mock("~/lib/editor/use-toolbar-overflow", () => ({
   useToolbarOverflow: () => ({
@@ -141,6 +151,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   await act(() => tree?.unmount());
+  generate.mockReset();
   overflow.visible = Number.POSITIVE_INFINITY;
   liveEditors.splice(0).forEach((editor) => editor.destroy());
   vi.unstubAllGlobals();
@@ -161,6 +172,7 @@ function editorFixture() {
   >();
   let keydown: ((event: KeyboardEvent) => void) | undefined;
   const editor = {
+    schema,
     state: EditorState.create({ doc }),
     isEditable: true,
     isDestroyed: false,
@@ -258,6 +270,82 @@ function realEditor(content: object[] = [{ type: "paragraph" }]) {
 }
 
 describe("EditorToolbar", () => {
+  it("inserts a reviewed assistant result at the mapped cursor in the draft", async () => {
+    const { editor } = editorFixture();
+    const props = {
+      projectId: "project",
+      editor: editor as unknown as Editor,
+      disabled: false,
+      crossReferenceOpen: false,
+      onCrossReferenceOpenChange: vi.fn(),
+      onViewSource: vi.fn(),
+      assistantDocument: { id: "document", baseCommitSha: "base" },
+    };
+    editor.view.dispatch(editor.state.tr.insertText("beforeafter", 1));
+    editor.view.dispatch(
+      editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 7)),
+    );
+    generate.mockResolvedValue({ markdown: "example" });
+    await act(() => {
+      tree = create(<EditorToolbar {...props} />);
+    });
+
+    const openAssistant = () =>
+      (
+        button("Insert with assistant").props as { onClick: () => void }
+      ).onClick();
+    await act(openAssistant);
+    editor.view.dispatch(editor.state.tr.insertText("new ", 1));
+    editor.view.dispatch(
+      editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 1)),
+    );
+    const instruction = tree!.root.findByType("textarea");
+    await act(() =>
+      (
+        instruction.props as {
+          onChange: (event: { target: { value: string } }) => void;
+        }
+      ).onChange({ target: { value: "Write an example" } }),
+    );
+    await act(() =>
+      (
+        tree!.root.findByType("form").props as {
+          onSubmit: (event: { preventDefault: () => void }) => void;
+        }
+      ).onSubmit({ preventDefault: vi.fn() }),
+    );
+    expect(generate).toHaveBeenCalledWith({
+      projectId: "project",
+      documentId: "document",
+      instruction: "Write an example",
+    });
+    expect(editor.state.doc.textContent).toBe("new beforeafter");
+    expect(
+      textOf(tree!.root.findByProps({ "aria-label": "Generated preview" })),
+    ).toBe("example");
+
+    await act(() =>
+      (button("Insert at cursor").props as { onClick: () => void }).onClick(),
+    );
+    expect(editor.state.doc.textContent).toBe("new beforeexampleafter");
+    expect(editor.state.selection.from).toBe(18);
+    expect(tree!.root.findAllByType("textarea")).toHaveLength(0);
+
+    await act(openAssistant);
+    expect(tree!.root.findAllByType("textarea")).toHaveLength(1);
+    await act(() =>
+      tree!.update(
+        <EditorToolbar
+          {...props}
+          assistantDocument={{ id: "document", baseCommitSha: "new-base" }}
+        />,
+      ),
+    );
+    expect(tree!.root.findAllByType("textarea")).toHaveLength(0);
+    await act(() => tree!.update(<EditorToolbar {...props} sourceOpen />));
+    expect(button("Insert with assistant").props.disabled).toBe(true);
+  });
+
   it("shows formatting before editor focus and restores the mapped cursor for upload", async () => {
     const { editor, keydown } = editorFixture();
     const upload = vi.fn(() => editor.state.selection.from);

@@ -4,6 +4,12 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.243] - 2026-11-18
+
+### Added
+
+- In the formatted document editor, use **Insert with assistant** to describe a formula, Mermaid diagram, code snippet, or other content. Preview the result, then insert it at the cursor in your draft.
+
 ## [0.1.242] - 2026-11-18
 
 ### Fixed

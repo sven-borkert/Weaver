@@ -7,6 +7,7 @@ import { simpleGit } from "simple-git";
 import {
   addMembership,
   callerFor,
+  callerWithSecurity,
   getPrisma,
   makeProject,
   makeUser,
@@ -133,6 +134,177 @@ async function makeTable(
 describe("document router", () => {
   beforeEach(async () => {
     await resetDb();
+  });
+
+  describe("generateContent", () => {
+    async function setupGeneration() {
+      const { project, caller, actor } = await setupProjectWith(
+        "Editor",
+        "inline-generation",
+      );
+      const document = await caller.document.create({
+        projectId: project.id,
+        folderPath: [],
+        title: "Private document title",
+        contentJson: PARA("Private document body"),
+      });
+      return {
+        project,
+        caller,
+        actor,
+        document,
+        input: {
+          projectId: project.id,
+          documentId: document.id,
+          instruction: " Illustrate a two-step flow. ",
+        },
+      };
+    }
+
+    it("calls the configured assistant model and returns Markdown without saving it", async () => {
+      const { project, actor, document, input } = await setupGeneration();
+      const admin = callerFor(await makeUser("Admin", "inline-ai-admin"));
+      const connection = await admin.llm.createConnection({
+        name: "Inline generation provider",
+        providerType: "openai_compatible",
+        endpoint: "https://inline.example/v1",
+        credential: "fake-inline-key",
+      });
+      const model = await admin.llm.createModel({
+        connectionId: connection.id,
+        providerModelId: "inline-chat",
+        displayName: "Inline chat",
+        capabilities: ["chat", "tool_use"],
+        maxOutputTokens: 2_000,
+        inputCostMicrosPerMillion: 1_000_000,
+        outputCostMicrosPerMillion: 2_000_000,
+        currency: "USD",
+      });
+      await admin.llm.setRoute({ purpose: "assistant", modelId: model.id });
+
+      const markdown =
+        "A line with $x^2$.  \nNext line\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+      const fetchImpl = vi.fn<typeof fetch>(async (_input, _init) =>
+        Response.json({
+          id: "inline-completion",
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: markdown },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 12, completion_tokens: 10, total_tokens: 22 },
+        }),
+      );
+
+      const generate = callerFor(actor, { llmFetch: fetchImpl }).document
+        .generateContent;
+      await expect(generate(input)).resolves.toEqual({ markdown });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [url, request] = fetchImpl.mock.calls[0]!;
+      expect(url).toBe("https://inline.example/v1/chat/completions");
+      expect(new Headers(request?.headers).get("authorization")).toBe(
+        "Bearer fake-inline-key",
+      );
+      if (typeof request?.body !== "string")
+        throw new Error("Expected provider request JSON");
+      const payload = JSON.parse(request.body);
+      expect(payload).toMatchObject({
+        model: "inline-chat",
+        max_tokens: 2_000,
+        messages: [
+          { role: "system", content: expect.stringContaining("```mermaid") },
+          { role: "user", content: input.instruction.trim() },
+        ],
+      });
+      expect(payload).not.toHaveProperty("tools");
+      expect(request.body).not.toContain("Private document");
+      expect(await (await openProjectRepo(project.id))?.resolveHead()).toBe(
+        document.headCommitSha,
+      );
+
+      const where = {
+        projectId: project.id,
+        documentId: document.id,
+        operation: "document.generate_content",
+      };
+      expect(await getPrisma().aiUsage.findFirst({ where })).toMatchObject({
+        connectionId: connection.id,
+        provider: "openai_compatible",
+        model: "inline-chat",
+        outcome: "success",
+        inputTokens: 12,
+        outputTokens: 10,
+        totalTokens: 22,
+        costMicros: 32n,
+        currency: "USD",
+      });
+
+      fetchImpl.mockResolvedValueOnce(
+        Response.json({
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: markdown },
+              finish_reason: "length",
+            },
+          ],
+          usage: { prompt_tokens: 12, completion_tokens: 20, total_tokens: 32 },
+        }),
+      );
+      await expect(generate(input)).rejects.toMatchObject({
+        code: "INTERNAL_SERVER_ERROR",
+      });
+      expect(
+        await getPrisma().aiUsage.findFirst({
+          where: { ...where, outcome: "validation_failure" },
+        }),
+      ).toMatchObject({ inputTokens: 12, outputTokens: 20, costMicros: 52n });
+    });
+
+    it("checks membership, document identity, and Markdown kind before calling a model", async () => {
+      const { project, caller, actor, input } = await setupGeneration();
+      const outsider = await makeUser("Admin", "inline-outsider");
+      const viewer = await makeUser("User", "inline-viewer");
+      await addMembership(project.id, viewer.id, "Viewer");
+      const otherProject = await makeProject("Another generation project");
+      await addMembership(otherProject.id, actor.id, "Editor");
+      const python = await caller.document.importFile({
+        projectId: project.id,
+        folderPath: [],
+        fileName: "example.py",
+        text: "print(42)\n",
+      });
+
+      await expect(
+        callerFor(viewer).document.generateContent(input),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        callerFor(outsider).document.generateContent(input),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        callerWithSecurity(actor, {
+          ...securityContextFor(actor),
+          capabilities: new Set(["content:read", "content:write"]),
+        }).document.generateContent(input),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      await expect(
+        caller.document.generateContent({
+          ...input,
+          projectId: otherProject.id,
+        }),
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(
+        caller.document.generateContent({ ...input, documentId: python.id }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      await expect(
+        caller.document.generateContent(input),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await expect(
+        caller.document.generateContent({ ...input, instruction: "   " }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    });
   });
 
   describe("create", () => {

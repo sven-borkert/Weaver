@@ -3,7 +3,7 @@
 import type { Editor, EditorEvents } from "@tiptap/core";
 import type { SelectionBookmark } from "@tiptap/pm/state";
 import { useEditorState } from "@tiptap/react";
-import { FileCode2, FileText } from "lucide-react";
+import { FileCode2, FileText, Sparkles } from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -26,8 +26,10 @@ import { Label } from "~/components/ui/label";
 import { DOCUMENT_IMAGE_ACCEPT } from "~/lib/documents/image-upload";
 import { restoreDocumentSelection } from "~/lib/editor/document-selection";
 import { externalUrlSchema } from "~/lib/editor/external-url";
+import { insertGeneratedMarkdown } from "~/lib/editor/generated-markdown";
 import { CrossReferencePicker } from "./CrossReferencePicker";
 import type { DocumentCommand } from "./document-toolbar-groups";
+import { DocumentAssistantInsertDialog } from "./DocumentAssistantInsertDialog";
 import { DocumentToolbarButton } from "./DocumentToolbarButton";
 import { DocumentFormattingControls } from "./DocumentToolbarControls";
 
@@ -43,6 +45,7 @@ type EditorToolbarProps = {
   onUploadImage?: (file: File) => void;
   onTransientOpenChange?: (open: boolean) => void;
   onViewSource: () => void;
+  assistantDocument?: { id: string; baseCommitSha: string };
 };
 
 export function EditorToolbar({
@@ -57,6 +60,7 @@ export function EditorToolbar({
   onUploadImage,
   onTransientOpenChange,
   onViewSource,
+  assistantDocument,
 }: EditorToolbarProps) {
   const id = useId();
   const [panel, setPanel] = useState<"link" | "image" | null>(null);
@@ -64,7 +68,11 @@ export function EditorToolbar({
   const [alt, setAlt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [assistantRevision, setAssistantRevision] = useState<string | null>(
+    null,
+  );
   const bookmark = useRef<SelectionBookmark | null>(null);
+  const viewButtonRef = useRef<HTMLButtonElement>(null);
   const editorState = useEditorState({
     editor,
     selector: ({ editor: current, transactionNumber }) => ({
@@ -73,6 +81,11 @@ export function EditorToolbar({
     }),
   });
   const locked = disabled || sourceOpen || !editorState.editable;
+  const assistantOpen =
+    !locked &&
+    assistantRevision !== null &&
+    assistantRevision === assistantDocument?.baseCommitSha;
+  if (assistantRevision !== null && !assistantOpen) setAssistantRevision(null);
   const liveDisabled = useRef(locked);
   useLayoutEffect(() => {
     liveDisabled.current = locked;
@@ -89,8 +102,13 @@ export function EditorToolbar({
     return true;
   }, [editor]);
   useEffect(() => {
-    const map = ({ transaction }: EditorEvents["transaction"]) => {
+    const map = ({
+      transaction,
+      appendedTransactions,
+    }: EditorEvents["transaction"]) => {
       bookmark.current = bookmark.current?.map(transaction.mapping) ?? null;
+      for (const appended of appendedTransactions ?? [])
+        bookmark.current = bookmark.current?.map(appended.mapping) ?? null;
     };
     editor.on("transaction", map);
     return () => {
@@ -98,8 +116,16 @@ export function EditorToolbar({
     };
   }, [editor]);
   useEffect(() => {
-    onTransientOpenChange?.(panel !== null || crossReferenceOpen || menuOpen);
-  }, [panel, crossReferenceOpen, menuOpen, onTransientOpenChange]);
+    onTransientOpenChange?.(
+      panel !== null || crossReferenceOpen || menuOpen || assistantOpen,
+    );
+  }, [
+    panel,
+    crossReferenceOpen,
+    menuOpen,
+    assistantOpen,
+    onTransientOpenChange,
+  ]);
   useEffect(() => {
     if (crossReferenceOpen) capture();
   }, [crossReferenceOpen, capture]);
@@ -170,6 +196,19 @@ export function EditorToolbar({
           onCommandMenuClosed={closeAutoFocus}
           onMenuOpenChange={setMenuOpen}
         />
+        {assistantDocument ? (
+          <DocumentToolbarButton
+            label="Insert with assistant"
+            aria-haspopup="dialog"
+            disabled={locked}
+            onClick={() => {
+              if (capture())
+                setAssistantRevision(assistantDocument.baseCommitSha);
+            }}
+          >
+            <Sparkles />
+          </DocumentToolbarButton>
+        ) : null}
         <span aria-hidden="true" className="bg-line mx-1 h-5 w-px shrink-0" />
         <div
           role="group"
@@ -177,6 +216,7 @@ export function EditorToolbar({
           className="flex shrink-0 items-center pr-1"
         >
           <DocumentToolbarButton
+            ref={viewButtonRef}
             label={
               sourceOpen ? "View formatted document" : "View Markdown source"
             }
@@ -189,6 +229,33 @@ export function EditorToolbar({
           </DocumentToolbarButton>
         </div>
       </div>
+      {assistantDocument ? (
+        <DocumentAssistantInsertDialog
+          open={assistantOpen}
+          editor={editor}
+          projectId={projectId}
+          documentId={assistantDocument.id}
+          onClose={() => setAssistantRevision(null)}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (restore())
+              editor.commands.focus(undefined, {
+                scrollIntoView: bookmark.current === null,
+              });
+            else viewButtonRef.current?.focus({ preventScroll: true });
+            bookmark.current = null;
+          }}
+          onInsert={(markdown) => {
+            if (!assistantOpen || liveDisabled.current || !bookmark.current)
+              return false;
+            if (!insertGeneratedMarkdown(editor, bookmark.current, markdown))
+              return false;
+            bookmark.current = null;
+            setAssistantRevision(null);
+            return true;
+          }}
+        />
+      ) : null}
       <Dialog
         open={panel === "link" || panel === "image"}
         onOpenChange={(open) => {

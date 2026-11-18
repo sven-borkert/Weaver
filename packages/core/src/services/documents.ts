@@ -1276,6 +1276,20 @@ async function requireDocument(
   return row;
 }
 
+export async function assertEditableMarkdownDocument(
+  db: Db,
+  input: { projectId: string; documentId: string },
+  actor: ProjectActor,
+): Promise<void> {
+  await assertProjectRole(db, input.projectId, actor, "Editor");
+  const document = await requireDocument(db, input.projectId, input.documentId);
+  if (documentKindOfPath(document.path) !== "markdown")
+    throw new CoreError(
+      "BAD_REQUEST",
+      "This action requires a Markdown document",
+    );
+}
+
 export async function writeDocumentInRepo(
   db: PrismaClient,
   repo: ProjectRepoWriter,

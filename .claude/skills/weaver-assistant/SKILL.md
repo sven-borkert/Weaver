@@ -876,6 +876,16 @@ tells writers to leave the title out; that sentence moved the pinned
 `prompt.test.ts` measurement from 65,574 to 65,696 bytes (+122 B, two propose
 tools), so the capacity figures above are 122 B lower.
 
+## Document editor generation
+
+`document.generateContent` is a tool-free call through
+`packages/core/src/services/documentGeneration.ts`. It verifies Editor access and the
+Markdown document kind, then passes only the instruction to the configured
+Assistant model. Best-effort `document.generate_content` accounting uses the
+routed model's pricing and omits the request and generated content. The editor
+previews the returned Markdown and inserts it in the local draft after
+confirmation.
+
 ## Exams
 
 `EXAM_TOOLS` is a separate registry list in MCP `exams`, excluded from static `ASSISTANT_TOOLS` and core. Trainer runs append `ASSISTANT_EXAM_TOOLS` (reads, `propose_exam_create`/`propose_exam_update`, `grade_exam_attempt`) only with trainer membership in effective scope; MCP keeps the direct `create_exam`/`update_exam`. Exam proposals share `AssistantProposal`, `createProposal`, auto-approve (`AUTO_APPROVABLE_KINDS` lists `exam.create`/`exam.update`) and `admitAutomaticAcceptance`, but `acceptProposalInternal` routes `exam.*` kinds to a single database transaction instead of the Git path. All schemas count against context; grade proposals require browser release. See `weaver-exams`.

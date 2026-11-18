@@ -1194,7 +1194,18 @@ renders them in one compact row and moves groups that do not fit into a
 "More formatting options" menu, measured by
 [`use-toolbar-overflow.ts`](../apps/web/src/lib/editor/use-toolbar-overflow.ts)
 (re-measured from the full, More-less row when the groups change or gain room).
-Source stays fixed at the right. Callout commands live in
+Insert with assistant and Source stay fixed at the right. The
+[`DocumentAssistantInsertDialog`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentAssistantInsertDialog.tsx>)
+uses the document renderer to preview generated Markdown, including LaTeX and
+Mermaid. `document.generateContent` checks Editor access to the Markdown
+document, then [`documentGeneration.ts`](../packages/core/src/services/documentGeneration.ts)
+sends the instruction to the configured Assistant model without document
+content or tools. It records usage under `document.generate_content`.
+On confirmation,
+[`generated-markdown.ts`](../apps/web/src/lib/editor/generated-markdown.ts)
+inserts a single undoable edit at the mapped cursor or end of the selection.
+The result becomes part of the local draft and follows the usual Save flow.
+Callout commands live in
 [`callout-commands.ts`](../apps/web/src/lib/editor/callout-commands.ts); callout
 colors and labels come from `globals.css` for both editor and reader.
 There is no toolbar visibility toggle or shortcut. The Source control and
