@@ -56,6 +56,11 @@ export type KnowledgeJobPayloads = {
   "project.git-sync": Record<string, never>;
   "project.git-push": { projectId: string; queueToken: string };
   "project.git-pull": { projectId: string; pullToken: string };
+  "project.git-rebuild": {
+    projectId: string;
+    kind: "document" | "table";
+    token: string;
+  };
   "task.tick": Record<string, never>;
   "exam.tick": Record<string, never>;
   "task.run": { runId: string; taskId: string };
@@ -195,6 +200,16 @@ export function knowledgeJobSendOptions(
         }
       : undefined;
   }
+  if (name === "project.git-rebuild") {
+    const payload = data as Partial<
+      KnowledgeJobPayloads["project.git-rebuild"]
+    >;
+    return payload.projectId && payload.kind && payload.token
+      ? {
+          singletonKey: `${payload.projectId}:${payload.kind}:${payload.token}`,
+        }
+      : undefined;
+  }
   if (name === "document.search-sync") {
     const payload = data as Partial<
       KnowledgeJobPayloads["document.search-sync"]
@@ -261,6 +276,7 @@ export const KNOWLEDGE_JOB_NAMES = [
   "task.run",
   "project.git-push",
   "project.git-pull",
+  "project.git-rebuild",
   "wiki.tick",
   "wiki.run",
 ] as const satisfies readonly KnowledgeJobName[];

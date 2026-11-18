@@ -172,7 +172,12 @@ own successful save advances its revision; background refetches never do.
 the file row lock, and reloads the draft after that claim. `withProjectRepo`
 owns the Git critical section; `contentOperations` supplies operation validation,
 create recovery, and the normal attributed write/indexing tail. The operation id
-is `ingestion:<fileId>`. An accepted retry returns the stored resource and SHA.
+is `ingestion:<fileId>`. `Weaver-Ingestion-Request-Hash` binds the locally
+trusted commit to the project, file, draft revision and reviewed content. It
+is stable across generated table column IDs. Earlier local commits recover
+only when the create at the recorded revision matches the reviewed content.
+For a document, this includes the bytes of its materialized images.
+An accepted retry returns the stored resource and SHA.
 The per-file review route exposes ready drafts and interrupted acceptance.
 Document acceptance materializes current nearest-folder/root reviewer defaults
 inside the existing Git writer lock through `writeDocumentInRepo`; draft
@@ -184,10 +189,12 @@ errors; other fields and unknown errors need a visible toast. Table links
 are navigable, read-only suggestions because tables have no matching field.
 
 Every failure path, including validation on an accepting retry, must prove no
-matching operation commit exists before releasing to ready. The complete-history
-operation index matches exact terminal trailers and ignores summary lookalikes;
-release reads up to ten candidates plus one overflow sentinel. Overflow or
-unreadable history retains accepting; unrelated summaries cannot hide a real commit.
+verified acceptance exists before releasing the same draft revision to ready.
+A locally trusted acceptance remains durable if the draft later fails validation.
+The complete-history operation index matches exact terminal trailers and
+filters to locally trusted commits before applying the acceptance bound of ten
+candidates plus one overflow sentinel. Overflow or unreadable history retains
+accepting.
 A committed failure stays accepting for retry. Finalization requires one conditional accepting update
 inside the same transaction as both acknowledgement fields. Batch deletion locks
 its file rows in id order under the lifecycle lock and refuses accepting

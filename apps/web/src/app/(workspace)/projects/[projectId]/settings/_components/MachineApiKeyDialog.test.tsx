@@ -7,6 +7,7 @@ type DialogMocks = {
   defaults: Record<string, unknown> | undefined;
   submitted: Record<string, unknown>;
   pending: boolean;
+  changeOpen: ((open: boolean) => void) | undefined;
 };
 const mocks = vi.hoisted(() => ({
   create: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
     defaults: undefined,
     submitted: {},
     pending: false,
+    changeOpen: undefined,
   } satisfies DialogMocks as DialogMocks),
 }));
 
@@ -69,7 +71,16 @@ vi.mock("./MachineGrantFields", () => ({
     `${grant.kind}:${grant.root ? "root" : grant.targetId}`,
 }));
 vi.mock("~/components/ui/dialog", () => ({
-  Dialog: ({ children }: { children: ReactNode }) => <>{children}</>,
+  Dialog: ({
+    children,
+    onOpenChange,
+  }: {
+    children: ReactNode;
+    onOpenChange: (open: boolean) => void;
+  }) => {
+    mocks.changeOpen = onOpenChange;
+    return <>{children}</>;
+  },
   DialogTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
   DialogContent: ({
     children,
@@ -274,11 +285,58 @@ describe("project API key dialog", () => {
     expect(
       (mocks.defaults!.grants as Record<string, unknown>[])[0],
     ).not.toHaveProperty("root");
+    await act(async () => mocks.changeOpen!(true));
     await act(() => run(renderer.root.findByType("form").props.onSubmit));
     expect(mocks.update).toHaveBeenCalledWith(
-      expect.objectContaining({ keyId: "key-1", projectId: "project" }),
+      expect.objectContaining({
+        keyId: "key-1",
+        projectId: "project",
+        expectedPolicyVersion: 3,
+      }),
     );
     expect(mocks.update.mock.calls[0]![0]).not.toHaveProperty("expiresInDays");
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps the form's policy version when the key list refreshes while editing", async () => {
+    mocks.update.mockRejectedValueOnce(
+      new TRPCClientError("The key changed", {
+        result: {
+          error: {
+            code: -32009,
+            message: "The key changed",
+            data: { code: "CONFLICT" },
+          },
+        },
+      }),
+    );
+    const dialog = (key: typeof existing) => (
+      <>
+        <MachineApiKeyDialog
+          projectId="project"
+          baseUrl={null}
+          existing={key}
+        />
+      </>
+    );
+    const renderer = await mount(
+      <MachineApiKeyDialog
+        projectId="project"
+        baseUrl={null}
+        existing={existing}
+      />,
+    );
+    await act(async () => mocks.changeOpen!(true));
+    mocks.resetForm.mockClear();
+    await act(async () =>
+      renderer.update(dialog({ ...existing, policyVersion: 4, grants: [] })),
+    );
+    await act(() => run(renderer.root.findByType("form").props.onSubmit));
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedPolicyVersion: 3 }),
+    );
+    expect(mocks.invalidate).toHaveBeenCalledTimes(1);
+    expect(mocks.resetForm).not.toHaveBeenCalled();
+    expect(mocks.toastError).toHaveBeenCalledWith("The key changed");
   });
 });

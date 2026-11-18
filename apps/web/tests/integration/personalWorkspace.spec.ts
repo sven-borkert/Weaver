@@ -1,8 +1,16 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Prisma, Project } from "@weaver/db/client";
+import { softDeleteProject } from "@weaver/core/services/projects";
 import { ensurePersonalWorkspace } from "@weaver/core/services/personalWorkspace";
 import { openProjectRepo } from "@weaver/git-store";
 import { fromOrganizationRole } from "@weaver/core/roles";
-import { getPrisma, makeUser, resetDb } from "./_harness";
+import {
+  callerFor,
+  getPrisma,
+  makeUser,
+  resetDb,
+  securityContextFor,
+} from "./_harness";
 
 describe("ensurePersonalWorkspace", () => {
   beforeEach(async () => {
@@ -33,12 +41,13 @@ describe("ensurePersonalWorkspace", () => {
 
   it("is idempotent and safe under concurrency", async () => {
     const user = await makeUser("User", "pw2");
-    const ids = await Promise.all([
-      ensurePersonalWorkspace(getPrisma(), user.id),
-      ensurePersonalWorkspace(getPrisma(), user.id),
-      ensurePersonalWorkspace(getPrisma(), user.id),
+    const landings = await Promise.all([
+      callerFor(user).account.landingProject(),
+      callerFor(user).account.landingProject(),
+      callerFor(user).account.landingProject(),
     ]);
-    expect(new Set(ids).size).toBe(1);
+    expect(landings[0]?.projectId).toBeTruthy();
+    expect(new Set(landings.map(({ projectId }) => projectId)).size).toBe(1);
     expect(
       await getPrisma().project.count({ where: { personalOwnerId: user.id } }),
     ).toBe(1);
@@ -48,6 +57,65 @@ describe("ensurePersonalWorkspace", () => {
         where: { organization: { members: { some: { userId: user.id } } } },
       }),
     ).toBe(1);
+  });
+
+  it("publishes ownership before a project becomes a landing destination", async () => {
+    const db = getPrisma();
+    const user = await makeUser("User", "pw-publish");
+    let publish!: (project: Project) => void;
+    let resume!: () => void;
+    const published = new Promise<Project>((resolve) => (publish = resolve));
+    const release = new Promise<void>((resolve) => (resume = resolve));
+    type Transaction = (
+      run: (tx: Prisma.TransactionClient) => Promise<unknown>,
+      options?: { maxWait?: number; timeout?: number },
+    ) => Promise<unknown>;
+    const transact = db.$transaction.bind(db) as Transaction;
+    const spy = vi
+      .spyOn(db, "$transaction")
+      .mockImplementation(
+        async (
+          run: Parameters<Transaction>[0],
+          options?: Parameters<Transaction>[1],
+        ) => {
+          const result = await transact(run, options);
+          if (
+            typeof result === "object" &&
+            result !== null &&
+            "organizationId" in result
+          ) {
+            spy.mockRestore();
+            publish(result as Project);
+            await release;
+          }
+          return result;
+        },
+      );
+    const first = callerFor(user).account.landingProject();
+    try {
+      const project = await Promise.race([
+        published,
+        first.then(() => {
+          throw new Error("No project publication observed");
+        }),
+      ]);
+      const visible = await db.project.findUniqueOrThrow({
+        where: { id: project.id },
+      });
+      expect(visible.personalOwnerId).toBe(user.id);
+      await expect(
+        softDeleteProject(db, project.id, securityContextFor(user)),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+      await expect(callerFor(user).account.landingProject()).resolves.toEqual({
+        projectId: project.id,
+      });
+      resume();
+      await expect(first).resolves.toEqual({ projectId: project.id });
+    } finally {
+      resume();
+      spy.mockRestore();
+      await first.catch(() => undefined);
+    }
   });
 
   it("creates a fresh workspace when the old one was soft-deleted directly in the database", async () => {

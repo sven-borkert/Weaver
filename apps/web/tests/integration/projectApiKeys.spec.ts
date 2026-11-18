@@ -321,6 +321,7 @@ describe("project machine key management", () => {
     const edited = await updateProjectApiKey(f.db, f.actor, {
       projectId: f.project.id,
       keyId: created.key.id,
+      expectedPolicyVersion: created.key.policyVersion,
       name: "Audit reports",
       rateLimitPerMinute: 10,
       grants: [
@@ -348,6 +349,7 @@ describe("project machine key management", () => {
       updateProjectApiKey(f.db, f.actor, {
         projectId: f.project.id,
         keyId: created.key.id,
+        expectedPolicyVersion: edited.policyVersion,
         name: "Audit reports",
         rateLimitPerMinute: 10,
         grants: [{ kind: "table", targetId: randomUUID(), actions: ["read"] }],
@@ -359,6 +361,7 @@ describe("project machine key management", () => {
     const cleared = await updateProjectApiKey(f.db, f.actor, {
       projectId: f.project.id,
       keyId: created.key.id,
+      expectedPolicyVersion: edited.policyVersion,
       name: "Audit reports",
       rateLimitPerMinute: 10,
       expiresInDays: null,
@@ -372,6 +375,7 @@ describe("project machine key management", () => {
       updateProjectApiKey(f.db, f.actor, {
         projectId: other.project.id,
         keyId: created.key.id,
+        expectedPolicyVersion: cleared.policyVersion,
         name: "Moved",
         rateLimitPerMinute: 10,
         grants: [{ kind: "documentFolder", root: true, actions: ["create"] }],
@@ -387,6 +391,44 @@ describe("project machine key management", () => {
       name: "Audit reports",
       policyVersion: 3,
     });
+  });
+
+  it("rejects a stale policy draft after another maintainer updates permissions", async () => {
+    const f = await makeMachineFixture();
+    const first = await memberAs(f, "Maintainer");
+    const second = await memberAs(f, "Maintainer");
+    const document = documentGrant(f);
+    const rootGrant = {
+      kind: "tableFolder" as const,
+      root: true as const,
+      actions: ["read" as const],
+    };
+    const { key } = await createProjectApiKey(f.db, f.actor, {
+      projectId: f.project.id,
+      name: "Audit",
+      grants: [document, rootGrant],
+    });
+    const base = {
+      projectId: f.project.id,
+      keyId: key.id,
+      expectedPolicyVersion: key.policyVersion,
+    };
+    await callerFor(first.user).projectApiKey.update({
+      ...base,
+      name: key.name,
+      grants: [rootGrant],
+    });
+    await expect(
+      callerFor(second.user).projectApiKey.update({
+        ...base,
+        name: "Renamed audit",
+        grants: [document, rootGrant],
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    const [current] = await listProjectApiKeys(f.db, f.actor, f.project.id);
+    expect(current?.name).toBe("Audit");
+    expect(current?.policyVersion).toBe(key.policyVersion + 1);
+    expect(current?.grants).toMatchObject([rootGrant]);
   });
 
   it("assigns legacy folder identities only when granted", async () => {
@@ -584,6 +626,7 @@ describe("project machine key management", () => {
       updateProjectApiKey(f.db, f.actor, {
         projectId: f.project.id,
         keyId: created.key.id,
+        expectedPolicyVersion: revoked!.policyVersion,
         name: "Revived",
         rateLimitPerMinute: 100,
         grants: [documentGrant(f)],

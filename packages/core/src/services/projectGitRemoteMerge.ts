@@ -645,7 +645,7 @@ async function prepareLocalContent(
   if (reslugged.length === 0) {
     return { preparedHead: null, baseHead: localHead, reslugged, keepLocal };
   }
-  const preparedHead = await repo.commitTreeWithParents(
+  const preparedHead = await repo.createTreeCommit(
     `pull: prepare local content for ${branch}`,
     author,
     [localHead],
@@ -658,7 +658,7 @@ async function prepareLocalContent(
  * by `fetchLocalRef`) into the project repository. Remote content wins the
  * path; a local document/table whose id differs from the remote content at
  * its path is re-slugged onto a free path instead of lost (R1: as a
- * separate single-parent "prepare" commit ahead of the merge commit).
+ * separate single-parent "prepare" commit reached through the merge commit).
  * True fast-forward (R3) and no-op-pull (R4) are handled without an
  * unnecessary merge commit. Must run inside `withExistingProjectRepo` — the
  * caller holds the exclusive project lock and this function performs no
@@ -676,6 +676,15 @@ export async function mergeFetchedBranch(
   },
 ): Promise<MergeOutcome> {
   const localHead = await repo.resolveHead();
+  const publish = async (
+    message: string,
+    parents: string[],
+    preparedParent?: string,
+  ) => {
+    const sha = await repo.createTreeCommit(message, input.author, parents);
+    await repo.publishTreeCommit(sha, localHead, preparedParent);
+    return sha;
+  };
   try {
     const fetched = await repo.fetchLocalRef(
       input.bareDirectory,
@@ -712,11 +721,9 @@ export async function mergeFetchedBranch(
         };
       }
       await repo.writeFileAtomic(PROJECT_METADATA_PATH, file);
-      const sha = await repo.commitTreeWithParents(
-        `pull: ${input.branch} (up to date)`,
-        input.author,
-        [localHead],
-      );
+      const sha = await publish(`pull: ${input.branch} (up to date)`, [
+        localHead,
+      ]);
       return {
         mergedSha: sha,
         remoteHead: input.remoteHead,
@@ -746,11 +753,7 @@ export async function mergeFetchedBranch(
       // any kind, even for local-only content the remote later deleted.
       await repo.resetWorktreeTo(PULL_REF);
       await writeMetadata(db, repo, input.projectId);
-      const sha = await repo.commitTreeWithParents(
-        `pull: ${input.branch}`,
-        input.author,
-        [input.remoteHead],
-      );
+      const sha = await publish(`pull: ${input.branch}`, [input.remoteHead]);
       return {
         mergedSha: sha,
         remoteHead: input.remoteHead,
@@ -814,10 +817,10 @@ export async function mergeFetchedBranch(
       await repo.checkoutPathsFrom(prepared.baseHead, restorePaths);
     }
     await writeMetadata(db, repo, input.projectId);
-    const sha = await repo.commitTreeWithParents(
+    const sha = await publish(
       `pull: merge ${input.branch}`,
-      input.author,
       [input.remoteHead, prepared.baseHead],
+      prepared.preparedHead ?? undefined,
     );
     return {
       mergedSha: sha,
@@ -826,11 +829,8 @@ export async function mergeFetchedBranch(
       reslugged: prepared.reslugged,
     };
   } catch (error) {
-    // Whatever real commit HEAD currently points to (localHead, or the
-    // phase-A prepare commit if it landed before the failure) is a valid,
-    // complete state; reset the worktree/index back to it so a concurrent
-    // shared-lock reader never observes a half-merged worktree. A failure
-    // recovering must never replace the original error.
+    // HEAD contains the original or published final tree. Restore the index
+    // and worktree to that committed state before releasing the repo lock.
     try {
       await repo.resetWorktreeTo(await repo.resolveHead());
     } catch {

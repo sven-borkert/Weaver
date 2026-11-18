@@ -430,6 +430,11 @@ describe("sending to a remote instance", () => {
       },
       actor,
     );
+    const replacement = Buffer.concat([ONE_PIXEL_PNG, Buffer.from([0])]);
+    await withProjectRepo(source.id, async (repo) => {
+      await repo.writeBinaryFileAtomic(own.path, replacement);
+      await repo.commitAll("replace saved image", actor);
+    });
     const payload = await buildDocumentTransferPayload(db, actor, {
       projectId: source.id,
       documentId: doc.id,
@@ -439,7 +444,7 @@ describe("sending to a remote instance", () => {
       {
         name: "own.png",
         contentType: "image/png",
-        bytes: ONE_PIXEL_PNG.toString("base64"),
+        bytes: replacement.toString("base64"),
       },
     ]);
   });

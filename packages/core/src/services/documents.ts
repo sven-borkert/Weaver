@@ -142,6 +142,7 @@ type WriteMetadata = {
   runId?: string;
   /** Weaver-Wiki-Request-Hash; the wiki agent's recovery key. */
   wikiRequestHash?: string;
+  ingestionRequestHash?: string;
   /** Weaver-Wiki-Input-Id on a source writer commit. */
   wikiInputId?: string;
   /** Runs under the project lock immediately before the commit; a throw aborts it. */
@@ -1004,6 +1005,7 @@ async function commitPreparedWrite(
       apiOperation: metadata.apiOperation,
       runId: metadata.runId,
       wikiRequestHash: metadata.wikiRequestHash,
+      ingestionRequestHash: metadata.ingestionRequestHash,
       wikiInputId: metadata.wikiInputId,
       beforeCommit: metadata.beforeCommit,
       metadataOverride: overridden,
@@ -1597,6 +1599,16 @@ export async function getDocument(
   input: { projectId: string; documentId: string },
   actor: ProjectActor,
 ) {
+  const { snapshotCommitSha: _snapshotCommitSha, ...document } =
+    await getDocumentWithSnapshot(db, input, actor);
+  return document;
+}
+
+export async function getDocumentWithSnapshot(
+  db: PrismaClient,
+  input: { projectId: string; documentId: string },
+  actor: ProjectActor,
+) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
   let row = await requireDocument(db, input.projectId, input.documentId);
   const repo = await openProjectRepo(input.projectId);
@@ -1691,6 +1703,7 @@ export async function getDocument(
     title: meta.title,
     kind,
     content: documentContent,
+    snapshotCommitSha: snapshotSha,
     baseCommitSha,
     lastEditedAt: row.lastEditedAt,
     lastEditedById: row.lastEditedById,
@@ -2495,6 +2508,30 @@ export async function restoreDocument(
   return result;
 }
 
+export async function requireCommittedDocumentAtPath(
+  repo: ProjectRepoReader,
+  document: { id: string; path: string },
+) {
+  const snapshot = await repo.readCommittedFileAt(
+    await repo.resolveHead(),
+    document.path,
+  );
+  if (!snapshot) throw new CoreError("NOT_FOUND");
+  const kind = documentKindOfPath(document.path);
+  let parsed: ReturnType<typeof parseDocumentFile>;
+  try {
+    parsed = parseDocumentFile(snapshot.content, kind);
+  } catch {
+    throw new CoreError("PRECONDITION_FAILED", "document content is malformed");
+  }
+  if (parsed.meta.id !== document.id)
+    throw new CoreError(
+      "CONFLICT",
+      "The document path changed. Rebuild the document index and retry.",
+    );
+  return { ...snapshot, ...parsed, kind };
+}
+
 export async function moveDocumentInRepo(
   db: PrismaClient,
   repo: ProjectRepoWriter,
@@ -2503,7 +2540,6 @@ export async function moveDocumentInRepo(
   audit: DocumentWriteAudit = {},
 ): Promise<DocumentResult> {
   const row = await requireDocument(db, input.projectId, input.documentId);
-  const kind = documentKindOfPath(row.path);
   try {
     assertSafeSegments(input.folderPath);
     assertOutsideTablesRoot(input.folderPath);
@@ -2516,23 +2552,16 @@ export async function moveDocumentInRepo(
   ) {
     throw folderNotFound("folderPath");
   }
+  const { kind, meta, body, baseCommitSha } =
+    await requireCommittedDocumentAtPath(repo, row);
   const targetPath = docPath(input.folderPath, row.slug, kind);
   if (targetPath === row.path) {
-    if (!(await repo.fileExistsInWorktree(row.path))) {
-      throw new CoreError("NOT_FOUND");
-    }
-    const headCommitSha = await repo.lastCommitForPath(row.path);
-    if (!headCommitSha) throw new CoreError("NOT_FOUND");
-    const { meta } = parseDocumentFile(
-      await repo.readFileFromWorktree(row.path),
-      kind,
-    );
     return {
       id: row.id,
       path: row.path,
       slug: row.slug,
       title: meta.title,
-      headCommitSha,
+      headCommitSha: baseCommitSha,
     };
   }
   // A stray `<slug>.assets` would nest the moved directory or be adopted.
@@ -2544,31 +2573,23 @@ export async function moveDocumentInRepo(
         db,
         repo,
         input.projectId,
-        row.title,
+        meta.title,
         input.folderPath,
         kind,
         row.id,
       )
     : { path: targetPath, slug: row.slug };
-  const reslugged =
-    next.slug !== row.slug && kind === "markdown"
-      ? parseDocumentFile(await repo.readFileFromWorktree(row.path), kind)
-      : null;
   await repo.mv(row.path, next.path);
   await moveAssetsDir(repo, row.path, next.path);
-  if (reslugged) {
+  if (next.slug !== row.slug && kind === "markdown") {
     const rewritten = rewriteOwnAssetsPrefix(
-      parseDocumentBody(reslugged.body),
+      parseDocumentBody(body),
       row.slug,
       next.slug,
     );
     await repo.writeFileAtomic(
       next.path,
-      composeDocumentFile(
-        reslugged.meta,
-        serializeDocumentBody(rewritten),
-        kind,
-      ),
+      composeDocumentFile(meta, serializeDocumentBody(rewritten), kind),
     );
   }
   const sha = await repo.commitAll(
@@ -2594,7 +2615,7 @@ export async function moveDocumentInRepo(
     id: row.id,
     path: next.path,
     slug: next.slug,
-    title: row.title,
+    title: meta.title,
     headCommitSha: sha,
   };
 }
@@ -2626,22 +2647,7 @@ export async function deleteDocumentInRepo(
   audit: DocumentWriteAudit = {},
 ): Promise<DocumentDeleteResult> {
   const row = await requireDocument(db, input.projectId, input.documentId);
-  const snapshot = await repo.readCommittedFileAt(
-    await repo.resolveHead(),
-    row.path,
-  );
-  if (!snapshot) throw new CoreError("NOT_FOUND");
-  let parsed: ReturnType<typeof parseDocumentFile>;
-  try {
-    parsed = parseDocumentFile(snapshot.content, documentKindOfPath(row.path));
-  } catch {
-    throw new CoreError("PRECONDITION_FAILED", "document content is malformed");
-  }
-  if (parsed.meta.id !== row.id)
-    throw new CoreError(
-      "CONFLICT",
-      "The document path changed. Rebuild the document index before deleting.",
-    );
+  await requireCommittedDocumentAtPath(repo, row);
   const assetsDir = assetsDirForDocPath(row.path);
   if (await repo.fileExistsInWorktree(assetsDir)) await repo.rmDir(assetsDir);
   await repo.rm(row.path);

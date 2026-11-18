@@ -1450,6 +1450,42 @@ describe("reviewing", () => {
     expect((await s.read()).baseCommitSha).toBe(head);
   });
 
+  it("authorizes the latest committed reviewer assignment before projections catch up", async () => {
+    const s = await setup("pulled-assignment");
+    await assign(s, [{ type: "user", id: s.vic.id }]);
+    const head = await withProjectRepo(s.project.id, async (repo) => {
+      const { meta, body } = parseDocumentFile(
+        await repo.readFileFromWorktree(s.doc.path),
+        "markdown",
+      );
+      await repo.writeFileAtomic(
+        s.doc.path,
+        composeDocumentFile(
+          {
+            ...meta,
+            review: {
+              ...meta.review!,
+              reviewers: [{ type: "user", id: s.ada.id, name: "Ada" }],
+            },
+          },
+          body,
+          "markdown",
+        ),
+      );
+      return repo.commitAll("pull fixture: reassign reviewer", {
+        name: "Ada",
+        email: s.ada.email,
+        userId: s.ada.id,
+      });
+    });
+    const input = { ...s.ids, expectedHeadCommitSha: head };
+    await expect(
+      markDocumentReviewed(s.db, input, s.vicActor),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await markDocumentReviewed(s.db, input, s.adaActor);
+    expect((await s.read()).review?.reviewedBy?.id).toBe(s.ada.id);
+  });
+
   it("refuses a read-only credential even for an assigned reviewer", async () => {
     const s = await setup("readonly");
     await assign(s, [{ type: "user", id: s.vic.id }]);

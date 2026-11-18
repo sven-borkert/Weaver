@@ -219,7 +219,8 @@ export async function updateRemoteInstance(
         baseUrl: baseUrl ?? current.baseUrl,
         enabled: input.patch.enabled ?? current.enabled,
       };
-      if (next.baseUrl !== current.baseUrl) {
+      const endpointChanged = next.baseUrl !== current.baseUrl;
+      if (endpointChanged) {
         // A new base URL is a new peer: its client id, connections and tokens no longer apply.
         await removeRemoteOauthClient(tx, current.baseUrl);
         await tx.remoteInstanceConnection.deleteMany({
@@ -231,7 +232,11 @@ export async function updateRemoteInstance(
       }
       const row = await tx.remoteInstance.update({
         where: { id: input.id },
-        data: { ...next, revision: { increment: 1 } },
+        data: {
+          ...next,
+          revision: { increment: 1 },
+          ...(endpointChanged ? { endpointGeneration: { increment: 1 } } : {}),
+        },
         select: REMOTE_INSTANCE_SELECT,
       });
       await syncRemoteOauthClient(tx, row, deps.mcpResourceUrl);

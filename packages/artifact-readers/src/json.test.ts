@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ArtifactReadError } from "./errors";
 import { queryJsonPath, type JsonValue } from "./jsonPath";
 import {
@@ -387,17 +387,24 @@ describe("queryJson", () => {
   });
 });
 
-describe("extremely deep documents", () => {
-  /** JSON.parse handles this depth; JSON.stringify (the byte-budget clip)
-   *  overflows the stack around 20,000. */
-  const deepBytes = (depth: number) =>
-    new TextEncoder().encode(`${'{"a":'.repeat(depth)}1${"}".repeat(depth)}`);
-
+describe("JSON serialization limits", () => {
   it("maps a stack overflow to resource_limit instead of a raw RangeError", () => {
-    const bytes = deepBytes(50_000);
-    expect(readCode(() => queryJson(bytes, { path: "$" }))).toBe(
-      "resource_limit",
-    );
+    const doc: JsonValue = { nested: { item: 1 } };
+    const stringify = JSON.stringify;
+    const serializer = vi
+      .spyOn(JSON, "stringify")
+      .mockImplementation((value: unknown) => {
+        if (value === doc)
+          throw new RangeError("Maximum call stack size exceeded");
+        return stringify(value);
+      });
+    try {
+      expect(readCode(() => queryJsonValue(doc, { path: "$" }))).toBe(
+        "resource_limit",
+      );
+    } finally {
+      serializer.mockRestore();
+    }
   });
 });
 

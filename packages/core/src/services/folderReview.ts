@@ -5,6 +5,7 @@ import type { StoredFolderReviewDefaults } from "../documents/folderReview";
 import type { DocumentReview } from "../documents/review";
 import { readFolderMetadataAt, readRootFolderMetadataAt } from "./folders";
 import {
+  committedReviewerCheck,
   defaultReviewFor,
   getConfiguredProjectReviewers,
   reviewFromConfiguredDefaults,
@@ -54,7 +55,6 @@ import {
 import { hasCapability } from "../security/context";
 import { withExistingProjectRepoReader, withProjectRepo } from "./projectRepo";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
-import { effectiveReviewerDocumentIds } from "./documentReview";
 
 export type FolderReviewTarget = { projectId: string; path: string[] };
 
@@ -603,12 +603,23 @@ async function prepareMarkInRepo(
       // An unreadable file cannot be reviewed; it counts as skipped.
     }
   }
-  const mine = await effectiveReviewerDocumentIds(
+  const isReviewer = await committedReviewerCheck(
     db,
     input.projectId,
-    [...parsed.keys()],
     actor.userId,
   );
+  const projectedPaths = new Map<string, string>();
+  const ids = [...parsed.keys()];
+  for (let start = 0; start < ids.length; start += 5000) {
+    const rows = await db.document.findMany({
+      where: {
+        projectId: input.projectId,
+        id: { in: ids.slice(start, start + 5000) },
+      },
+      select: { id: true, path: true },
+    });
+    for (const row of rows) projectedPaths.set(row.id, row.path);
+  }
   const now = new Date().toISOString();
   const fallback = await defaultReviewFor(db, input.projectId, now);
   const reviewedBy = authorForUser({
@@ -619,7 +630,8 @@ async function prepareMarkInRepo(
   const files: PreparedFile[] = [];
   let rewrittenBytes = 0;
   for (const [id, file] of parsed) {
-    if (mine.get(id) !== file.path) continue;
+    if (projectedPaths.get(id) !== file.path || !isReviewer(file.meta.review))
+      continue;
     const content = composeDocumentFile(
       {
         ...file.meta,

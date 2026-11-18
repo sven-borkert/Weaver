@@ -4,6 +4,17 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.242] - 2026-11-18
+
+### Fixed
+
+- Document moves and image uploads verify the committed document identity. Review stamps check the committed reviewer assignment, and document ZIP, PDF, and peer transfers use a consistent Git snapshot for content and assets.
+- Git pulls publish a single final revision, follow the machine-key lock order, and persist independent document and table projection repairs so a concurrent edit cannot leave imported content missing.
+- Peer OAuth connections bind credentials and pending authorization to an endpoint generation. Machine-key policy edits detect stale drafts, and new personal workspaces appear with their deletion protection already in place.
+- Import acceptance checks trusted recovery evidence for the reviewed draft. Single-document and single-table scheduled tasks filter their change digest to the selected resource, and Run Now retains accepted work if queue bookkeeping fails. Wiki input writes require the current lease.
+- Exam autosave preserves a divergent answer and lets the trainee resolve the conflict before submission. Paged artifact PDF reads extract only the pages needed, and the JSON reader regression uses a controlled serialization failure across Node versions.
+- Interrupted image releases resume with their existing immutable images. CI publishes floating tags after the complete immutable release set is available.
+
 ## [0.1.240] - 2026-11-15
 
 ### Fixed

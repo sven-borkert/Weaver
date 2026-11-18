@@ -33,6 +33,7 @@ const HANDLED_JOB_NAMES = KNOWLEDGE_JOB_NAMES.filter(
       "project.git-sync",
       "project.git-push",
       "project.git-pull",
+      "project.git-rebuild",
     ].includes(name),
 );
 
@@ -42,6 +43,10 @@ const gitRemoteOperations = vi.hoisted(() => ({
   pullProjectGitRemote: vi.fn(),
 }));
 vi.mock("../services/projectGitRemoteJobs", () => gitRemoteOperations);
+const gitProjectionRepair = vi.hoisted(() => vi.fn());
+vi.mock("../services/projectGitProjectionRepairs", () => ({
+  runProjectGitProjectionRepair: gitProjectionRepair,
+}));
 vi.mock("../services/artifactNotebookJobs", () => ({
   reconcileArtifactNotebooks: vi.fn(),
 }));
@@ -701,6 +706,7 @@ describe("knowledge worker runtime", () => {
     expect([...gitQueue.handlers.keys()].sort()).toEqual([
       "project.git-pull",
       "project.git-push",
+      "project.git-rebuild",
       "project.git-sync",
       "system.reconcile",
     ]);
@@ -722,6 +728,17 @@ describe("knowledge worker runtime", () => {
     await gitQueue.run("project.git-pull", gitPullPayload);
     expect(gitRemoteOperations.pullProjectGitRemote).toHaveBeenCalledWith(
       expect.objectContaining({ db: baseInput.db, payload: gitPullPayload }),
+    );
+    const repair = {
+      projectId: "1c5741fe-fb83-41ba-ab6d-5c5a839a40ed",
+      kind: "table" as const,
+      token: "0595b5a9-51a2-4a4b-b658-9bb867d7b4ea",
+    };
+    await gitQueue.run("project.git-rebuild", repair);
+    expect(gitProjectionRepair).toHaveBeenCalledWith(
+      baseInput.db,
+      repair,
+      expect.any(AbortSignal),
     );
 
     const wikiQueue = new FakeJobQueue();

@@ -11,7 +11,10 @@ import {
   serializeDocumentBody,
 } from "@weaver/core/editor/markdown";
 import { readProjectImage } from "@weaver/core/services/documentImages";
-import { getDocument, resolveRefs } from "@weaver/core/services/documents";
+import {
+  getDocumentWithSnapshot,
+  resolveRefs,
+} from "@weaver/core/services/documents";
 import type { ProjectActor } from "@weaver/core/services/projectAccess";
 import { buildDocumentPrintHtml, hasMath, type PrintImage } from "./html";
 import { mathStylesSource } from "./mathStyles";
@@ -30,7 +33,7 @@ export async function exportDocumentPdf(
   options: { maxImageBytes?: number } = {},
 ): Promise<{ bytes: Uint8Array; filename: string }> {
   const maxImageBytes = options.maxImageBytes ?? MAX_PDF_IMAGE_BYTES;
-  const document = await getDocument(db, input, actor);
+  const document = await getDocumentWithSnapshot(db, input, actor);
   if (document.content.kind !== "markdown")
     throw new CoreError(
       "BAD_REQUEST",
@@ -55,7 +58,7 @@ export async function exportDocumentPdf(
       {
         projectId: input.projectId,
         segments: relPath.split("/"),
-        at: document.baseCommitSha,
+        at: document.snapshotCommitSha,
       },
       actor,
     );

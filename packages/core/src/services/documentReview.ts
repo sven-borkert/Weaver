@@ -2,11 +2,9 @@ import { CoreError } from "../errors";
 import { toOrganizationRole } from "../roles";
 import {
   composeDocumentFile,
-  parseDocumentFile,
   authorForUser,
   type DocumentAuthor,
 } from "../documents/frontmatter";
-import { documentKindOfPath } from "../documents/kinds";
 import {
   MAX_REVIEWERS,
   REVIEW_MONTHS_MAX,
@@ -22,6 +20,7 @@ import {
   presentAuthor,
   repairDocumentProjectionInRepo,
   reportProjectionFailureAndReconcile,
+  requireCommittedDocumentAtPath,
   type EnrichedActor,
 } from "./documents";
 import {
@@ -35,6 +34,7 @@ import { withProjectRepo } from "./projectRepo";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { invalidCursorError } from "./contentCursors";
 import {
+  committedReviewerCheck,
   defaultReviewFor,
   resolveReviewerTargets,
   type ReviewerTarget,
@@ -52,7 +52,7 @@ const RESOLVABLE = {
   OR: [{ userId: { not: null } }, { group: { members: { some: {} } } }],
 } satisfies Prisma.DocumentReviewerWhereInput;
 
-/** The one definition of "effective reviewer"; callers also constrain the project's membership. */
+/** Projected reviewer filter for due lists and permissions. */
 function reviewerFilter(userId: string): Prisma.DocumentWhereInput {
   return {
     OR: [
@@ -96,29 +96,6 @@ export async function isEffectiveReviewer(
   );
 }
 
-/** Of the given documents, those the user is an effective reviewer of. */
-export async function effectiveReviewerDocumentIds(
-  db: Db,
-  projectId: string,
-  documentIds: string[],
-  userId: string,
-): Promise<Map<string, string>> {
-  const found = new Map<string, string>();
-  for (let start = 0; start < documentIds.length; start += 5000) {
-    const rows = await db.document.findMany({
-      where: {
-        id: { in: documentIds.slice(start, start + 5000) },
-        projectId,
-        project: { organization: { members: { some: { userId } } } },
-        ...reviewerFilter(userId),
-      },
-      select: { id: true, path: true },
-    });
-    for (const row of rows) found.set(row.id, row.path);
-  }
-  return found;
-}
-
 async function writeReview(
   db: PrismaClient,
   input: {
@@ -129,28 +106,28 @@ async function writeReview(
   actor: EnrichedActor,
   change: (review: DocumentReview, now: string) => DocumentReview,
   subject: (path: string) => string,
-  authorize: () => Promise<unknown>,
+  authorize: (review: DocumentReview | null) => Promise<unknown>,
 ): Promise<{ headCommitSha: string }> {
   let changed = false;
   const result = await withProjectRepo(input.projectId, async (repo) => {
-    await authorize();
     const row = await db.document.findFirst({
       where: { id: input.documentId, projectId: input.projectId },
     });
     if (!row) throw new CoreError("NOT_FOUND");
-    const head = await repo.lastCommitForPath(row.path);
-    if (!head) throw new CoreError("NOT_FOUND");
+    const {
+      baseCommitSha: head,
+      content: currentFile,
+      meta,
+      body,
+      kind,
+    } = await requireCommittedDocumentAtPath(repo, row);
+    await authorize(meta.review);
     if (head !== input.expectedHeadCommitSha)
       throw new CoreError(
         "CONFLICT",
         "The document changed. Reload and try again.",
         { headCommitSha: head },
       );
-    const currentFile = await repo.readFileFromWorktree(row.path);
-    const { meta, body } = parseDocumentFile(
-      currentFile,
-      documentKindOfPath(row.path),
-    );
     const now = new Date().toISOString();
     const current =
       meta.review ?? (await defaultReviewFor(db, input.projectId, now));
@@ -162,7 +139,7 @@ async function writeReview(
         ...(properties ? { properties } : { properties: undefined }),
       },
       body,
-      documentKindOfPath(row.path),
+      kind,
     );
     assertDocumentFileSize(file, row.path);
     if (file === currentFile) return { headCommitSha: head };
@@ -203,14 +180,6 @@ export async function markDocumentReviewed(
   // Membership first so a non-member cannot probe document ids.
   await resolveProjectAccess(db, input.projectId, actor);
   if (!hasCapability(actor, "content:write")) throw new CoreError("FORBIDDEN");
-  const isReviewer = () =>
-    isEffectiveReviewer(db, input.projectId, input.documentId, actor.userId);
-  if (!(await isReviewer())) {
-    const exists = await db.document.count({
-      where: { id: input.documentId, projectId: input.projectId },
-    });
-    throw new CoreError(exists ? "FORBIDDEN" : "NOT_FOUND");
-  }
   const self = authorForUser({
     id: actor.userId,
     name: actor.name,
@@ -222,8 +191,13 @@ export async function markDocumentReviewed(
     actor,
     (review, now) => ({ ...review, lastReviewed: now, reviewedBy: self }),
     (path) => `review: ${path}`,
-    async () => {
-      if (!(await isReviewer())) throw new CoreError("FORBIDDEN");
+    async (review) => {
+      const isReviewer = await committedReviewerCheck(
+        db,
+        input.projectId,
+        actor.userId,
+      );
+      if (!isReviewer(review)) throw new CoreError("FORBIDDEN");
     },
   );
 }

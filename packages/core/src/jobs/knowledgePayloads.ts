@@ -47,6 +47,11 @@ const schemas: Partial<Record<KnowledgeJobName, z.ZodType>> = {
     projectId: z.uuid(),
     repairDocumentIds: z.array(z.uuid()).min(1).max(100).optional(),
   }),
+  "project.git-rebuild": z.strictObject({
+    projectId: z.uuid(),
+    kind: z.enum(["document", "table"]),
+    token: z.uuid(),
+  }),
   "wiki.run": z.strictObject({ runId: z.uuid() }),
   "project.generation-build": z.strictObject({
     ...generation,

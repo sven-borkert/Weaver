@@ -39,7 +39,9 @@ retry examples. Implementation changes also require `weaver-documents` or
   Creator lifecycle changes do not revoke project keys.
 - Management requires a session actor, Maintainer rank, and `content:write`;
   nonmembers, including Admins, get `NOT_FOUND`. Revocation is irreversible and
-  changes `policyVersion`. Use current key/policy state on every request.
+  changes `policyVersion`. An edit submits the draft’s `expectedPolicyVersion`
+  and checks it under the policy lock before replacing grants. Use current
+  key/policy state on every request.
 - Grants attach to durable resource/folder UUIDs, with explicit root grants.
   Folder UUIDs follow moves and renames. Duplicate folder identity mappings are
   excluded; a path prefix is not durable authority. No matching grant is

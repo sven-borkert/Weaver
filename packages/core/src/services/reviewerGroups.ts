@@ -74,6 +74,46 @@ async function projectMembers(db: Db, projectId: string) {
   return project;
 }
 
+export async function committedReviewerCheck(
+  db: Db,
+  projectId: string,
+  userId: string,
+): Promise<(review: DocumentReview | null) => boolean> {
+  const project = await projectMembers(db, projectId);
+  const members = new Map(
+    project.organization.members.map((member) => [member.userId, member.role]),
+  );
+  const actorRole = members.get(userId);
+  if (!actorRole) return () => false;
+  const groups = await db.reviewerGroup.findMany({
+    where: { projectId },
+    select: { id: true, members: { select: { userId: true } } },
+  });
+  const effectiveGroups = new Set<string>();
+  const actorGroups = new Set<string>();
+  for (const group of groups) {
+    if (group.members.some((member) => members.has(member.userId)))
+      effectiveGroups.add(group.id);
+    if (group.members.some((member) => member.userId === userId))
+      actorGroups.add(group.id);
+  }
+  return (review) => {
+    const refs = review?.reviewers ?? [];
+    if (
+      refs.some((ref) =>
+        ref.type === "user" ? ref.id === userId : actorGroups.has(ref.id),
+      )
+    )
+      return true;
+    return (
+      actorRole === toOrganizationRole("Owner") &&
+      !refs.some((ref) =>
+        ref.type === "user" ? members.has(ref.id) : effectiveGroups.has(ref.id),
+      )
+    );
+  };
+}
+
 async function validatedMemberIds(
   db: Db,
   projectId: string,

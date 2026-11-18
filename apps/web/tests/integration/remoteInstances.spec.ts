@@ -1,12 +1,15 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OAUTH_SCOPES } from "@weaver/auth";
-import { remoteClientId } from "@weaver/core/remotes/urls";
+import { remoteClientId, remoteEndpoints } from "@weaver/core/remotes/urls";
 import {
+  beginRemoteConnection,
+  completeRemoteConnection,
   createRemoteInstance,
   deleteRemoteInstance,
   listRemoteInstances,
   testRemoteInstance,
   updateRemoteInstance,
+  withRemoteToken,
 } from "@weaver/core/services/remoteInstances";
 import type { RemoteRuntimeDeps } from "@weaver/core/services/remoteInstances/types";
 import {
@@ -118,6 +121,85 @@ describe("remote instance registry", () => {
     });
     expect(await listRemoteInstances(db, admin)).toEqual([]);
     expect(await db.oauthClient.count()).toBe(0);
+  });
+
+  it("retains an established connection across a rename and requires a new connection after endpoint replacement", async () => {
+    const admin = securityContextFor(
+      await makeUser("Admin", "remote-generation-admin"),
+    );
+    const user = securityContextFor(
+      await makeUser("User", "remote-generation-user"),
+    );
+    const originalBase = "https://first.example.test/weaver";
+    const replacementBase = "https://second.example.test/weaver";
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(input instanceof Request ? input.url : input);
+      return url.pathname.endsWith("/token")
+        ? Response.json({
+            access_token: `test-${url.hostname}`,
+            expires_in: 3600,
+          })
+        : Response.json({ name: "Test user" });
+    });
+    const runtime = deps(fetchImpl);
+    const created = await createRemoteInstance(runtime, admin, {
+      name: "First",
+      baseUrl: originalBase,
+    });
+    const input = { userId: user.userId, remoteInstanceId: created.id };
+    const begin = async () => {
+      const { authorizeUrl } = await beginRemoteConnection(
+        runtime,
+        user,
+        input,
+      );
+      return new URL(authorizeUrl).searchParams.get("state")!;
+    };
+    const complete = (state: string) =>
+      completeRemoteConnection(runtime, { ...input, state, code: "test-code" });
+    const whoami = () =>
+      withRemoteToken(runtime, input, (token, remote, fetch) =>
+        fetch(remoteEndpoints(remote.baseUrl).transfer("whoami"), {
+          headers: { authorization: `Bearer ${token}` },
+        }),
+      );
+    await complete(await begin());
+    const renamed = await updateRemoteInstance(runtime, admin, {
+      id: created.id,
+      expectedRevision: created.revision,
+      patch: { name: "Renamed" },
+    });
+    await whoami();
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      remoteEndpoints(originalBase).transfer("whoami"),
+      {
+        headers: { authorization: "Bearer test-first.example.test" },
+      },
+    );
+
+    const pending = await begin();
+    fetchImpl.mockClear();
+    await updateRemoteInstance(runtime, admin, {
+      id: created.id,
+      expectedRevision: renamed.revision,
+      patch: { baseUrl: replacementBase },
+    });
+    await expect(complete(pending)).rejects.toMatchObject({
+      details: { field: "state" },
+    });
+    await expect(whoami()).rejects.toMatchObject({
+      details: { field: "remoteInstanceId" },
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    await complete(await begin());
+    await whoami();
+    expect(fetchImpl).toHaveBeenLastCalledWith(
+      remoteEndpoints(replacementBase).transfer("whoami"),
+      {
+        headers: { authorization: "Bearer test-second.example.test" },
+      },
+    );
   });
 
   it("disabling a remote disables its OAuth client", async () => {

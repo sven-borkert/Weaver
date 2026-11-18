@@ -1,17 +1,12 @@
-import { withProjectRepo } from "./projectRepo";
-import { rm } from "node:fs/promises";
-import { Prisma, type PrismaClient } from "@weaver/db/client";
+import type { PrismaClient } from "@weaver/db/client";
 import { createSessionSecurityContext } from "@weaver/core/security/context";
-import { captureError } from "@weaver/core/diagnostics/writer";
 import { toOrganizationRole } from "@weaver/core/roles";
-import { repoDir } from "@weaver/git-store";
 import { notDeleted } from "./projectAccess";
 import { createProject } from "./projects";
 import { syncProjectMetadataQuietly } from "./projectMetadata";
 import { linkUserToProjectReview } from "./projectReviewerLinks";
 
 const MAX_PROJECT_NAME = 120;
-const LOCK_KEY = "weaver:personal-workspace";
 
 export function personalWorkspaceName(user: {
   name: string;
@@ -45,72 +40,20 @@ export async function ensurePersonalWorkspace(
   });
   if (!user || user.banned) return null;
 
-  // One creation per user: concurrent landings wait here, then re-check.
-  const claimed = await db.$transaction(async (tx) => {
-    await tx.$queryRaw(Prisma.sql`
-      SELECT pg_advisory_xact_lock(hashtextextended(${`${LOCK_KEY}:${userId}`}, 0))::text
-    `);
-    // The unique index is not partial: a soft-deleted holder still occupies
-    // personalOwnerId, so a fresh workspace's claim below would 404 into it.
-    await tx.project.updateMany({
-      where: { personalOwnerId: userId, deletedAt: { not: null } },
-      data: { personalOwnerId: null },
-    });
-    const again = await tx.project.findFirst({
-      where: { personalOwnerId: userId, ...notDeleted },
-      select: { id: true },
-    });
-    return again?.id ?? null;
-  });
-  if (claimed) return claimed;
-
   const actor = createSessionSecurityContext({
     userId: user.id,
     globalRole: user.role,
     sessionId: "personal-workspace",
   });
-  const project = await createProject(db, actor, {
-    name: personalWorkspaceName(user),
-  });
-  try {
-    await db.project.update({
-      where: { id: project.id },
-      data: { personalOwnerId: userId },
-    });
-  } catch (error) {
-    // A parallel creation won the unique index; keep that one and clean up
-    // the orphaned loser (its own fresh project, organization, and repo).
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      const winner = await db.project.findFirst({
-        where: { personalOwnerId: userId, ...notDeleted },
-        select: { id: true },
-      });
-      if (winner) {
-        try {
-          await withProjectRepo(project.id, async () => {
-            await db.project.delete({ where: { id: project.id } });
-            await db.organization.delete({
-              where: { id: project.organizationId },
-            });
-            await rm(repoDir(project.id), { recursive: true, force: true });
-          });
-        } catch (cleanupError) {
-          captureError({
-            event: "personal_workspace.orphan_cleanup_failed",
-            message: "failed to clean up an orphaned personal workspace loser",
-            error: cleanupError,
-            projectId: project.id,
-            userId,
-          });
-        }
-        return winner.id;
-      }
-    }
-    throw error;
-  }
+  const project = await createProject(
+    db,
+    actor,
+    {
+      name: personalWorkspaceName(user),
+    },
+    { personal: true },
+  );
+  await ensureOwnerMembership(db, userId, project.id, project.organizationId);
   return project.id;
 }
 
@@ -135,12 +78,16 @@ async function ensureOwnerMembership(
     select: { id: true, role: true },
   });
   if (!user) return;
-  await db.$transaction(async (tx) => {
-    await tx.member.create({
+  const restored = await db.$transaction(async (tx) => {
+    const result = await tx.member.createMany({
       data: { organizationId, userId, role: toOrganizationRole("Owner") },
+      skipDuplicates: true,
     });
+    if (!result.count) return false;
     await linkUserToProjectReview(tx, projectId, userId);
+    return true;
   });
+  if (!restored) return;
   const actor = createSessionSecurityContext({
     userId: user.id,
     globalRole: user.role,

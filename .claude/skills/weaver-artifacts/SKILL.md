@@ -887,6 +887,9 @@ version"` the moment both packages' PDF code has run in one process.
   one text line per page, but pdf.js drops glyphs outside the page box, so a
   page extracts at most ~68 characters regardless of how long the source
   line is — a "long PDF" fixture needs many pages, not one long line.
+  Paged reads open one PDF proxy, extract only the selected page range up to
+  the character budget, and close its loading task. An empty final page entry
+  marks the continuation when a previous page exactly used the budget.
 - **Excel** (`excel.ts`): uses ExcelJS, not JSZip. `.xlsb` is refused as
   `malformed`, not `legacy_format` — ExcelJS doesn't recognize it as a
   workbook at all. Out-of-range numeric limits and malformed

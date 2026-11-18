@@ -31,7 +31,11 @@ import {
 import { emitDiagnostic } from "../diagnostics/writer";
 import { assertSafeSegments } from "../documents/paths";
 import { CoreError } from "../errors";
-import { publishKnowledgeJob, type JobPublication } from "../jobs/queue";
+import {
+  JobPublisherStoppedError,
+  publishKnowledgeJob,
+  type JobPublication,
+} from "../jobs/queue";
 import { projectRoleAtLeast, type ProjectRoleName } from "../roles";
 import { nextOccurrence } from "../scheduledTasks/schedule";
 import {
@@ -927,22 +931,32 @@ export async function runTaskNow(
       select: { id: true },
     });
   });
-  // A run that was never dispatched must not linger as `queued`: it would block
-  // every later run-now with CONFLICT and never reach a worker.
-  let publication: JobPublication | null = null;
+  let refusal: string | undefined;
   try {
-    publication = await dispatchTaskRun(db, { runId: run.id, taskId: task.id });
-  } catch {
-    publication = null;
+    const publication = await dispatchTaskRun(db, {
+      runId: run.id,
+      taskId: task.id,
+    });
+    if (publication.status === "disabled")
+      refusal = "Background jobs are disabled; the run was not queued";
+  } catch (error) {
+    if (error instanceof JobPublisherStoppedError) {
+      refusal = "The background queue is unavailable; the run was not queued";
+    } else {
+      emitDiagnostic({
+        event: "job.failed",
+        message: "Scheduled task queue publication could not be confirmed",
+        severity: "warn",
+        outcome: "error",
+        details: { jobName: "task.run", runId: run.id, taskId: task.id },
+      });
+    }
   }
-  if (!publication || publication.status === "disabled") {
-    await db.scheduledTaskRun.delete({ where: { id: run.id } });
-    throw new CoreError(
-      "PRECONDITION_FAILED",
-      publication?.status === "disabled"
-        ? "Background jobs are disabled; the run was not queued"
-        : "The background queue is unavailable; the run was not queued",
-    );
+  if (refusal) {
+    const { count } = await db.scheduledTaskRun.deleteMany({
+      where: { id: run.id, status: "queued", jobId: null },
+    });
+    if (count === 1) throw new CoreError("PRECONDITION_FAILED", refusal);
   }
   return { runId: run.id };
 }
@@ -971,11 +985,22 @@ export async function dispatchTaskRun(
   run: { runId: string; taskId: string },
 ): Promise<JobPublication> {
   const publication = await publishKnowledgeJob("task.run", run);
-  if (publication.status === "accepted")
-    await db.scheduledTaskRun.updateMany({
-      where: { id: run.runId, jobId: null },
-      data: { jobId: publication.jobId },
-    });
+  if (publication.status === "accepted") {
+    try {
+      await db.scheduledTaskRun.updateMany({
+        where: { id: run.runId, jobId: null },
+        data: { jobId: publication.jobId },
+      });
+    } catch {
+      emitDiagnostic({
+        event: "job.failed",
+        message: "Scheduled task queue receipt could not be recorded",
+        severity: "warn",
+        outcome: "error",
+        details: { jobName: "task.run", ...run },
+      });
+    }
+  }
   return publication;
 }
 

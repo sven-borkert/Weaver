@@ -311,14 +311,18 @@ bare repository outside the lock; `services/projectGitRemoteMerge.ts`
 (`mergeFetchedBranch`) does the actual merge inside `withExistingProjectRepo`,
 with the lease renewed under the fence right after the fetch so the merge
 starts with a full window; see `weaver-documents` for the merge tree
-invariants. The pull's own outcome
-(`lastPullSha`/`lastPullAt`/`lastPullErrorCode`) is written in its own fenced
-update immediately after the merge, before the subsequent
-`rebuildIndex`/`rebuildTableIndex` (run as the project's earliest Owner
-member, falling back to the requester); `project.reconcile` is enqueued after
-those rebuilds, and the lease is renewed across that work; a lease-renewal loss skips the
-rebuilds and captures `git.remote.pull_rebuild_failed` rather than losing the
-already-recorded outcome. A failed push attempt or fetch still completes its
+invariants. Under the repository lock, the worker writes independent Document
+and DataTable repair tokens to the Project before it opens the outcome
+transaction. That transaction acquires the membership advisory lock before the
+remote row lock and records
+`lastPullSha`/`lastPullAt`/`lastPullErrorCode` under the fence. The tokens survive
+a lost outcome acknowledgement. After releasing the remote lease, the worker
+attempts both repairs independently as the project's earliest Owner.
+`project.git-rebuild` retries by project, resource kind and token, and the minute
+Git discovery pass republishes pending tokens after a missed dispatch or
+exhausted queue retry. Each repair rebuilds from current Git HEAD, requests
+knowledge reconciliation through the existing rebuild service and clears only
+its matching token. A failed push attempt or fetch still completes its
 job, so it captures `git.remote.push_failed`/`git.remote.pull_failed` (error,
 `details.code` and operator-only `details.cause`) besides the stored error code. `lastPushedSha` is cleared only when the pull
 actually changed HEAD. A follow-up push is dispatched only after the pull's
@@ -371,11 +375,15 @@ Materialized background-work sources must filter terminal history before the uni
 `wiki.tick` also claims due lint slots (`claimDueLintRuns`, runs are created `queued`) and dispatches classify previews: a `preparing` classify run with no plan and no lease gets a `wiki.run` job, and the injected runner previews it (one tool-less model call). An accepted plan moves the run to `queued`; the `wiki.run` handler applies it with `executeWikiClassify` in core, like Revert, so it needs no runner. `reapClassifyRuns` releases a preview claim whose lease lapsed (the third loss fails the run `LEASE_LOST`) and cancels a plan nobody answered within 24 hours. Lint failures are counted in `endRunInTx`.
 
 `publishKnowledgeJob` returns `accepted` with a job id, `deduped` when an
-equivalent singleton is already queued, or `disabled`; transport failures throw.
+equivalent singleton is already queued, or `disabled`. A stopped publisher
+throws `JobPublisherStoppedError` before contacting the queue. Transport errors
+leave publication uncertain.
 Use it when publication success matters (ingestion and scheduled tasks). The
 legacy `requestKnowledgeJob` returns an id only for newly accepted work and
 remains suitable for accepted-count metrics. Never treat deduplication as a
-publication failure. `task.run` singleton keys use run ids. System reconciliation
+publication failure. `task.run` singleton keys use run ids. Manual task runs
+remain eligible for stale redispatch after an uncertain send. A failed job-ID
+receipt does not cancel a successful publication. System reconciliation
 uses one local consumer per worker; cross-worker maintenance retains its existing
 conditional writes and database advisory locks. A dedicated worker refuses startup
 when jobs are disabled; readiness paths ignore query strings.

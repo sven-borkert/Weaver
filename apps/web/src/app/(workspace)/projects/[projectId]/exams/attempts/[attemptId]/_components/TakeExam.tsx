@@ -90,6 +90,7 @@ export function TakeExam({
       onSubmitted();
     } catch (e) {
       setFailure(e instanceof Error ? e.message : "Could not submit. Retry.");
+      setConfirm(false);
     } finally {
       busy.current = false;
       setSubmitting(false);
@@ -99,6 +100,9 @@ export function TakeExam({
     const s = saves.slots[q.id];
     return !s?.value.text?.trim() && !s?.value.selectedChoiceIds.length;
   }).length;
+  const conflictCount = Object.values(saves.slots).filter(
+    (slot) => slot.status === "conflict",
+  ).length;
   return (
     <section aria-label="Take exam" className="space-y-5">
       <header className="flex justify-between">
@@ -108,11 +112,13 @@ export function TakeExam({
         <AttemptTimer {...timing} onExpired={() => void finish(true)} />
       </header>
       <p role="status">
-        {Object.values(saves.slots).some((s) => s.status === "error")
-          ? "Save failed — retrying"
-          : saves.pendingCount
-            ? "Saving…"
-            : `All changes saved${saves.lastSavedAt ? ` · ${saves.lastSavedAt.toLocaleTimeString()}` : ""}`}
+        {conflictCount > 0
+          ? "Resolve conflicting answers before submitting."
+          : Object.values(saves.slots).some((s) => s.status === "error")
+            ? "Save failed — retrying"
+            : saves.pendingCount
+              ? "Saving…"
+              : `All changes saved${saves.lastSavedAt ? ` · ${saves.lastSavedAt.toLocaleTimeString()}` : ""}`}
       </p>
       {failure ? (
         <p role="alert" className="text-danger">
@@ -121,7 +127,7 @@ export function TakeExam({
             <Button onClick={onSubmitted}>Reload submitted result</Button>
           ) : null}
           <Button
-            disabled={submitting || serverClosed}
+            disabled={submitting || serverClosed || conflictCount > 0}
             onClick={() => void finish(expired)}
           >
             Retry submission
@@ -188,10 +194,44 @@ export function TakeExam({
                 </>
               )}
             </fieldset>
+            {saves.slots[q.id]?.status === "conflict" ? (
+              <div
+                className="space-y-2"
+                role="group"
+                aria-label="Conflicting answer"
+              >
+                <p>
+                  This answer changed in another tab. Choose which answer to
+                  use.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={submitting || serverClosed}
+                    onClick={() => {
+                      saves.useSavedAnswer(q.id);
+                      if (expired && conflictCount === 1) void finish(true);
+                    }}
+                  >
+                    Use saved answer
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={submitting || expired}
+                    onClick={() => saves.keepDraftAnswer(q.id)}
+                  >
+                    Keep my draft
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </section>
         ))}
       </div>
-      <Button disabled={expired || submitting} onClick={() => setConfirm(true)}>
+      <Button
+        disabled={expired || submitting || conflictCount > 0}
+        onClick={() => setConfirm(true)}
+      >
         Submit
       </Button>
       <Dialog

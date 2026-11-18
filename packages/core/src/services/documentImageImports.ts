@@ -271,6 +271,7 @@ export async function resolveImageReferences(
     contentJson: JSONContent;
     assetsSlug: string;
     takenNames: ReadonlySet<string>;
+    maxTotalBytes?: number;
   },
 ): Promise<{ contentJson: JSONContent; assets: DocumentAssetFile[] }> {
   const sources = imageSources(input.contentJson);
@@ -279,19 +280,18 @@ export async function resolveImageReferences(
   const taken = new Set(input.takenNames);
   const targets = new Map<string, string>();
   const assets: DocumentAssetFile[] = [];
+  let remaining = input.maxTotalBytes ?? Infinity;
   for (const { src, reference } of sources) {
-    const bytes = await loadImage(
-      db,
-      actor,
-      input.projectId,
-      src,
-      reference,
-      limits,
-    );
+    const maxBytes = Math.min(limits.maxBytes, remaining);
+    const bytes = await loadImage(db, actor, input.projectId, src, reference, {
+      ...limits,
+      maxBytes,
+    });
     const type = sniffImageType(bytes.subarray(0, 16));
     if (!type) throw invalid(src, "is not a PNG, JPEG, WebP or GIF image");
-    if (bytes.byteLength > limits.maxBytes)
+    if (bytes.byteLength > maxBytes)
       throw invalid(src, "exceeds the document image size limit");
+    remaining -= bytes.byteLength;
     const name = allocateImageFileName("image", imageExtension(type), taken);
     taken.add(name);
     assets.push({ name, bytes });

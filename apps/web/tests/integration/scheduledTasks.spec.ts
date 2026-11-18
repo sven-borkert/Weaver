@@ -22,6 +22,7 @@ import { createFolder } from "@weaver/core/services/folders";
 import { createFolder as createTableFolder } from "@weaver/core/services/tableFolders";
 import { projectChangesSince } from "@weaver/core/services/projectActivity";
 import { assembleTaskContext } from "@weaver/core/scheduledTasks/context";
+import { runTaskTick } from "@weaver/core/scheduledTasks/tick";
 import { resolveScopeSnapshot } from "@weaver/core/assistant/scope";
 import {
   claimDueTasks,
@@ -688,7 +689,6 @@ async function seedTasks(ownerId: string, projectId: string, count: number) {
   });
 }
 
-/** A failed publication must not leave an undispatched run blocking later work. */
 const failedDispatchQueue: JobQueue = {
   send: async () => {
     throw new Error("queue unavailable");
@@ -1400,38 +1400,58 @@ describe("scheduled task policy", () => {
     ]);
   });
 
-  it("refuses a run now it cannot dispatch and records no stuck run", async () => {
+  it("refuses a run now when background jobs are disabled", async () => {
     const { owner, project } = await fixture("dispatch");
     const queue = new FakeJobQueue();
     setJobQueueForTests(queue);
     const task = await callerFor(owner).scheduledTask.create(
       definition(project.id),
     );
-
-    // Positive control: a working queue queues and dispatches one run.
-    const dispatched = await callerFor(owner).scheduledTask.runNow({
-      taskId: task.id,
-    });
-    expect(queue.jobs).toHaveLength(1);
-    await getPrisma().scheduledTaskRun.delete({
-      where: { id: dispatched.runId },
-    });
-
-    setJobQueueForTests(failedDispatchQueue);
-    await expect(
-      callerFor(owner).scheduledTask.runNow({ taskId: task.id }),
-    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    vi.stubEnv("WEAVER_JOBS_ENABLED", "false");
+    try {
+      await expect(
+        callerFor(owner).scheduledTask.runNow({ taskId: task.id }),
+      ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(queue.jobs).toHaveLength(0);
     expect(
       await getPrisma().scheduledTaskRun.count({ where: { taskId: task.id } }),
     ).toBe(0);
-
-    // The refused run left nothing behind, so run now still works afterwards.
-    const drained = new FakeJobQueue();
-    setJobQueueForTests(drained);
     await expect(
       callerFor(owner).scheduledTask.runNow({ taskId: task.id }),
     ).resolves.toMatchObject({ runId: expect.any(String) });
-    expect(drained.jobs).toHaveLength(1);
+    expect(queue.jobs).toHaveLength(1);
+  });
+
+  it("redispatches the same manual run after an ambiguous publication", async () => {
+    const { owner, project } = await fixture("dispatch-reconcile");
+    const caller = callerFor(owner);
+    const task = await caller.scheduledTask.create(definition(project.id));
+    setJobQueueForTests(failedDispatchQueue);
+    const { runId } = await caller.scheduledTask.runNow({ taskId: task.id });
+    const db = getPrisma();
+    const run = await db.scheduledTaskRun.findUniqueOrThrow({
+      where: { id: runId },
+    });
+    expect(run).toMatchObject({ status: "queued", jobId: null });
+
+    const queue = new FakeJobQueue();
+    setJobQueueForTests(queue);
+    await db.scheduledTask.update({
+      where: { id: task.id },
+      data: { nextRunAt: null },
+    });
+    await expect(
+      runTaskTick(db, new Date(run.queuedAt.getTime() + 3 * 60_000)),
+    ).resolves.toMatchObject({ redispatched: 1 });
+    expect(queue.jobs).toEqual([
+      { name: "task.run", data: { runId, taskId: task.id } },
+    ]);
+    expect(
+      await db.scheduledTaskRun.count({ where: { taskId: task.id } }),
+    ).toBe(1);
   });
 
   it("edits a task in place, clearing the output document only when the destination moves", async () => {
@@ -1903,6 +1923,89 @@ async function latestRun(taskId: string) {
 }
 
 describe("scheduled task runner", () => {
+  it.each(["document", "table"] as const)(
+    "limits a %s task prompt to its selected resource",
+    async (kind) => {
+      await seedTestLlmRouting({ jobs: true });
+      const { owner, project } = await fixture(`prompt-${kind}`);
+      const db = getPrisma();
+      const actor = enriched(owner);
+      const makeDocument = (title: string) =>
+        createDocument(
+          db,
+          {
+            projectId: project.id,
+            folderPath: [],
+            title,
+            content: {
+              kind: "markdown",
+              contentJson: parseDocumentBody(`${title} body`),
+            },
+          },
+          actor,
+        );
+      const document = await makeDocument(
+        kind === "document" ? "Selected page" : "Unrelated page",
+      );
+      const outside = await makeDocument("Outside page");
+      const table = await createTable(
+        db,
+        {
+          projectId: project.id,
+          folderPath: [],
+          title: kind === "table" ? "Selected records" : "Unrelated records",
+        },
+        actor,
+      );
+      const mixedSha = await withProjectRepo(project.id, async (repo) => {
+        for (const path of [
+          document.path,
+          outside.path,
+          `${table.path}/schema.json`,
+        ])
+          await repo.writeFileAtomic(
+            path,
+            (await repo.readFileFromWorktree(path)) + "\n",
+          );
+        return repo.commitAll("Cross-resource commit message", {
+          userId: owner.id,
+          name: actor.name,
+          email: actor.email,
+        });
+      });
+      await db.documentChangeSummary.create({
+        data: {
+          projectId: project.id,
+          commitSha: mixedSha,
+          documentId: outside.id,
+          pathAtSha: outside.path,
+          baseCommitSha: outside.headCommitSha,
+          status: "ready",
+          summary: "Cross-resource change summary",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      const task = await createTask(db, actor, {
+        ...definition(project.id),
+        scope:
+          kind === "document"
+            ? { kind, documentId: document.id, projectId: project.id }
+            : { kind, tableId: table.id, projectId: project.id },
+      });
+      const { runId } = await queueRun(actor, task.id);
+      const prompts: string[] = [];
+      await executeScheduledTaskRun(runnerDeps(reportModel(prompts)), runId);
+      expect(await latestRun(task.id)).toMatchObject({ status: "succeeded" });
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain(
+        kind === "document" ? document.title : table.title,
+      );
+      expect(prompts[0]).toContain("Changed the selected resource");
+      expect(prompts[0]).not.toMatch(/Unrelated|Outside page|Cross-resource/u);
+    },
+  );
+
   it.each([false, true])(
     "retries a published report acknowledgement without provider failure (committed=%s)",
     async (committed) => {

@@ -34,6 +34,7 @@ export function queueOptions(name: string) {
     ...baseQueueOptions,
     ...([
       "project.reconcile",
+      "project.git-rebuild",
       "document.search-sync",
       "content.delete",
       "document.change-summary",
@@ -110,6 +111,7 @@ export class PgBossQueue<
         if (
           [
             "project.reconcile",
+            "project.git-rebuild",
             "document.search-sync",
             "content.delete",
             "document.change-summary",

@@ -144,6 +144,9 @@ export type JobPublication =
   | { status: "deduped" }
   | { status: "disabled" };
 
+/** The publisher refused the request before contacting the queue. */
+export class JobPublisherStoppedError extends Error {}
+
 /** A null pg-boss send means an equivalent job is already queued; failures throw. */
 export async function publishKnowledgeJob<N extends KnowledgeJobName>(
   name: N,
@@ -155,7 +158,7 @@ export async function publishKnowledgeJob<N extends KnowledgeJobName>(
   const options = knowledgeJobSendOptions(name, data);
   const queue = jobQueueForTests ?? processJobQueue;
   if (!queue && processJobsStopped) {
-    throw new Error(
+    throw new JobPublisherStoppedError(
       `Knowledge job ${name} requested after the worker runtime stopped`,
     );
   }

@@ -15,7 +15,10 @@ import {
   documentKindFromPath,
 } from "@weaver/core/documents/kinds";
 import { openProjectRepo } from "@weaver/git-store";
-import type { EnrichedActor } from "./documents";
+import {
+  requireCommittedDocumentAtPath,
+  type EnrichedActor,
+} from "./documents";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
@@ -60,12 +63,11 @@ export async function storeDocumentImage(
   const result = await withProjectRepo(input.projectId, async (repo) => {
     const row = await db.document.findFirst({
       where: { id: input.documentId, projectId: input.projectId },
-      select: { path: true, slug: true, kind: true },
+      select: { id: true, path: true, slug: true },
     });
-    if (!row || !(await repo.fileExistsInWorktree(row.path))) {
-      throw new CoreError("NOT_FOUND");
-    }
-    if (!DOCUMENT_KINDS[row.kind].supportsImages)
+    if (!row) throw new CoreError("NOT_FOUND");
+    const { kind } = await requireCommittedDocumentAtPath(repo, row);
+    if (!DOCUMENT_KINDS[kind].supportsImages)
       throw new CoreError("BAD_REQUEST", "This file kind does not hold images");
     const assetsDir = assetsDirForDocPath(row.path);
     const taken = new Set(

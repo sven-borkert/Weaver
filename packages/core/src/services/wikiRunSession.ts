@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@weaver/db/client";
+import type { Prisma, PrismaClient } from "@weaver/db/client";
 import { emitDiagnostic } from "../diagnostics/writer";
 import { CoreError } from "../errors";
 import { normalizeKnowledgeName } from "../knowledge/extraction";
@@ -178,6 +178,36 @@ export class WikiRunSession {
     return item;
   }
 
+  private withInputLease<T>(
+    write: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    return this.db.$transaction(async (tx) => {
+      const [run] = await tx.$queryRaw<
+        Array<{
+          status: string;
+          leaseToken: string | null;
+          leaseExpiresAt: Date | null;
+        }>
+      >`
+        SELECT "status", "leaseToken", "leaseExpiresAt" FROM "WikiRun"
+        WHERE "id" = ${this.lease.id}::uuid
+          AND "projectId" = ${this.projectId}::uuid
+          AND "agentId" = ${this.lease.agentId}::uuid
+        FOR UPDATE
+      `;
+      if (
+        run?.status !== "running" ||
+        run.leaseToken !== this.lease.leaseToken ||
+        !run.leaseExpiresAt ||
+        run.leaseExpiresAt <= new Date()
+      )
+        throw new CoreError("CONFLICT", "The run's lease is gone", {
+          reason: "WIKI_FENCE_CLOSED",
+        });
+      return write(tx);
+    });
+  }
+
   async listInputs() {
     const items = await this.db.wikiInputItem.findMany({
       where: { projectId: this.projectId, runId: this.lease.id },
@@ -206,10 +236,12 @@ export class WikiRunSession {
         `This input is ${item.status}, not available to read`,
       );
     if (item.status === "ready") {
-      const { count } = await this.db.wikiInputItem.updateMany({
-        where: { id, runId: this.lease.id, status: "ready" },
-        data: { status: "processing", revision: { increment: 1 } },
-      });
+      const { count } = await this.withInputLease((tx) =>
+        tx.wikiInputItem.updateMany({
+          where: { id, runId: this.lease.id, status: "ready" },
+          data: { status: "processing", revision: { increment: 1 } },
+        }),
+      );
       if (count === 0)
         throw new CoreError(
           "CONFLICT",
@@ -231,18 +263,22 @@ export class WikiRunSession {
 
   async writeNote(text: string): Promise<{ chars: number }> {
     this.requireIngest("wiki_note");
-    if (!this.currentItemId)
-      throw new CoreError("BAD_REQUEST", "Call read_input first");
+    const id = this.currentItemId;
+    if (!id) throw new CoreError("BAD_REQUEST", "Call read_input first");
     const clean = stripUnwanted(text);
     if (clean.length > WIKI_NOTE_BLOCK_MAX_CHARS)
       throw new CoreError(
         "BAD_REQUEST",
         `Notes are limited to ${WIKI_NOTE_BLOCK_MAX_CHARS} characters`,
       );
-    await this.db.wikiInputItem.updateMany({
-      where: { id: this.currentItemId, runId: this.lease.id },
-      data: { agentNote: clean },
-    });
+    const { count } = await this.withInputLease((tx) =>
+      tx.wikiInputItem.updateMany({
+        where: { id, runId: this.lease.id, status: "processing" },
+        data: { agentNote: clean },
+      }),
+    );
+    if (count === 0)
+      throw new CoreError("CONFLICT", "This input changed; list inputs again");
     return { chars: clean.length };
   }
 
@@ -287,18 +323,20 @@ export class WikiRunSession {
         );
     }
     const status = outcome === "integrated" ? "processed" : "skipped";
-    const { count } = await this.db.wikiInputItem.updateMany({
-      where: { id, runId: this.lease.id, status: "processing" },
-      data: {
-        status,
-        outcomeNote,
-        agentNote: null,
-        revision: { increment: 1 },
-        ...(outcome === "integrated"
-          ? { processedAt: new Date(), text: null }
-          : {}),
-      },
-    });
+    const { count } = await this.withInputLease((tx) =>
+      tx.wikiInputItem.updateMany({
+        where: { id, runId: this.lease.id, status: "processing" },
+        data: {
+          status,
+          outcomeNote,
+          agentNote: null,
+          revision: { increment: 1 },
+          ...(outcome === "integrated"
+            ? { processedAt: new Date(), text: null }
+            : {}),
+        },
+      }),
+    );
     if (count === 0)
       throw new CoreError("CONFLICT", "This input changed; list inputs again");
     if (this.currentItemId === id) this.currentItemId = null;

@@ -221,6 +221,9 @@ project's queue from the mutation variables.
   Git pull fails safe to non-owned.
 - `leaseWikiRun`, `heartbeatWikiRun`, `assertLiveWikiRun` and `wikiRunFence` (`wikiRuns.ts`): lease 60 s, heartbeat 15 s. The fence shares its
   liveness core with `assertPreparingFence`. The runner heartbeat aborts only on a closed fence or lost lease; other errors retry until 60 s pass since the last good heartbeat.
+- An input claim, note write or completion holds the run row lock and verifies
+  the current lease token and expiry before updating the input in the same
+  transaction. The run-to-input lock order matches lease recovery.
 
 ## Agent tools
 

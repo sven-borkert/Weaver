@@ -3408,6 +3408,38 @@ The main runtime boundaries now include:
   production requires AUTH_URL. See [setup](setup.md#review-hardening-deployment-settings)
   for outbound origins, upload quotas and local test-host constraints.
 
+## November 18 application review fixes
+
+- Git-backed document writes validate the committed document ID and reviewer
+  eligibility under the write lock. ZIP, PDF and peer sends resolve assets from
+  the same snapshot as the document. See [documents](../packages/core/src/services/documents.ts),
+  [review](../packages/core/src/services/documentReview.ts), and
+  [ZIP export](../packages/core/src/services/documentDownload.ts).
+- [Git pull publication](../packages/core/src/services/projectGitRemoteJobs.ts)
+  follows repository-first lock ordering and records document and table repair
+  obligations before advancing HEAD. Both projections can be rebuilt and
+  acknowledged independently.
+- [Peer connections](../packages/core/src/services/remoteInstances/connections.ts)
+  bind authorization and tokens to the endpoint generation.
+  [Machine-key updates](../packages/core/src/services/projectApiKeys.ts) require
+  the policy version loaded into the editor.
+  [Personal workspace provisioning](../packages/core/src/services/personalWorkspace.ts)
+  publishes the project, personal owner and membership together.
+- [Import acceptance](../packages/core/src/services/ingestionAccept.ts) verifies
+  committed evidence against the reviewed draft. [Scheduled tasks](../packages/core/src/scheduledTasks/context.ts)
+  filter current inputs and historical changes to the chosen resource.
+  [Run Now](../packages/core/src/services/scheduledTasks.ts) preserves run
+  intent when recording the queue receipt fails.
+  [Wiki input mutations](../packages/core/src/services/wikiRunSession.ts)
+  verify the lease in the transaction applying each write.
+- [Exam autosave](<../apps/web/src/app/(workspace)/projects/[projectId]/exams/attempts/[attemptId]/_components/useAutosaveAnswers.ts>)
+  distinguishes matching acknowledgements from divergent canonical answers.
+  [Artifact PDF page reads](../packages/artifact-readers/src/pdf.ts) extract the
+  requested range up to the response budget in one document session.
+  [CI image publication](../deploy/ci/build-images.sh) freezes the four staged
+  image digests in a registry manifest. A retry publishes from those digests,
+  and floating tags follow the complete immutable release.
+
 ## Implementation status
 
 | Phase | Area                                                                                                                                                                                                                       | Status                                                         |

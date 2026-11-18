@@ -57,6 +57,7 @@ export type GitLogEntry = {
   projectKeyId?: string | null;
   wikiAgentId?: string | null;
   wikiRequestHash?: string | null;
+  ingestionRequestHash?: string | null;
   apiRequestHash?: string | null;
   apiOperation?: string | null;
   userId: string | null;
@@ -286,7 +287,9 @@ const PATH_LOG_FORMAT =
   "%(trailers:key=Weaver-API-Operation,valueonly,separator=%x1f,unfold)%x00" +
   "%(trailers:key=Weaver-Wiki-Agent-Id,valueonly,separator=%x1f,unfold)%x00" +
   "%(trailers:key=Weaver-Wiki-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
+  "%(trailers:key=Weaver-Ingestion-Request-Hash,valueonly,separator=%x1f,unfold)%x00" +
   "%B%x00";
+const PATH_LOG_FIELD_COUNT = 16;
 
 const CHANGE_LOG_FORMAT =
   "%x00WEAVER-COMMIT%x00%H%x00%an%x00%ae%x00%aI%x00" +
@@ -378,45 +381,55 @@ function parsePathLog(
   trusted: Set<string>,
   relPath: string,
 ): GitLogEntry[] {
-  return parseLogRecords(raw, 15).map(({ fields, changes }) => {
-    const [
-      sha,
-      an,
-      ae,
-      aI,
-      userField,
-      operationField,
-      mcpRequestHashField,
-      mcpToolNameField,
-      runField,
-      keyField,
-      apiHashField,
-      apiOperationField,
-      wikiAgentField,
-      wikiRequestHashField,
-      body,
-    ] = fields;
-    const pathAtSha = changes[0]?.path ?? relPath;
-    return {
-      sha: sha!.trim(),
-      authorName: an ?? "",
-      authorEmail: ae ?? "",
-      trustedAuthor: trusted.has(sha!),
-      date: new Date(aI ?? 0),
-      message: (body ?? "").split("\n")[0] ?? "",
-      userId: trailerValue(userField, USER_ID_VALUE_RE),
-      projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
-      wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
-      wikiRequestHash: trailerValue(wikiRequestHashField, MCP_REQUEST_HASH_RE),
-      apiRequestHash: trailerValue(apiHashField, MCP_REQUEST_HASH_RE),
-      apiOperation: trailerValue(apiOperationField, API_OPERATION_RE),
-      operationId: trailerValue(operationField, OPERATION_ID_RE),
-      mcpRequestHash: trailerValue(mcpRequestHashField, MCP_REQUEST_HASH_RE),
-      mcpToolName: trailerValue(mcpToolNameField, MCP_TOOL_NAME_RE),
-      runId: trailerValue(runField, RUN_ID_RE),
-      pathAtSha,
-    };
-  });
+  return parseLogRecords(raw, PATH_LOG_FIELD_COUNT).map(
+    ({ fields, changes }) => {
+      const [
+        sha,
+        an,
+        ae,
+        aI,
+        userField,
+        operationField,
+        mcpRequestHashField,
+        mcpToolNameField,
+        runField,
+        keyField,
+        apiHashField,
+        apiOperationField,
+        wikiAgentField,
+        wikiRequestHashField,
+        ingestionRequestHashField,
+        body,
+      ] = fields;
+      const pathAtSha = changes[0]?.path ?? relPath;
+      return {
+        sha: sha!.trim(),
+        authorName: an ?? "",
+        authorEmail: ae ?? "",
+        trustedAuthor: trusted.has(sha!),
+        date: new Date(aI ?? 0),
+        message: (body ?? "").split("\n")[0] ?? "",
+        userId: trailerValue(userField, USER_ID_VALUE_RE),
+        projectKeyId: trailerValue(keyField, MACHINE_ID_RE),
+        wikiAgentId: trailerValue(wikiAgentField, MACHINE_ID_RE),
+        wikiRequestHash: trailerValue(
+          wikiRequestHashField,
+          MCP_REQUEST_HASH_RE,
+        ),
+        ingestionRequestHash: trailerValue(
+          ingestionRequestHashField,
+          MCP_REQUEST_HASH_RE,
+        ),
+        apiRequestHash: trailerValue(apiHashField, MCP_REQUEST_HASH_RE),
+        apiOperation: trailerValue(apiOperationField, API_OPERATION_RE),
+        operationId: trailerValue(operationField, OPERATION_ID_RE),
+        mcpRequestHash: trailerValue(mcpRequestHashField, MCP_REQUEST_HASH_RE),
+        mcpToolName: trailerValue(mcpToolNameField, MCP_TOOL_NAME_RE),
+        runId: trailerValue(runField, RUN_ID_RE),
+        pathAtSha,
+      };
+    },
+  );
 }
 
 export function repoDir(projectId: string): string {
@@ -968,6 +981,7 @@ function makeRepo(dir: string) {
         apiRequestHash?: string;
         apiOperation?: string;
         wikiRequestHash?: string;
+        ingestionRequestHash?: string;
         /** Weaver-Wiki-Input-Id on a source writer commit. */
         wikiInputId?: string;
         beforeCommit?: () => Promise<void>;
@@ -995,6 +1009,15 @@ function makeRepo(dir: string) {
         throw new Error("incomplete MCP request identity");
       }
       const runId = options?.runId;
+      const ingestionRequestHash = options?.ingestionRequestHash;
+      if (
+        ingestionRequestHash !== undefined &&
+        (author.kind === "machine" ||
+          !operationId?.startsWith("ingestion:") ||
+          !MCP_REQUEST_HASH_RE.test(ingestionRequestHash))
+      ) {
+        throw new Error("invalid ingestion request identity");
+      }
       const apiRequestHash = options?.apiRequestHash;
       const apiOperation = options?.apiOperation;
       if (
@@ -1068,6 +1091,11 @@ function makeRepo(dir: string) {
         );
       if (wikiRequestHash !== undefined)
         args.push("--trailer", `Weaver-Wiki-Request-Hash: ${wikiRequestHash}`);
+      if (ingestionRequestHash !== undefined)
+        args.push(
+          "--trailer",
+          `Weaver-Ingestion-Request-Hash: ${ingestionRequestHash}`,
+        );
       if (wikiInputId !== undefined)
         args.push("--trailer", `Weaver-Wiki-Input-Id: ${wikiInputId}`);
       if (overridden.length > 0) {
@@ -1396,14 +1424,20 @@ function makeRepo(dir: string) {
         limit,
         commitish = "HEAD",
         operationId,
+        trustedOperationsOnly = false,
       }: {
         skip: number;
         limit: number;
         commitish?: string;
         operationId?: string;
+        trustedOperationsOnly?: boolean;
       },
     ) {
-      const operationShas =
+      if (trustedOperationsOnly && (relPath !== "." || !operationId))
+        throw new Error(
+          "trusted operation history requires a repository-wide operation id lookup",
+        );
+      const indexedShas =
         operationId && relPath === "."
           ? await operationCommits(
               dir,
@@ -1411,6 +1445,13 @@ function makeRepo(dir: string) {
               operationId,
             )
           : null;
+      const trusted = trustedOperationsOnly
+        ? await trustedCommits(dir)
+        : undefined;
+      const operationShas =
+        trusted && indexedShas
+          ? indexedShas.filter((sha) => trusted.has(sha))
+          : indexedShas;
       if (operationShas?.length === 0) return [];
       const raw = await gitFor(dir).raw([
         "--literal-pathspecs",
@@ -1428,8 +1469,11 @@ function makeRepo(dir: string) {
         "--",
         relPath,
       ]);
-      const trusted = await trustedCommits(dir);
-      return parsePathLog(raw, trusted, relPath).slice(skip, skip + limit);
+      return parsePathLog(
+        raw,
+        trusted ?? (await trustedCommits(dir)),
+        relPath,
+      ).slice(skip, skip + limit);
     },
     async latestLogForPaths(paths: string[], commitish: string) {
       assertCommitish(commitish);
@@ -1480,7 +1524,7 @@ function makeRepo(dir: string) {
           ...shas.slice(offset, offset + 200),
           "--",
         ]);
-        const records = parseLogRecords(raw, 15);
+        const records = parseLogRecords(raw, PATH_LOG_FIELD_COUNT);
         const entries = parsePathLog(raw, trusted, "");
         for (const [index, record] of records.entries()) {
           for (const change of record.changes) {
@@ -1657,7 +1701,7 @@ function makeRepo(dir: string) {
         ]);
       }
     },
-    async commitTreeWithParents(
+    async createTreeCommit(
       message: string,
       author: CommitAuthor,
       parents: string[],
@@ -1673,12 +1717,36 @@ function makeRepo(dir: string) {
       const args = ["commit-tree", tree];
       for (const parent of parents) args.push("-p", parent);
       args.push("-m", message_);
-      const sha = (await git.raw(args)).trim();
+      return (await git.raw(args)).trim();
+    },
+    async publishTreeCommit(
+      sha: string,
+      expectedHead: string,
+      preparedParent?: string,
+    ) {
+      if (!GIT_SHA_RE.test(sha) || !GIT_SHA_RE.test(expectedHead))
+        throw new Error("invalid commit SHA");
+      if (preparedParent !== undefined) {
+        if (!GIT_SHA_RE.test(preparedParent))
+          throw new Error("invalid commit SHA");
+        await prepareTrustedCommit(dir, preparedParent);
+      }
       await prepareTrustedCommit(dir, sha);
       await currentProjectLock()?.assertHeld();
-      await git.raw(["update-ref", "HEAD", sha]);
-      await git.raw(["reset", "--hard", sha]);
-      await rememberTrustedCommit(dir, sha);
+      // createTreeCommit already staged this exact tree.
+      await gitFor(dir).raw(["update-ref", "HEAD", sha, expectedHead]);
+      await rememberTrustedCommit(dir, sha).catch(() => {
+        console.warn("Local commit attribution requires reconciliation");
+      });
+    },
+    async commitTreeWithParents(
+      message: string,
+      author: CommitAuthor,
+      parents: string[],
+    ) {
+      const expectedHead = await this.resolveHead();
+      const sha = await this.createTreeCommit(message, author, parents);
+      await this.publishTreeCommit(sha, expectedHead);
       return sha;
     },
     async deleteRef(ref: string) {

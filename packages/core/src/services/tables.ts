@@ -1098,6 +1098,7 @@ type TableWriteMetadata = {
   runId?: string;
   /** Source writer only: the wiki agent's recovery key and input trailer. */
   wikiRequestHash?: string;
+  ingestionRequestHash?: string;
   wikiInputId?: string;
   /** Runs under the project lock immediately before the commit; a throw aborts it. */
   beforeCommit?: () => Promise<void>;
@@ -1236,6 +1237,7 @@ async function commitTableWrite(
       apiOperation: metadata.apiOperation,
       runId: metadata.runId,
       wikiRequestHash: metadata.wikiRequestHash,
+      ingestionRequestHash: metadata.ingestionRequestHash,
       wikiInputId: metadata.wikiInputId,
       beforeCommit: metadata.beforeCommit,
     },

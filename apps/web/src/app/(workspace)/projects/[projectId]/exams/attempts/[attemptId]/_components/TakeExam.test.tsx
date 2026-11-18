@@ -8,6 +8,9 @@ const mocks = vi.hoisted(() => ({
   submit: vi.fn(),
   expired: undefined as (() => void) | undefined,
   toast: vi.fn(),
+  conflicting: false,
+  useSavedAnswer: vi.fn(),
+  keepDraftAnswer: vi.fn(),
 }));
 vi.mock("~/trpc/react", () => ({
   api: {
@@ -35,13 +38,18 @@ vi.mock("./AttemptTimer", () => ({
 vi.mock("./useAutosaveAnswers", () => ({
   useAutosaveAnswers: () => ({
     slots: {
-      q: { value: { text: "pending", selectedChoiceIds: [] }, status: "error" },
+      q: {
+        value: { text: "pending", selectedChoiceIds: [] },
+        status: mocks.conflicting ? "conflict" : "error",
+      },
     },
     pendingCount: 1,
     lastSavedAt: null,
     flush: mocks.flush,
     setText: vi.fn(),
     setChoices: vi.fn(),
+    useSavedAnswer: mocks.useSavedAnswer,
+    keepDraftAnswer: mocks.keepDraftAnswer,
   }),
 }));
 vi.mock("~/components/ui/dialog", () => {
@@ -61,6 +69,7 @@ let renderer: ReactTestRenderer | undefined;
 afterEach(async () => {
   if (renderer) await act(async () => renderer?.unmount());
   renderer = undefined;
+  mocks.conflicting = false;
   vi.clearAllMocks();
 });
 const attempt = {
@@ -78,6 +87,30 @@ const attempt = {
     { id: "q", kind: "free_text", prompt: "Explain", weight: 1, answer: null },
   ],
 } as TraineeAttemptView;
+
+function button(label: string) {
+  const match = renderer!.root
+    .findAllByType("button")
+    .find((node) => (node.props as { children: ReactNode }).children === label);
+  if (!match) throw new Error(`Missing exam button: ${label}`);
+  return match.props as { disabled?: boolean; onClick: () => void };
+}
+
+it("shows both resolution choices and blocks manual submission during a conflict", async () => {
+  mocks.conflicting = true;
+  await act(async () => {
+    renderer = create(<TakeExam attempt={attempt} onSubmitted={vi.fn()} />);
+  });
+  expect(button("Submit").disabled).toBe(true);
+  await act(async () => {
+    button("Use saved answer").onClick();
+    button("Keep my draft").onClick();
+  });
+  expect(mocks.useSavedAnswer).toHaveBeenCalledWith("q");
+  expect(mocks.keepDraftAnswer).toHaveBeenCalledWith("q");
+  expect(mocks.submit).not.toHaveBeenCalled();
+});
+
 it("expiry locks inputs and waits for every save before submitting", async () => {
   let acknowledge!: () => void;
   mocks.flush.mockReturnValue(
@@ -109,6 +142,24 @@ it("a failed expiry flush preserves the draft without claiming submission", asyn
   expect(renderer?.root.findByType("fieldset").props.disabled).toBe(true);
 });
 
+it("resumes timeout submission when the last conflicting answer is resolved", async () => {
+  mocks.conflicting = true;
+  mocks.flush
+    .mockRejectedValueOnce(new Error("Resolve conflicting answers first"))
+    .mockResolvedValueOnce(undefined);
+  mocks.submit.mockResolvedValue({});
+  const onSubmitted = vi.fn();
+  await act(async () => {
+    renderer = create(<TakeExam attempt={attempt} onSubmitted={onSubmitted} />);
+  });
+  await act(async () => mocks.expired?.());
+  expect(mocks.submit).not.toHaveBeenCalled();
+  await act(async () => button("Use saved answer").onClick());
+  expect(mocks.useSavedAnswer).toHaveBeenCalledWith("q");
+  expect(mocks.submit).toHaveBeenCalledWith({ attemptId: "attempt" });
+  expect(onSubmitted).toHaveBeenCalledOnce();
+});
+
 it("expiry remains locked if a manual flush was already running and then fails", async () => {
   let reject!: (reason: Error) => void;
   mocks.flush.mockReturnValue(
@@ -119,17 +170,8 @@ it("expiry remains locked if a manual flush was already running and then fails",
   await act(async () => {
     renderer = create(<TakeExam attempt={attempt} onSubmitted={vi.fn()} />);
   });
-  function click(label: string) {
-    const button = renderer!.root
-      .findAllByType("button")
-      .find(
-        (node) => (node.props as { children: ReactNode }).children === label,
-      )!;
-    const props = button.props as { onClick: () => void };
-    props.onClick();
-  }
-  await act(async () => click("Submit"));
-  await act(async () => click("Submit exam"));
+  await act(async () => button("Submit").onClick());
+  await act(async () => button("Submit exam").onClick());
   await act(async () => mocks.expired?.());
   await act(async () => reject(new Error("offline")));
   expect(renderer!.root.findByType("fieldset").props.disabled).toBe(true);

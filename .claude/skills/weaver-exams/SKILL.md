@@ -106,3 +106,7 @@ Trainer listExams returns bounded {items,nextCursor} pages ordered by updatedAt 
 Attempt lists batch trainee/project metadata for the retained page and validate
 only snapshot titles; full snapshot validation belongs to attempt detail/grading.
 History still requires live project access, including `notDeleted` metadata reads.
+
+An autosave recovery read acknowledges only a matching answer. A divergent saved
+answer preserves the local value and blocks submission until the trainee chooses
+the saved answer or explicitly retries the draft above the conflicting sequence.

@@ -4293,6 +4293,10 @@ describe("ingestion router", () => {
           `ingestion:${fileId}`,
         );
         expect(commits).toHaveLength(1);
+        expect(commits[0]).toMatchObject({
+          trustedAuthor: true,
+          ingestionRequestHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        });
         expect(await getFile(db, actor, { fileId })).toMatchObject({
           status: "accepting",
           draft: { acceptedCommitSha: null, acceptedResourceId: null },

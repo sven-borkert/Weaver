@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,7 +10,12 @@ import {
   resetDb,
   securityContextFor,
 } from "./_harness";
-import { openProjectRepo } from "@weaver/git-store";
+import { openProjectRepo, withProjectRepo } from "@weaver/git-store";
+import * as gitStore from "@weaver/git-store";
+import {
+  composeDocumentFile,
+  parseDocumentFile,
+} from "@weaver/core/documents/frontmatter";
 import {
   createDocumentArchive,
   createFolderArchive,
@@ -329,6 +335,58 @@ describe("createFolderArchive", () => {
 });
 
 describe("createDocumentArchive", () => {
+  it("keeps the selected document when its path is reused during archive creation", async () => {
+    const db = getPrisma();
+    const { project, actor } = await fixture("doczip-path-reuse");
+    const selected = await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Plan",
+        content: { kind: "markdown", contentJson: BODY("Selected body") },
+      },
+      actor,
+    );
+    const before = await committedBytes(project.id, selected.path);
+    const { meta } = parseDocumentFile(before.toString("utf8"), "markdown");
+    const reader = (await openProjectRepo(project.id))!;
+    const read = reader.readCommittedFileAt;
+    const afterLookup = vi
+      .spyOn(reader, "readCommittedFileAt")
+      .mockImplementationOnce(async (...args) => {
+        const snapshot = await read(...args);
+        await withProjectRepo(project.id, async (repo) => {
+          await repo.mv(selected.path, "plan-2.md");
+          await repo.writeFileAtomic(
+            selected.path,
+            composeDocumentFile(
+              { ...meta, id: randomUUID(), title: "Other Plan" },
+              "Other body\n",
+              "markdown",
+            ),
+          );
+          await repo.commitAll("pull fixture: reuse path", actor);
+        });
+        return snapshot;
+      });
+    const open = vi
+      .spyOn(gitStore, "openProjectRepo")
+      .mockResolvedValueOnce(reader);
+    try {
+      const archive = await createDocumentArchive(
+        db,
+        { projectId: project.id, documentId: selected.id },
+        actor,
+      );
+      const zip = await unzip(archive.stream);
+      expect(await zip.file("plan.md")!.async("nodebuffer")).toEqual(before);
+      expect(afterLookup).toHaveBeenCalled();
+    } finally {
+      open.mockRestore();
+    }
+  });
+
   it("holds the document and its images at the archive root for a Viewer", async () => {
     const db = getPrisma();
     const { project, actor, viewerActor } = await fixture("doczip");

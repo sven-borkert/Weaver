@@ -124,6 +124,7 @@ export async function createProject(
   db: PrismaClient,
   actor: ProjectActor,
   input: { name: string; description?: string },
+  options?: { personal?: true },
 ): Promise<Project> {
   if (!hasCapability(actor, "content:write")) {
     throw new CoreError("FORBIDDEN");
@@ -140,6 +141,22 @@ export async function createProject(
     return await observeContentTransaction("project.create", projectId, () =>
       db.$transaction(
         async (tx) => {
+          if (options?.personal) {
+            await tx.$queryRaw`
+              SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:personal-workspace:${actor.userId}`}, 0))::text
+            `;
+            const existing = await tx.project.findFirst({
+              where: { personalOwnerId: actor.userId, ...notDeleted },
+            });
+            if (existing) return existing;
+            await tx.project.updateMany({
+              where: {
+                personalOwnerId: actor.userId,
+                deletedAt: { not: null },
+              },
+              data: { personalOwnerId: null },
+            });
+          }
           const organization = await tx.organization.create({
             data: {
               name: input.name,
@@ -152,6 +169,7 @@ export async function createProject(
               name: input.name,
               description: input.description,
               organizationId: organization.id,
+              personalOwnerId: options?.personal ? actor.userId : null,
             },
           });
           await tx.member.create({
@@ -206,31 +224,41 @@ export async function updateProject(
   return project;
 }
 
-export async function softDeleteProject(
-  db: Db,
-  projectId: string,
-  actor: ProjectActor,
-): Promise<void> {
-  const access = await assertProjectRole(db, projectId, actor, "Owner");
-  if (access.project.personalOwnerId) {
+function assertDeletable(project: Project): void {
+  if (project.personalOwnerId)
     throw new CoreError(
       "PRECONDITION_FAILED",
       "Personal workspaces cannot be deleted",
     );
-  }
-  await withProjectRepo(projectId, async () => {
-    await assertProjectRole(db, projectId, actor, "Owner");
-    await db.project.update({
-      where: { id: projectId },
-      data: {
-        deletedAt: new Date(),
-        scheduledTasks: {
-          updateMany: {
-            where: { status: "active" },
-            data: { status: "paused", pauseReason: "manual", nextRunAt: null },
-          },
-        },
-      },
-    });
-  });
+}
+
+export async function softDeleteProject(
+  db: PrismaClient,
+  projectId: string,
+  actor: ProjectActor,
+): Promise<void> {
+  const access = await assertProjectRole(db, projectId, actor, "Owner");
+  assertDeletable(access.project);
+  await withProjectRepo(projectId, () =>
+    db.$transaction(async (tx) => {
+      const access = await assertProjectRole(tx, projectId, actor, "Owner");
+      assertDeletable(access.project);
+      const deleted = await tx.project.updateMany({
+        where: { id: projectId, personalOwnerId: null, ...notDeleted },
+        data: { deletedAt: new Date() },
+      });
+      if (!deleted.count) {
+        const current = await assertProjectRole(tx, projectId, actor, "Owner");
+        assertDeletable(current.project);
+        throw new CoreError(
+          "CONFLICT",
+          "Project changed while it was being deleted",
+        );
+      }
+      await tx.scheduledTask.updateMany({
+        where: { outputProjectId: projectId, status: "active" },
+        data: { status: "paused", pauseReason: "manual", nextRunAt: null },
+      });
+    }),
+  );
 }

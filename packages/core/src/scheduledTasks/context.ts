@@ -275,7 +275,16 @@ export async function assembleTaskContext(
   heads: Record<string, string>;
   period: { from: Date | null; to: Date };
 }> {
-  const folder = input.scope.kind === "folder" ? input.scope : null;
+  const { scope } = input;
+  const folder = scope.kind === "folder" ? scope : null;
+  const singleResource = scope.kind === "document" || scope.kind === "table";
+  const documentId = scope.kind === "document" ? scope.documentId : null;
+  const tableId = scope.kind === "table" ? scope.tableId : null;
+  if (
+    singleResource &&
+    (!(documentId || tableId) || scope.projectIds.length !== 1)
+  )
+    throw new CoreError("NOT_FOUND", "The task's resource focus is incomplete");
   if (folder && (!folder.folderPath?.length || !folder.folderResourceType))
     throw new CoreError("NOT_FOUND", "The task's folder focus is incomplete");
   const folderPrefix = folder
@@ -309,29 +318,35 @@ export async function assembleTaskContext(
       fromSha,
       sinceDate,
       limit: MAX_COMMITS_PER_PROJECT,
+      ...(documentId && {
+        historicalResource: { kind: "document", id: documentId },
+      }),
+      ...(tableId && { historicalResource: { kind: "table", id: tableId } }),
     });
     if (input.period)
       changes.commits = changes.commits.filter(
         (commit) => commit.date >= sinceDate && commit.date <= input.now,
       );
-    if (folderPrefix && folder) {
+    if (singleResource || (folderPrefix && folder)) {
       changes.commits = changes.commits.flatMap((commit) => {
-        const documents =
-          folder.folderResourceType === "document"
-            ? commit.documents.filter((doc) =>
-                doc.path.startsWith(folderPrefix),
-              )
-            : [];
-        const tables =
-          folder.folderResourceType === "table"
-            ? commit.tables.filter(
-                (table) =>
-                  table.path.startsWith(folderPrefix) &&
-                  isTableDirName(table.path.split("/").at(-1) ?? ""),
-              )
-            : [];
+        const documents = commit.documents.filter((doc) =>
+          documentId
+            ? doc.id === documentId && doc.id !== input.excludeDocumentId
+            : folderPrefix &&
+              folder?.folderResourceType === "document" &&
+              doc.path.startsWith(folderPrefix),
+        );
+        const tables = commit.tables.filter((table) =>
+          tableId
+            ? table.id === tableId
+            : folderPrefix &&
+              folder?.folderResourceType === "table" &&
+              table.path.startsWith(folderPrefix) &&
+              isTableDirName(table.path.split("/").at(-1) ?? ""),
+        );
         if (documents.length === 0 && tables.length === 0) return [];
         const mixed =
+          commit.hasOutOfScopeChanges === true ||
           documents.length !== commit.documents.length ||
           tables.length !== commit.tables.length;
         return [
@@ -341,7 +356,9 @@ export async function assembleTaskContext(
             tables,
             ...(mixed
               ? {
-                  message: "Changed content in the selected folder",
+                  message: singleResource
+                    ? "Changed the selected resource"
+                    : "Changed content in the selected folder",
                   changeSummary: null,
                 }
               : {}),

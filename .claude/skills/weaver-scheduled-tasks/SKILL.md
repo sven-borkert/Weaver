@@ -93,12 +93,13 @@ history holds every past report.
   `projects` array (`projectId`, `documents`, `tables`, `commits`) recording
   what each scoped project actually contributed; it is stored on the run as
   `contextSummary`.
-- `runNow` deletes the run it just created and fails with
-  `PRECONDITION_FAILED` when `dispatchTaskRun` cannot enqueue the job (jobs
-  disabled, or the runtime already stopped). An undispatched `queued` row
-  would never reach a worker and would block every later run with `CONFLICT`.
-  The tick's stale re-dispatch is the recovery path for a run that _was_
-  dispatched.
+- A document or table focus accepts only history whose Git snapshot verifies
+  the resource ID. Mixed commits use a generic change message, omit the shared
+  summary, and contribute diffs for the selected document alone.
+- `runNow` fails with `PRECONDITION_FAILED` and conditionally removes the queued
+  run when jobs are disabled or the publisher stops before sending. A transport
+  error keeps the run eligible for the tick's stale redispatch. Queue acceptance
+  succeeds independently of recording its job ID.
 - Schedules are presets (hourly/daily/weekly/monthly) plus an IANA timezone,
   stored as a cron string. No free cron input. Minimum interval one hour;
   missed slots are skipped, never caught up; a task never overlaps itself.
@@ -350,6 +351,6 @@ The wiki lint schedule reuses `taskScheduleSchema`, `scheduleToCron`, `describeS
 
 Task ticks isolate each due-task claim and each publication, continue stale-run
 redispatch and lease expiry after failures, and diagnose bad schedule rows.
-`dispatchTaskRun` returns the shared publication outcome; singleton deduplication
-is success and cannot remove the durable run. Failure summaries are truncated by
-Unicode code point.
+`dispatchTaskRun` returns the shared publication outcome, and singleton
+deduplication counts as success. Failure summaries are truncated by Unicode
+code point.

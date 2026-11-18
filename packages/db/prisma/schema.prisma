@@ -398,6 +398,9 @@ model Project {
   /// Folder metadata format every folder of this project has been upgraded to (FOLDER_METADATA_VERSION).
   folderMetadataVersion Int @default(1)
   personalOwnerId String?   @unique @db.Uuid
+  /// Pending post-pull rebuild tokens indexed by the migration's live-project partial index.
+  gitDocumentRepairToken String? @db.Uuid
+  gitTableRepairToken String? @db.Uuid
 
   organization                 Organization                  @relation(fields: [organizationId], references: [id])
   personalOwner                User?                         @relation("PersonalWorkspaceOwner", fields: [personalOwnerId], references: [id], onDelete: SetNull)
@@ -1658,45 +1661,48 @@ model ExternalMcpConnection {
 
 /// Another Weaver instance users may send content to; registering it also creates its OAuth client row here.
 model RemoteInstance {
-  id                String   @id @default(uuid()) @db.Uuid
-  name              String   @unique @db.VarChar(120)
+  id                 String     @id @default(uuid()) @db.Uuid
+  name               String     @unique @db.VarChar(120)
   /// https origin plus optional base path, no trailing slash; the peer's client id is derived from it.
-  baseUrl           String   @unique @db.VarChar(2048)
-  enabled           Boolean  @default(true)
-  revision          Int      @default(1)
-  createdById       String?  @db.Uuid
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  lastCheckedAt     DateTime?
-  checkStatus       String?  @db.VarChar(40)
-  checkErrorSummary String?  @db.VarChar(300)
+  baseUrl            String     @unique @db.VarChar(2048)
+  enabled            Boolean    @default(true)
+  revision           Int        @default(1)
+  endpointGeneration Int        @default(1)
+  createdById        String?    @db.Uuid
+  createdAt          DateTime   @default(now())
+  updatedAt          DateTime   @updatedAt
+  lastCheckedAt      DateTime?
+  checkStatus        String?    @db.VarChar(40)
+  checkErrorSummary  String?    @db.VarChar(300)
 
   createdBy      User?                        @relation("RemoteInstanceCreator", fields: [createdById], references: [id], onDelete: SetNull)
   connections    RemoteInstanceConnection[]
   authorizations RemoteInstanceAuthorization[]
 
+  @@unique([id, endpointGeneration])
   @@index([createdById])
   @@index([enabled])
 }
 
 /// One user's OAuth tokens for one remote instance; the secret blob is `{ accessToken, refreshToken }`.
 model RemoteInstanceConnection {
-  id                   String    @id @default(uuid()) @db.Uuid
-  remoteInstanceId     String    @db.Uuid
-  userId               String    @db.Uuid
-  remoteUserId         String?   @db.VarChar(64)
-  remoteUserName       String?   @db.VarChar(200)
+  id                   String     @id @default(uuid()) @db.Uuid
+  remoteInstanceId     String     @db.Uuid
+  endpointGeneration   Int
+  userId               String     @db.Uuid
+  remoteUserId         String?    @db.VarChar(64)
+  remoteUserName       String?    @db.VarChar(200)
   tokensCiphertext     String
   tokensKeyVersion     Int
   tokensIv             String
   tokensTag            String
   accessTokenExpiresAt DateTime
-  scope                String    @db.VarChar(200)
-  createdAt            DateTime  @default(now())
-  updatedAt            DateTime  @updatedAt
+  scope                String     @db.VarChar(200)
+  createdAt            DateTime   @default(now())
+  updatedAt            DateTime   @updatedAt
   lastUsedAt           DateTime?
 
-  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId], references: [id], onDelete: Cascade)
+  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId, endpointGeneration], references: [id, endpointGeneration], onDelete: Cascade, onUpdate: Restrict, map: "RemoteInstanceConnection_endpoint_fkey")
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([remoteInstanceId, userId])
@@ -1705,14 +1711,15 @@ model RemoteInstanceConnection {
 
 /// An in-flight connect attempt: the OAuth state and PKCE verifier, ten minutes at most.
 model RemoteInstanceAuthorization {
-  state            String   @id @db.VarChar(64)
-  remoteInstanceId String   @db.Uuid
-  userId           String   @db.Uuid
-  codeVerifier     String   @db.VarChar(128)
-  expiresAt        DateTime
-  createdAt        DateTime @default(now())
+  state              String    @id @db.VarChar(64)
+  remoteInstanceId   String    @db.Uuid
+  endpointGeneration Int
+  userId             String    @db.Uuid
+  codeVerifier       String    @db.VarChar(128)
+  expiresAt          DateTime
+  createdAt          DateTime  @default(now())
 
-  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId], references: [id], onDelete: Cascade)
+  remoteInstance RemoteInstance @relation(fields: [remoteInstanceId, endpointGeneration], references: [id, endpointGeneration], onDelete: Cascade, onUpdate: Restrict, map: "RemoteInstanceAuthorization_endpoint_fkey")
   user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([remoteInstanceId])

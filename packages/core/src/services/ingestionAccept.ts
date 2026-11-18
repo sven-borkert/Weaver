@@ -4,6 +4,7 @@ import { emitDiagnostic } from "../diagnostics/writer";
 import { MAX_MARKDOWN_CHARS } from "../documents/limits";
 import { FOLDER_NOT_FOUND } from "../documents/paths";
 import { CoreError } from "../errors";
+import { canonicalDigest } from "../externalMcp/digest";
 import { parseDraftCell, type DraftCellValue } from "../ingestion/columnTypes";
 import type { DraftTableColumn } from "../ingestion/draftTable";
 import {
@@ -15,9 +16,13 @@ import type { UserSecurityContext } from "../security/context";
 import {
   applyOperationInRepo,
   contentOperationSchema,
+  matchesIngestionRecoveryIdentity,
+  matchesLegacyIngestionCreate,
+  RECOVERY_LOG_LIMIT,
   recoverPriorOperation,
   type AppliedOperation,
   type ContentOperation,
+  type IngestionRecoveryIdentity,
 } from "./contentOperations";
 import type { EnrichedActor } from "./documents";
 import {
@@ -48,8 +53,6 @@ export type AcceptResult = {
   resourceId: string;
   commitSha: string;
 };
-
-const RELEASE_HISTORY_LIMIT = 10;
 
 const notReady = () =>
   new CoreError("PRECONDITION_FAILED", "only a ready draft can be accepted");
@@ -134,11 +137,11 @@ export function buildAcceptOperation(
   return parsed.data;
 }
 
-type LoadedFile = Awaited<ReturnType<typeof loadIngestionFile>>;
+type StoredDraft = NonNullable<
+  Awaited<ReturnType<typeof loadIngestionFile>>["draft"]
+>;
 
-function acceptableDraft(file: LoadedFile): AcceptableDraft {
-  const draft = file.draft;
-  if (!draft) throw notReady();
+function acceptableDraft(draft: StoredDraft): AcceptableDraft {
   const table =
     draft.targetKind === "table"
       ? parseStoredTable(draft.tableSchema, draft.tableRows)
@@ -209,14 +212,35 @@ export async function acceptDraft(
       };
     }
 
+    let identity: IngestionRecoveryIdentity | undefined;
     try {
-      const draft = acceptableDraft(file);
+      if (!stored) throw notReady();
+      const draft = acceptableDraft(stored);
       const operation = buildAcceptOperation(file.projectId, draft);
+      identity = {
+        ingestionRequestHash: canonicalDigest({
+          operationId,
+          projectId: file.projectId,
+          contentDigest: file.contentDigest,
+          revision: stored.revision,
+          draft,
+        }),
+        matchesLegacyCommit: (commitSha) =>
+          matchesLegacyIngestionCreate(
+            db,
+            repo,
+            operation,
+            operationId,
+            actor,
+            commitSha,
+          ),
+      };
       const recovered = await recoverPriorOperation(
         db,
         repo,
         operation,
         operationId,
+        identity,
       );
       let applied: AppliedOperation;
       if (recovered) {
@@ -226,6 +250,7 @@ export async function acceptDraft(
           table: null,
           summary: "",
           operationId,
+          ingestionRequestHash: identity.ingestionRequestHash,
         });
         contentCommitted = true;
       }
@@ -282,16 +307,28 @@ export async function acceptDraft(
       // Even validation and recovery failures must preserve a committed claim.
       const candidates = await repo.logForPath(".", {
         skip: 0,
-        limit: RELEASE_HISTORY_LIMIT + 1,
+        limit: RECOVERY_LOG_LIMIT + 1,
         operationId,
+        trustedOperationsOnly: true,
       });
       // The operation index covers complete history and exact terminal trailers.
-      if (
-        candidates.length <= RELEASE_HISTORY_LIMIT &&
-        !candidates.some((entry) => entry.operationId === operationId)
-      ) {
+      let committed = candidates.length > RECOVERY_LOG_LIMIT;
+      for (const entry of candidates) {
+        if (committed) break;
+        if (entry.operationId !== operationId || entry.trustedAuthor !== true)
+          continue;
+        // A locally recorded request can outlive a draft that no longer validates.
+        committed = identity
+          ? await matchesIngestionRecoveryIdentity(entry, identity)
+          : Boolean(entry.ingestionRequestHash);
+      }
+      if (!committed) {
         await db.ingestionFile.updateMany({
-          where: { id: file.id, status: "accepting" },
+          where: {
+            id: file.id,
+            status: "accepting",
+            draft: { is: stored ? { revision: stored.revision } : null },
+          },
           data: { status: "ready" },
         });
       }

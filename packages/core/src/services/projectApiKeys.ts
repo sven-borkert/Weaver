@@ -417,6 +417,11 @@ export async function updateProjectApiKey(
     if (!existing) throw new CoreError("NOT_FOUND");
     if (existing.revokedAt)
       throw new CoreError("PRECONDITION_FAILED", "Revoked keys cannot change");
+    if (existing.policyVersion !== input.expectedPolicyVersion)
+      throw new CoreError(
+        "CONFLICT",
+        "This key changed while you were editing. Close and reopen the editor to load the current permissions.",
+      );
     const grants = await normalizeGrants(
       tx,
       repo,

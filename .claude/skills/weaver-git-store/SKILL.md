@@ -74,8 +74,9 @@ pull claims; `weaver-env-deploy` for SSH trust and network policy.
 - `CommitAuthor` is a user or `{ kind: "machine", machineKind, machineId }`
   (`projectApiKey` → `Weaver-Project-Key-Id`, `wikiAgent` → `Weaver-Wiki-Agent-Id`, UUID
   validated). `commitAll` requires a wiki agent commit to carry operation id, run id
-  and `wikiRequestHash`; a `wiki-revert:` commit carries the hash with a user author and no agent trailer. Adding a log field touches both positional formats
-  (`CHANGE_LOG_FORMAT`, `PATH_LOG_FORMAT`) and their field counts.
+  and `wikiRequestHash`; a `wiki-revert:` commit carries the hash with a user author and no agent trailer.
+  Reviewed import creates carry `Weaver-Ingestion-Request-Hash` on a user-authored
+  `ingestion:` operation. Keep each positional log format and its field count in sync.
 - User/machine attribution is trusted only for locally recorded commits in
   `.git/weaver-trusted-commits`. Remote trailers alone do not establish an
   author. Preserve distinct human and project-machine `CommitAuthor` variants.
@@ -104,11 +105,15 @@ release, process death, or a commit that must not occur after cancellation.
 
 Commit objects are created with `commit-tree`; their full SHA is appended to the pending trust ledger and fsynced before publishing HEAD. Failure to persist pending trust rejects before publication. Once HEAD contains the commit, main-ledger failure cannot fail the write; readers consider both ledgers and a later append reconciles pending records. Ledger appends start with a newline so a torn previous line cannot swallow the next SHA.
 
+Pull preparation uses `createTreeCommit` to stage the worktree and create a commit object while HEAD stays fixed. `publishTreeCommit` records the final commit and any local preparation parent in the pending trust ledger and compares HEAD with the original SHA on the ref update. The exact worktree tree is already staged when the ref is published.
+
 When the staged tree matches HEAD, `commitAll` still checks lock ownership and runs `beforeCommit`, then returns the existing SHA without adding author or operation provenance.
 
 Trust sets are cached for at most 32 repositories, keyed by both ledgers' device/inode/size/mtime/ctime. Local commits update the set; external writes invalidate it. Retain all historical SHAs because old revisions still need attribution. For a legacy trust gap, stop writers, back up the ledgers, independently verify local provenance, and append only verified full SHAs with newline framing and fsync. Remote trailers alone never justify re-trusting.
 
 Whole-repository operation lookups (`logForPath(".", { operationId })`) keep a process-local operation-id index for at most 32 repositories. The first lookup scans terminal trailers; subsequent HEAD advances index only the new ancestry range, and non-descendant replacements rebuild it. There is no date or history-count cutoff: old retries must retain idempotency. A cold process still pays one full scan.
+`trustedOperationsOnly` filters the operation index through the local trust
+ledger before applying pagination.
 
 `latestLogForPaths` walks cheap commit IDs once and batches full history records in groups of 200 for linear history. Merged ancestry falls back to canonical per-path `logForPath --follow`: a full topological walk can choose a discarded side-branch edit, while a first-parent shortcut can differ from Git's path simplification. Rebuild performs both paths outside the project lock. Use the helper with `listTrackedBlobs` and bounded `readBlobsAt` batches. All name-status reads use NUL framing, including renames and historical path reservations; deletion scans compare merge commits to their first parent.
 

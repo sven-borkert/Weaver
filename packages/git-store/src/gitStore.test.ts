@@ -1874,7 +1874,11 @@ describe("history indexes and durable attribution", () => {
     await withProjectRepo(randomUUID(), async (repo) => {
       await repo.writeFileAtomic("one.md", "one");
       await repo.writeFileAtomic("two.md", "two");
-      const first = await repo.commitAll("both", author);
+      const ingestionRequestHash = "a".repeat(64);
+      const first = await repo.commitAll("both", author, {
+        operationId: `ingestion:${randomUUID()}`,
+        ingestionRequestHash,
+      });
       await repo.mv("one.md", "renamed.md");
       const second = await repo.commitAll("rename", author);
       await repo.writeFileAtomic("two.md", "changed");
@@ -1886,6 +1890,9 @@ describe("history indexes and durable attribution", () => {
       expect(heads.get("renamed.md")?.sha).toBe(second);
       expect(heads.get("two.md")?.sha).toBe(first);
       expect(heads.get("two.md")?.trustedAuthor).toBe(true);
+      expect(heads.get("two.md")?.ingestionRequestHash).toBe(
+        ingestionRequestHash,
+      );
       const merge = await repo.commitTreeWithParents("merge", author, [
         first,
         await repo.resolveHead(),
@@ -1902,6 +1909,31 @@ describe("history indexes and durable attribution", () => {
         });
         expect(merged.get(file)?.sha).toBe(head?.sha);
       }
+    });
+  });
+
+  it("pages trusted operation history after filtering the local trust ledger", async () => {
+    const { withProjectRepo } = await import("./gitStore");
+    await withProjectRepo(randomUUID(), async (repo) => {
+      const operationId = "test-operation";
+      await repo.writeFileAtomic("one.md", "first");
+      const first = await repo.commitAll("first", author, { operationId });
+      await repo.writeFileAtomic("one.md", "second");
+      await repo.commitAll("second", author, { operationId });
+      await writeFile(
+        path.join(repo.dir, ".git/weaver-trusted-commits"),
+        `${first}\n`,
+      );
+
+      const options = {
+        skip: 0,
+        limit: 1,
+        operationId,
+        trustedOperationsOnly: true,
+      };
+      expect(await repo.logForPath(".", options)).toEqual([
+        expect.objectContaining({ sha: first, trustedAuthor: true }),
+      ]);
     });
   });
 });

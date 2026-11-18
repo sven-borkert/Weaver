@@ -11,21 +11,19 @@ import { captureError } from "../diagnostics/writer";
 import { parseKnowledgeConfig } from "../knowledge/config";
 import { requestKnowledgeJob, type JobQueue } from "../jobs/queue";
 import type { KnowledgeJobPayloads } from "../jobs/types";
-import { toOrganizationRole } from "../roles";
-import {
-  createSessionSecurityContext,
-  type UserSecurityContext,
-} from "../security/context";
 import {
   loadEncryptionKeyRing,
   type EncryptionKeyRing,
 } from "../security/encryption";
-import { rebuildIndex } from "./documents";
 import { decryptProjectGitRemoteKey } from "./projectGitRemote";
 import { mergeFetchedBranch } from "./projectGitRemoteMerge";
-import { enqueueProjectReconcile } from "./knowledgeReconciliation";
 import { withExistingProjectRepo } from "./projectRepo";
-import { rebuildTableIndex } from "./tables";
+import { lockProjectMembershipWrites } from "./projectMembers";
+import {
+  discoverProjectGitProjectionRepairs,
+  markProjectGitProjectionRepairs,
+  repairProjectAfterGitPull,
+} from "./projectGitProjectionRepairs";
 
 /** A zero-uuid sentinel for the "Weaver-User-Id" commit trailer when neither
  * the requesting user nor any real id is available (never the
@@ -168,6 +166,7 @@ export async function discoverProjectGitRemotes(input: {
     take: 100,
     select: { id: true, projectId: true, revision: true, failureCount: true },
   });
+  await discoverProjectGitProjectionRepairs(input.db, input.queue);
   let dispatched = 0;
   for (const row of rows) {
     if (await claimAndSend(input.db, input.queue, row, now, due))
@@ -370,42 +369,6 @@ export async function pushProjectGitRemote(input: {
   }
 }
 
-/** The actor for rebuilding Document/DataTable rows after a pull is never
- * keyed on the requester (who may have been removed or demoted from the
- * project since requesting the pull): resolve the project's earliest Owner
- * member instead, falling back to the requester only when no Owner
- * resolves. Returns null only in the practically-unreachable case where
- * neither exists (every project keeps at least one Owner). */
-async function resolveRebuildActor(
-  db: PrismaClient,
-  projectId: string,
-  requester: { id: string; role: UserSecurityContext["globalRole"] } | null,
-): Promise<UserSecurityContext | null> {
-  const ownerMember = await db.member.findFirst({
-    where: {
-      role: toOrganizationRole("Owner"),
-      organization: { project: { id: projectId } },
-    },
-    orderBy: [{ createdAt: "asc" }, { userId: "asc" }],
-    select: { userId: true, user: { select: { role: true } } },
-  });
-  if (ownerMember) {
-    return createSessionSecurityContext({
-      userId: ownerMember.userId,
-      globalRole: ownerMember.user.role,
-      sessionId: "git-pull",
-    });
-  }
-  if (requester) {
-    return createSessionSecurityContext({
-      userId: requester.id,
-      globalRole: requester.role,
-      sessionId: "git-pull",
-    });
-  }
-  return null;
-}
-
 export async function pullProjectGitRemote(input: {
   db: PrismaClient;
   payload: KnowledgeJobPayloads["project.git-pull"];
@@ -518,7 +481,7 @@ export async function pullProjectGitRemote(input: {
       const requester = row.pullRequestedById
         ? await input.db.user.findUnique({
             where: { id: row.pullRequestedById },
-            select: { id: true, name: true, email: true, role: true },
+            select: { id: true, name: true, email: true },
           })
         : null;
       // Fallback commit author when the requester is gone: a fixed sentinel
@@ -539,17 +502,25 @@ export async function pullProjectGitRemote(input: {
       let merged: { mergedSha: string } | null;
       let durableMergeSha: string | null = null;
       try {
-        merged = await input.db.$transaction(
-          async (tx) => {
-            await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${row.projectId}, 0))::text`;
-            await tx.$queryRaw`SELECT "id" FROM "ProjectGitRemote" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
-            if (
-              !(await tx.projectGitRemote.findFirst({
-                where: { ...eligibleForPull, ...fence },
-              }))
-            )
-              return null;
-            return withExistingProjectRepo(row.projectId, async (repo) => {
+        merged = await withExistingProjectRepo(row.projectId, async (repo) => {
+          if (
+            !(await markProjectGitProjectionRepairs(
+              input.db,
+              row.projectId,
+              fence,
+            ))
+          )
+            return null;
+          return input.db.$transaction(
+            async (tx) => {
+              await lockProjectMembershipWrites(tx, row.projectId);
+              await tx.$queryRaw`SELECT "id" FROM "ProjectGitRemote" WHERE "id" = ${row.id}::uuid FOR UPDATE`;
+              if (
+                !(await tx.projectGitRemote.findFirst({
+                  where: { ...eligibleForPull, ...fence },
+                }))
+              )
+                return null;
               const localHeadBefore = await repo.resolveHead();
               const outcome = await mergeFetchedBranch(tx, repo, {
                 projectId: row.projectId,
@@ -583,10 +554,10 @@ export async function pullProjectGitRemote(input: {
               if (needsReview) fence.revision += 1;
               dispatchAfterRelease = noOp || outcome.fastForward;
               return { mergedSha: outcome.mergedSha };
-            });
-          },
-          { timeout: PROJECT_GIT_LEASE_MS },
-        );
+            },
+            { timeout: PROJECT_GIT_LEASE_MS },
+          );
+        });
       } catch (error) {
         if (durableMergeSha) {
           // Git cannot roll back with PostgreSQL; retain the outcome and pause safely.
@@ -642,70 +613,6 @@ export async function pullProjectGitRemote(input: {
         });
         return;
       }
-
-      // Two full index rebuilds can take a while; renew the lease before
-      // starting them so it outlives fetch + merge + rebuilds instead of
-      // expiring mid-rebuild and leaving this fence unable to match anything.
-      const renewed = await input.db.projectGitRemote.updateMany({
-        where: fence,
-        data: {
-          leaseExpiresAt: new Date(
-            (input.now ?? new Date()).getTime() + PROJECT_GIT_LEASE_MS,
-          ),
-        },
-      });
-      if (!renewed.count) {
-        captureError({
-          event: "git.remote.pull_rebuild_failed",
-          message:
-            "lease renewal failed before rebuild; the pull outcome is recorded but the rebuild was skipped",
-          error: new Error("lease renewal matched 0 rows"),
-          projectId: row.projectId,
-        });
-      } else {
-        // Rebuilds run outside the repo lock: the merge commit already
-        // exists, so a rebuild failure here must not be reported as a merge
-        // failure — it is recorded for diagnostics only. The actor is never
-        // keyed on the requester (who may be gone or demoted); resolve the
-        // project's earliest Owner instead (R1).
-        const rebuildActor = await resolveRebuildActor(
-          input.db,
-          row.projectId,
-          requester,
-        );
-        if (rebuildActor) {
-          try {
-            await rebuildIndex(
-              input.db,
-              { projectId: row.projectId },
-              rebuildActor,
-            );
-            await rebuildTableIndex(
-              input.db,
-              { projectId: row.projectId },
-              rebuildActor,
-            );
-          } catch (error) {
-            captureError({
-              event: "git.remote.pull_rebuild_failed",
-              message: "rebuild after git pull failed",
-              error,
-              projectId: row.projectId,
-            });
-          }
-        } else {
-          captureError({
-            event: "git.remote.pull_rebuild_failed",
-            message:
-              "no project Owner or requester available to rebuild after git pull",
-            error: new Error("no rebuild actor available"),
-            projectId: row.projectId,
-          });
-        }
-      }
-      // Spec §6.2 orders reconciliation after the rebuilds; it is idempotent,
-      // so a skipped rebuild still enqueues it.
-      await enqueueProjectReconcile(row.projectId);
     } finally {
       await fetched.dispose();
     }
@@ -715,6 +622,12 @@ export async function pullProjectGitRemote(input: {
       data: { leaseToken: null, leaseExpiresAt: null },
     });
   }
+  await repairProjectAfterGitPull(
+    input.db,
+    row.projectId,
+    leaseToken,
+    input.signal,
+  );
   if (dispatchAfterRelease) {
     await dispatchProjectGitRemote({
       db: input.db,

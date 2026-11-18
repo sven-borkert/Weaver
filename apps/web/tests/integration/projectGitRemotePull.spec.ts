@@ -35,7 +35,12 @@ import {
   repoDir,
   withExistingProjectRepo,
 } from "@weaver/git-store";
+import * as gitStore from "@weaver/git-store";
 import { GitRemoteError } from "@weaver/git-store/remote";
+import { projectRepoLockKey } from "@weaver/git-store/advisory-lock";
+import { createProjectApiKey } from "@weaver/core/services/projectApiKeys";
+import { lockProjectMembershipWrites } from "@weaver/core/services/projectMembers";
+import * as projectRepo from "@weaver/core/services/projectRepo";
 import {
   composeDocumentFile,
   parseDocumentFile,
@@ -54,6 +59,7 @@ import {
   pullProjectGitRemote,
   discoverProjectGitRemotes,
 } from "@weaver/core/services/projectGitRemoteJobs";
+import { runProjectGitProjectionRepair } from "@weaver/core/services/projectGitProjectionRepairs";
 import {
   getProjectGitRemote,
   requestProjectGitRemotePull,
@@ -90,6 +96,14 @@ const TEXT_COL = {
   type: "text" as const,
 };
 const ROW_1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
 
 let tmp: string;
 
@@ -2100,10 +2114,16 @@ describe("mergeFetchedBranch", () => {
   });
 
   it("recovers the worktree after a mid-merge failure once the remote tree is checked out (M6)", async () => {
-    const { project, author } = await ownerProject(
+    const { project, author, caller } = await ownerProject(
       "pull-mid-failure",
       "Mid Failure Project",
     );
+    const local = await caller.document.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Other",
+      contentJson: PARA("Local Other"),
+    });
     const localHeadBefore = await (await openProjectRepo(
       project.id,
     ))!.resolveHead();
@@ -2163,6 +2183,10 @@ describe("mergeFetchedBranch", () => {
     ]);
     expect(status.trim()).toBe("");
     expect(await pullRefs(project.id)).toBe("");
+    const projected = await getPrisma().document.findUniqueOrThrow({
+      where: { id: local.id },
+    });
+    expect(projected.path).toBe(local.path);
   });
 
   it("propagates a free-slug database failure instead of silently dropping the local document (I7)", async () => {
@@ -3011,17 +3035,24 @@ describe("pullProjectGitRemote (job)", () => {
     expect(doc?.id).toBe(remoteDocId);
   });
 
-  it("records the pull outcome before running rebuilds, so a rebuild failure does not lose it (I2)", async () => {
-    const { owner, project } = await ownerProject(
+  it("repairs tables independently and retries document projection after a concurrent save", async () => {
+    const { owner, project, caller } = await ownerProject(
       "pull-job-i2",
       "Pull Job I2 Project",
     );
+    const local = await caller.document.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Local Document",
+      contentJson: PARA("Before the pull"),
+    });
     await pullFixture(project.id);
 
     const queue = new FakeJobQueue();
     const payload = await requestPull(project.id, owner, queue);
 
     const remoteDocId = randomUUID();
+    const remoteTableId = randomUUID();
     const { bareDirectory, remoteHead } = await buildRemoteRepo(
       async (source) => {
         await writeFile(path.join(source, "project.json"), "{}\n");
@@ -3041,6 +3072,24 @@ describe("pullProjectGitRemote (job)", () => {
             "markdown",
           ),
         );
+        await mkdir(path.join(source, "tables/budget.table"), {
+          recursive: true,
+        });
+        await writeFile(
+          path.join(source, "tables/budget.table/schema.json"),
+          serializeSchemaFile({
+            id: remoteTableId,
+            title: "Budget",
+            sourceOfTruth: "git",
+            columns: [],
+            created: T0,
+            updated: T0,
+          }),
+        );
+        await writeFile(
+          path.join(source, "tables/budget.table/data.jsonl"),
+          "",
+        );
       },
     );
 
@@ -3049,13 +3098,40 @@ describe("pullProjectGitRemote (job)", () => {
       data: { queueToken: null, queuedAt: null },
     });
 
-    // The first `document.findMany` call in the whole run happens inside
-    // rebuildIndex's reconciliation step, well after the merge commit and
-    // the outcome update have already landed.
-    const failure = new Error("db unavailable during rebuild");
-    const spy = vi
-      .spyOn(getPrisma().document, "findMany")
-      .mockRejectedValueOnce(failure);
+    const db = getPrisma();
+    const reader = (await openProjectRepo(project.id))!;
+    const readBlobs = reader.readBlobsAt;
+    let savedHead: string | undefined;
+    const scan = vi
+      .spyOn(reader, "readBlobsAt")
+      .mockImplementationOnce(async (...args) => {
+        const blobs = await readBlobs(...args);
+        const current = await caller.document.get({
+          projectId: project.id,
+          documentId: local.id,
+        });
+        const saved = await caller.document.update({
+          projectId: project.id,
+          documentId: local.id,
+          baseCommitSha: current.baseCommitSha,
+          content: {
+            kind: "markdown",
+            contentJson: PARA("Saved during document scan"),
+          },
+          changeSummary: "Saved during document scan",
+        });
+        savedHead = saved.headCommitSha;
+        return blobs;
+      });
+    const open = vi
+      .spyOn(gitStore, "openProjectRepo")
+      .mockResolvedValueOnce(reader);
+    const send = queue.send.bind(queue);
+    vi.spyOn(queue, "send").mockImplementation(async (name, data, options) => {
+      if (name === "project.git-rebuild") throw new Error("queue unavailable");
+      return send(name, data, options);
+    });
+    setJobQueueForTests(queue);
     try {
       await pullProjectGitRemote({
         db: getPrisma(),
@@ -3069,7 +3145,8 @@ describe("pullProjectGitRemote (job)", () => {
         }),
       });
     } finally {
-      spy.mockRestore();
+      open.mockRestore();
+      setJobQueueForTests(null);
     }
 
     const row = await getPrisma().projectGitRemote.findUniqueOrThrow({
@@ -3078,6 +3155,141 @@ describe("pullProjectGitRemote (job)", () => {
     expect(row.lastPullErrorCode).toBeNull();
     expect(row.lastPullSha).not.toBeNull();
     expect(row.leaseToken).toBeNull();
+    expect(scan).toHaveBeenCalled();
+    expect(savedHead).toEqual(await reader.resolveHead());
+    expect(savedHead).not.toBe(row.lastPullSha);
+    expect(
+      await db.dataTable.findUnique({ where: { id: remoteTableId } }),
+    ).not.toBeNull();
+    expect(
+      await db.document.findUnique({ where: { id: remoteDocId } }),
+    ).toBeNull();
+    const recoveredQueue = new FakeJobQueue();
+    await discoverProjectGitRemotes({ db, queue: recoveredQueue });
+    expect(
+      recoveredQueue.jobs.filter((job) => job.name === "project.git-rebuild"),
+    ).toEqual([
+      {
+        name: "project.git-rebuild",
+        data: {
+          projectId: project.id,
+          kind: "document",
+          token: expect.any(String),
+        },
+      },
+    ]);
+    const repair = recoveredQueue.jobs.find(
+      (job) => job.name === "project.git-rebuild",
+    )!;
+    setJobQueueForTests(recoveredQueue);
+    try {
+      await runProjectGitProjectionRepair(db, repair.data);
+    } finally {
+      setJobQueueForTests(null);
+    }
+    expect(
+      await db.document.findUnique({ where: { id: remoteDocId } }),
+    ).toMatchObject({
+      path: "guide.md",
+    });
+    expect(
+      await db.document.findUnique({ where: { id: local.id } }),
+    ).toMatchObject({
+      excerpt: expect.stringContaining("Saved during document scan"),
+    });
+    expect(
+      await db.project.findUnique({ where: { id: project.id } }),
+    ).toMatchObject({
+      gitDocumentRepairToken: null,
+      gitTableRepairToken: null,
+    });
+  });
+
+  it("admits pull publication and a concurrent machine-key policy write in repository-first order", async () => {
+    const { owner, project } = await ownerProject(
+      "pull-policy-lock",
+      "Pull Lock Project",
+    );
+    await pullFixture(project.id);
+    const queue = new FakeJobQueue();
+    const payload = await requestPull(project.id, owner, queue);
+    const db = getPrisma();
+    const { bareDirectory, remoteHead } = await buildRemoteRepo(
+      async (source) => {
+        await writeFile(path.join(source, "project.json"), "{}\n");
+      },
+    );
+    const held = deferred<number>();
+    const release = deferred<void>();
+    const membership = db.$transaction(
+      async (tx) => {
+        await lockProjectMembershipWrites(tx, project.id);
+        const [backend] = await tx.$queryRaw<
+          Array<{ pid: number }>
+        >`SELECT pg_backend_pid() AS pid`;
+        held.resolve(backend!.pid);
+        await release.promise;
+      },
+      { timeout: 20_000 },
+    );
+    const pid = await held.promise;
+    const pull = pullProjectGitRemote({
+      db,
+      payload,
+      ring: testEncryptionKeys(),
+      fetch: async () => ({
+        bareDirectory,
+        remoteHead,
+        knownHosts: null,
+        dispose: async () => undefined,
+      }),
+    });
+    let policy: ReturnType<typeof createProjectApiKey> | undefined;
+    try {
+      await vi.waitFor(async () => {
+        const [waiting] = await db.$queryRaw<Array<{ present: boolean }>>`
+          SELECT EXISTS (
+            SELECT 1 FROM pg_locks WHERE NOT granted AND locktype = 'advisory'
+              AND ${pid} = ANY(pg_blocking_pids(pg_locks.pid))
+          ) AS present`;
+        expect(waiting?.present).toBe(true);
+      });
+      const repoKey = projectRepoLockKey(project.id);
+      const [repo] = await db.$queryRaw<Array<{ acquired: boolean }>>`
+        SELECT pg_try_advisory_xact_lock(${repoKey}::bigint) AS acquired`;
+      expect(repo?.acquired).toBe(false);
+      const admission = deferred<void>();
+      const write = projectRepo.withProjectRepo;
+      const writer = vi
+        .spyOn(projectRepo, "withProjectRepo")
+        .mockImplementationOnce((id, fn) => {
+          admission.resolve();
+          return write(id, fn);
+        });
+      policy = createProjectApiKey(db, securityContextFor(owner), {
+        projectId: project.id,
+        name: "Concurrent policy",
+        grants: [{ kind: "documentFolder", root: true, actions: ["read"] }],
+        rateLimitPerMinute: 60,
+      });
+      try {
+        await Promise.race([admission.promise, policy]);
+      } finally {
+        writer.mockRestore();
+      }
+    } finally {
+      release.resolve();
+      await Promise.all([membership, pull, policy]);
+    }
+    expect(
+      await db.projectGitRemote.findUnique({
+        where: { projectId: project.id },
+      }),
+    ).toMatchObject({
+      lastPullErrorCode: null,
+      lastPullSha: expect.any(String),
+    });
+    expect((await policy)?.key.name).toBe("Concurrent policy");
   });
 
   it("preserves lastPushedSha on a no-op pull but still advances lastPullAt (M6)", async () => {

@@ -480,7 +480,8 @@ src>` can become an image without width and unknown attributes are dropped.
   `renderMathHtml`, which turns a renderer failure into one error span; `maxSize` caps
   positive sizes only, so both stylesheets clip formulas to their wrapper.
 
-- PDF export renders the saved revision only: `@tiptap/static-renderer` markup
+- PDF export renders one saved repository snapshot, including referenced images
+  from that SHA. `@tiptap/static-renderer` markup
   with `image` (data URI or "Image unavailable" box), `mermaid` (rendered in
   Chromium by the inlined bundle; a failing diagram prints its source) and
   `crossref` (current title, else stored label) mappings, A4 with page numbers,
@@ -491,7 +492,8 @@ src>` can become an image without width and unknown attributes are dropped.
   `mermaidBundleSource` reads the bundle by path from the app's `node_modules`
   (see `weaver-env-deploy`); only a production build shows a break there.
 
-- A document archive (`createDocumentArchive`) pins one `HEAD` and holds
+- A document archive (`createDocumentArchive`) uses the HEAD resolved with
+  document identity and path and holds
   `<slug>.md` plus everything under `<slug>.assets/` at the archive root, with
   no wrapper directory, under the folder archive's limits.
 - ZIP import is reviewed in the browser and written per document.
@@ -510,8 +512,8 @@ src>` can become an image without width and unknown attributes are dropped.
   `folder.tree`; the server never guesses a replace target. The route has no
   upload rate limit: a folder ZIP sends one request per document, and the
   shared per-minute upload counter would stall it and block image uploads.
-- Downloads read committed state only. The Markdown download is the blob
-  `getDocument` resolved (its path and last-touching commit), unparsed and
+- Downloads read committed state only. The Markdown download is the blob at
+  the path and snapshot SHA `getDocument` resolved, unparsed and
   unchanged. A folder archive pins one `HEAD`, lists its blobs once, and holds
   every `.md` file and everything inside a `*.assets` directory beneath the
   folder, under one root directory named after the folder slug (the slugified
@@ -1046,8 +1048,11 @@ Owners can also pull the remote branch's existing content in
   collisions retain the collision-safe local copy. A fast-forward adopts the remote
   snapshot. A changed divergent pull disables automatic pushes and advances the
   configuration revision; an Owner must explicitly re-enable after review. Serialize
-  merge/outcome with the remote-settings advisory lock, without taking a Project
-  row write lock before the repo lock (document projection writes need its FK lock).
+  merge/outcome by taking the repository lock, the membership advisory lock
+  shared with machine-key policy writes, and the remote row lock in that order.
+  Prepare commit objects without advancing live HEAD, then compare and update
+  the ref once against the original HEAD. Recover the worktree to the committed
+  state if an intermediate operation fails.
 - A fetched branch whose tree holds a symlink (`120000`) or gitlink (`160000`)
   entry is rejected with `UNSUPPORTED_REMOTE_CONTENT` before any worktree reset
   (`repo.listTreeEntries`); the worktree containment check is the backstop for
@@ -1185,6 +1190,8 @@ Project machine writes use a separate content author (`services/contentAuthor.ts
 ## Review hardening invariants
 
 ZIP exports validate file, directory and wrapper paths at emission. ZIP Replace requires the collision preview revision under the repo lock. Historical restore copies referenced own-image blobs within image/count/aggregate limits. Create recovery inspects all changed canonical paths and verifies the operation-derived document ID.
+
+Moves, image uploads, and deletes bind the projected path to the requested identity in the committed header under the writer lock. Single and folder review stamping authorize the committed reviewer assignments against current membership and group members. Due-list queries continue to use projected review metadata.
 
 ## Save as page
 

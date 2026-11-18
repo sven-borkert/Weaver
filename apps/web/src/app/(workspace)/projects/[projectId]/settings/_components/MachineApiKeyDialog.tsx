@@ -113,6 +113,7 @@ export function MachineApiKeyDialog({
 }) {
   const utils = api.useUtils();
   const [open, setOpen] = useState(false);
+  const [draftKey, setDraftKey] = useState<KeySummary>();
   const [secret, setSecret] = useState<{
     value: string;
     grants: KeySummary["grants"];
@@ -122,7 +123,7 @@ export function MachineApiKeyDialog({
   const known = useMemo(
     () =>
       new Map<string, GrantTargetDisplay>(
-        (existing?.grants ?? []).map((grant) => [
+        (draftKey?.grants ?? []).map((grant) => [
           grantIdentity(
             grant.root
               ? { kind: grant.kind, root: true }
@@ -135,7 +136,7 @@ export function MachineApiKeyDialog({
           },
         ]),
       ),
-    [existing],
+    [draftKey],
   );
   const {
     register,
@@ -163,6 +164,7 @@ export function MachineApiKeyDialog({
 
   function close() {
     reset(defaults);
+    setDraftKey(undefined);
     setOpen(false);
   }
 
@@ -193,8 +195,12 @@ export function MachineApiKeyDialog({
           }),
     };
     try {
-      if (existing) {
-        await update.mutateAsync({ ...policy, keyId: existing.id });
+      if (draftKey) {
+        await update.mutateAsync({
+          ...policy,
+          keyId: draftKey.id,
+          expectedPolicyVersion: draftKey.policyVersion,
+        });
         toast.success("Project API key updated");
         close();
         if (!(await refreshList()))
@@ -208,10 +214,12 @@ export function MachineApiKeyDialog({
       toast.success("Project API key created");
       await refreshList();
     } catch (error) {
-      const field =
+      const data =
         error instanceof TRPCClientError
-          ? (error.data as { field?: string } | undefined)?.field
+          ? (error.data as { field?: string; code?: string } | undefined)
           : undefined;
+      if (data?.code === "CONFLICT") await refreshList();
+      const field = data?.field;
       if (error instanceof TRPCClientError && field && SERVER_FIELDS[field])
         applyTrpcErrorToForm(error, (name, err) =>
           setError(SERVER_FIELDS[name]!, err),
@@ -225,7 +233,9 @@ export function MachineApiKeyDialog({
     }
   }
 
-  const title = existing ? `Edit ${existing.name}` : "Create project API key";
+  const keyName = draftKey?.name ?? existing?.name;
+  const title =
+    keyName === undefined ? "Create project API key" : `Edit ${keyName}`;
   return (
     <>
       <Dialog
@@ -234,6 +244,7 @@ export function MachineApiKeyDialog({
           if (pending) return;
           if (!next) return close();
           reset(defaults);
+          setDraftKey(existing);
           setOpen(true);
         }}
       >

@@ -1329,6 +1329,57 @@ describe("mark a folder reviewed", () => {
     expect(row.reviewedById).toBe(f.viewer.id);
   });
 
+  it("uses the committed reviewer reassignment for preview and stamping", async () => {
+    const f = await markFixture();
+    const head = await projectRepo.withProjectRepo(
+      f.project.id,
+      async (repo) => {
+        const { meta, body } = parseDocumentFile(
+          await repo.readFileFromWorktree(f.other.path),
+          "markdown",
+        );
+        await repo.writeFileAtomic(
+          f.other.path,
+          composeDocumentFile(
+            {
+              ...meta,
+              review: {
+                ...meta.review!,
+                reviewers: [{ type: "user", id: f.editor.id, name: "Editor" }],
+              },
+            },
+            body,
+            "markdown",
+          ),
+        );
+        return repo.commitAll("pull fixture: reassign reviewer", {
+          name: f.owner.name,
+          email: f.owner.email,
+          userId: f.owner.id,
+        });
+      },
+    );
+    const viewer = actorFor(f.viewer);
+    expect(
+      (await previewFolderMarkReviewed(f.db, f.target, viewer))
+        .eligibleDocumentCount,
+    ).toBe(0);
+    expect(
+      await markFolderReviewed(
+        f.db,
+        { ...f.target, expectedHeadCommitSha: head },
+        viewer,
+      ),
+    ).toMatchObject({ headCommitSha: head, changedDocumentCount: 0 });
+    expect(
+      await markFolderReviewed(
+        f.db,
+        { ...f.target, expectedHeadCommitSha: head },
+        actorFor(f.editor),
+      ),
+    ).toMatchObject({ changedDocumentCount: 1 });
+  });
+
   it("writes nothing when no document is the actor's to review", async () => {
     const f = await markFixture();
     const editor = actorFor(f.editor);

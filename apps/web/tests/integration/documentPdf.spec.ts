@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, it } from "vitest";
 import type { Browser } from "playwright-core";
 import { readPdfPages } from "@weaver/artifact-readers/pdf";
+import { withProjectRepo } from "@weaver/git-store";
 import {
   createPdfRenderer,
   launchChromium,
@@ -276,7 +277,7 @@ describe("GET /api/documents/{documentId}/pdf", () => {
     expect(pages.pages[0]!.text).not.toContain("Syntax error in text");
   });
 
-  it("refuses images above the byte cap", async () => {
+  it("counts the current image against the byte cap after an asset-only commit", async () => {
     const { db, project, actor } = await fixture("bytes");
     const created = await createDocument(
       db,
@@ -320,12 +321,19 @@ describe("GET /api/documents/{documentId}/pdf", () => {
       },
       actor,
     );
+    await withProjectRepo(project.id, async (repo) => {
+      await repo.writeBinaryFileAtomic(
+        stored.path,
+        Buffer.concat([ONE_PIXEL_PNG, Buffer.from([0])]),
+      );
+      await repo.commitAll("replace saved image", actor);
+    });
     await expect(
       exportDocumentPdf(
         db,
         { projectId: project.id, documentId: created.id },
         actor,
-        { maxImageBytes: ONE_PIXEL_PNG.length - 1 },
+        { maxImageBytes: ONE_PIXEL_PNG.length },
       ),
     ).rejects.toBeInstanceOf(PdfLimitError);
   });

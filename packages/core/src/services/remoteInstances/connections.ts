@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PrismaClient } from "@weaver/db/client";
+import type { Prisma, PrismaClient } from "@weaver/db/client";
 import { CoreError } from "../../errors";
 import { generatePkce, randomState } from "../../remotes/pkce";
 import { remoteJson, RemoteHttpError } from "../../remotes/http";
@@ -16,7 +16,7 @@ import {
   type EncryptionKeyRing,
 } from "../../security/encryption";
 import type { UserSecurityContext } from "../../security/context";
-import { fetchForRemote, REMOTE_INSTANCE_SELECT } from "./registry";
+import { fetchForRemote } from "./registry";
 import type { RemoteRuntimeDeps } from "./types";
 
 export const REMOTE_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
@@ -81,11 +81,29 @@ const reconnect = (name: string) =>
     field: "remoteInstanceId",
   });
 
-async function requireEnabledRemote(db: PrismaClient, id: string) {
-  const remote = await db.remoteInstance.findUnique({
-    where: { id },
-    select: REMOTE_INSTANCE_SELECT,
-  });
+type RemoteRef = Readonly<{ id: string; name: string; baseUrl: string }>;
+type RemoteEndpoint = RemoteRef & {
+  enabled: boolean;
+  endpointGeneration: number;
+};
+
+const ENDPOINT_SELECT = {
+  id: true,
+  name: true,
+  baseUrl: true,
+  enabled: true,
+  endpointGeneration: true,
+} satisfies Prisma.RemoteInstanceSelect;
+
+async function lockRemoteEndpoint(tx: Prisma.TransactionClient, id: string) {
+  const [remote] = await tx.$queryRaw<RemoteEndpoint[]>`
+    SELECT "id", "name", "baseUrl", "enabled", "endpointGeneration"
+    FROM "RemoteInstance" WHERE "id" = ${id}::uuid FOR SHARE
+  `;
+  return remote;
+}
+
+function requireEnabledRemote(remote: RemoteEndpoint | undefined) {
   if (!remote) throw new CoreError("NOT_FOUND", "Remote instance not found");
   if (!remote.enabled)
     throw new CoreError(
@@ -95,31 +113,64 @@ async function requireEnabledRemote(db: PrismaClient, id: string) {
   return remote;
 }
 
+function isCurrentEndpoint(
+  current: RemoteEndpoint | null | undefined,
+  expected: RemoteEndpoint,
+) {
+  return (
+    current?.enabled &&
+    current.endpointGeneration === expected.endpointGeneration &&
+    current.baseUrl === expected.baseUrl
+  );
+}
+
+function fetchForEndpoint(
+  deps: RemoteRuntimeDeps,
+  remote: RemoteEndpoint,
+  onChange: () => CoreError = () => reconnect(remote.name),
+): typeof fetch {
+  const fetchImpl = fetchForRemote(deps, remote.baseUrl);
+  return async (input, init) => {
+    const current = await deps.db.remoteInstance.findUnique({
+      where: { id: remote.id },
+      select: ENDPOINT_SELECT,
+    });
+    if (!isCurrentEndpoint(current, remote)) throw onChange();
+    return fetchImpl(input, init);
+  };
+}
+
 export async function beginRemoteConnection(
   deps: RemoteRuntimeDeps,
   actor: UserSecurityContext,
   input: { remoteInstanceId: string },
 ): Promise<{ authorizeUrl: string }> {
-  const remote = await requireEnabledRemote(deps.db, input.remoteInstanceId);
   const now = deps.now();
-  await deps.db.remoteInstanceAuthorization.deleteMany({
-    where: {
-      OR: [
-        { expiresAt: { lt: now } },
-        { userId: actor.userId, remoteInstanceId: remote.id },
-      ],
-    },
-  });
   const { verifier, challenge } = generatePkce();
   const state = randomState();
-  await deps.db.remoteInstanceAuthorization.create({
-    data: {
-      state,
-      remoteInstanceId: remote.id,
-      userId: actor.userId,
-      codeVerifier: verifier,
-      expiresAt: new Date(now.getTime() + REMOTE_AUTHORIZATION_TTL_MS),
-    },
+  const remote = await deps.db.$transaction(async (tx) => {
+    const remote = requireEnabledRemote(
+      await lockRemoteEndpoint(tx, input.remoteInstanceId),
+    );
+    await tx.remoteInstanceAuthorization.deleteMany({
+      where: {
+        OR: [
+          { expiresAt: { lt: now } },
+          { userId: actor.userId, remoteInstanceId: remote.id },
+        ],
+      },
+    });
+    await tx.remoteInstanceAuthorization.create({
+      data: {
+        state,
+        remoteInstanceId: remote.id,
+        endpointGeneration: remote.endpointGeneration,
+        userId: actor.userId,
+        codeVerifier: verifier,
+        expiresAt: new Date(now.getTime() + REMOTE_AUTHORIZATION_TTL_MS),
+      },
+    });
+    return remote;
   });
   const url = new URL(remoteEndpoints(remote.baseUrl).authorize);
   url.search = new URLSearchParams({
@@ -161,26 +212,30 @@ async function tokenRequest(
   deps: RemoteRuntimeDeps,
   remote: { baseUrl: string },
   form: Record<string, string>,
+  fetchImpl = fetchForRemote(deps, remote.baseUrl),
 ): Promise<TokenResponse> {
   const endpoints = remoteEndpoints(remote.baseUrl);
-  const body = await remoteJson<unknown>(
-    fetchForRemote(deps, remote.baseUrl),
-    endpoints.token,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/x-www-form-urlencoded",
-        accept: "application/json",
-      },
-      body: new URLSearchParams({
-        ...form,
-        client_id: remoteClientId(deps.selfBaseUrl),
-        resource: endpoints.resource,
-      }).toString(),
+  const body = await remoteJson<unknown>(fetchImpl, endpoints.token, {
+    method: "POST",
+    headers: {
+      "content-type": "application/x-www-form-urlencoded",
+      accept: "application/json",
     },
-  );
+    body: new URLSearchParams({
+      ...form,
+      client_id: remoteClientId(deps.selfBaseUrl),
+      resource: endpoints.resource,
+    }).toString(),
+  });
   return readTokenResponse(body);
 }
+
+const outdatedAuthorization = () =>
+  new CoreError(
+    "BAD_REQUEST",
+    "This sign-in attempt is no longer current; connect again",
+    { field: "state" },
+  );
 
 export async function completeRemoteConnection(
   deps: RemoteRuntimeDeps,
@@ -206,16 +261,31 @@ export async function completeRemoteConnection(
       { field: "state" },
     );
   }
-  const remote = await requireEnabledRemote(deps.db, pending.remoteInstanceId);
+  const remote = await deps.db.remoteInstance.findUnique({
+    where: { id: pending.remoteInstanceId },
+    select: ENDPOINT_SELECT,
+  });
+  if (
+    !remote?.enabled ||
+    remote.endpointGeneration !== pending.endpointGeneration
+  )
+    throw outdatedAuthorization();
+  const fetchImpl = fetchForEndpoint(deps, remote, outdatedAuthorization);
   let token: TokenResponse;
   try {
-    token = await tokenRequest(deps, remote, {
-      grant_type: "authorization_code",
-      code: input.code,
-      redirect_uri: remoteEndpoints(deps.selfBaseUrl).callback,
-      code_verifier: pending.codeVerifier,
-    });
+    token = await tokenRequest(
+      deps,
+      remote,
+      {
+        grant_type: "authorization_code",
+        code: input.code,
+        redirect_uri: remoteEndpoints(deps.selfBaseUrl).callback,
+        code_verifier: pending.codeVerifier,
+      },
+      fetchImpl,
+    );
   } catch (error) {
+    if (error instanceof CoreError) throw error;
     throw new CoreError(
       "BAD_REQUEST",
       error instanceof RemoteHttpError
@@ -226,7 +296,7 @@ export async function completeRemoteConnection(
   }
   // Only labels the connection; a failed lookup leaves the names empty.
   const whoami = await remoteJson<{ userId?: unknown; name?: unknown }>(
-    fetchForRemote(deps, remote.baseUrl),
+    fetchImpl,
     remoteEndpoints(remote.baseUrl).transfer("whoami"),
     {
       headers: { authorization: `Bearer ${token.access_token}` },
@@ -239,6 +309,18 @@ export async function completeRemoteConnection(
     refreshToken: token.refresh_token ?? null,
   };
   await deps.db.$transaction(async (tx) => {
+    if (!isCurrentEndpoint(await lockRemoteEndpoint(tx, remote.id), remote))
+      throw outdatedAuthorization();
+    const consumed = await tx.remoteInstanceAuthorization.deleteMany({
+      where: {
+        state: input.state,
+        userId: input.userId,
+        remoteInstanceId: remote.id,
+        endpointGeneration: remote.endpointGeneration,
+        expiresAt: { gte: deps.now() },
+      },
+    });
+    if (!consumed.count) throw outdatedAuthorization();
     const existing = await tx.remoteInstanceConnection.findUnique({
       where: {
         remoteInstanceId_userId: {
@@ -268,13 +350,11 @@ export async function completeRemoteConnection(
         data: {
           id,
           remoteInstanceId: remote.id,
+          endpointGeneration: remote.endpointGeneration,
           userId: input.userId,
           ...data,
         },
       });
-    await tx.remoteInstanceAuthorization.delete({
-      where: { state: input.state },
-    });
   });
   return { remoteInstanceId: remote.id, remoteName: remote.name };
 }
@@ -285,16 +365,22 @@ export async function completeRemoteConnection(
  */
 async function refreshConnectionTokens(
   deps: RemoteRuntimeDeps,
-  remote: { name: string; baseUrl: string },
+  remote: RemoteEndpoint,
   connectionId: string,
   now: Date,
 ): Promise<Tokens> {
   return deps.db.$transaction(
     async (tx) => {
+      if (!isCurrentEndpoint(await lockRemoteEndpoint(tx, remote.id), remote))
+        throw reconnect(remote.name);
       await tx.$queryRaw`
         SELECT "id" FROM "RemoteInstanceConnection" WHERE "id" = ${connectionId}::uuid FOR UPDATE`;
       const row = await tx.remoteInstanceConnection.findUnique({
-        where: { id: connectionId },
+        where: {
+          id: connectionId,
+          remoteInstanceId: remote.id,
+          endpointGeneration: remote.endpointGeneration,
+        },
       });
       if (!row) throw reconnect(remote.name);
       const current = openTokens(deps.ring, row);
@@ -339,8 +425,6 @@ async function refreshConnectionTokens(
   );
 }
 
-type RemoteRef = { id: string; name: string; baseUrl: string };
-
 /** `onError` receives token-refresh and `fn` failures together with the remote they concern. */
 export async function withRemoteToken<T>(
   deps: RemoteRuntimeDeps,
@@ -352,14 +436,20 @@ export async function withRemoteToken<T>(
   ) => Promise<T>,
   onError?: (error: unknown, remote: RemoteRef) => never,
 ): Promise<T> {
-  const remote = await requireEnabledRemote(deps.db, input.remoteInstanceId);
-  const row = await deps.db.remoteInstanceConnection.findUnique({
-    where: {
-      remoteInstanceId_userId: {
-        remoteInstanceId: remote.id,
-        userId: input.userId,
+  const { remote, row } = await deps.db.$transaction(async (tx) => {
+    const remote = requireEnabledRemote(
+      await lockRemoteEndpoint(tx, input.remoteInstanceId),
+    );
+    const row = await tx.remoteInstanceConnection.findUnique({
+      where: {
+        remoteInstanceId_userId: {
+          remoteInstanceId: remote.id,
+          userId: input.userId,
+        },
+        endpointGeneration: remote.endpointGeneration,
       },
-    },
+    });
+    return { remote, row };
   });
   if (!row) throw reconnect(remote.name);
   const now = deps.now();
@@ -373,7 +463,7 @@ export async function withRemoteToken<T>(
       row.accessTokenExpiresAt.getTime() - now.getTime() < REFRESH_LEEWAY_MS
         ? await refreshConnectionTokens(deps, remote, row.id, now)
         : openTokens(deps.ring, row);
-    return fn(tokens.accessToken, ref, fetchForRemote(deps, remote.baseUrl));
+    return fn(tokens.accessToken, ref, fetchForEndpoint(deps, remote));
   };
   const result = await (onError
     ? call().catch((error: unknown) => onError(error, ref))

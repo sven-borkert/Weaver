@@ -13,7 +13,7 @@ metadata, and the user's landing route. Change those boundaries together.
 | Path                                                 | Responsibility                                                            |
 | ---------------------------------------------------- | ------------------------------------------------------------------------- |
 | `packages/core/src/services/projects.ts`             | Project create/update/soft delete and initial repository ownership        |
-| `packages/core/src/services/personalWorkspace.ts`    | Ensure one personal workspace; repair membership and clean up race losers |
+| `packages/core/src/services/personalWorkspace.ts`    | Ensure one personal workspace and repair missing ownership membership     |
 | `packages/core/src/services/landingProject.ts`       | Record last-opened project and choose the landing destination             |
 | `packages/core/src/services/projectMembers.ts`       | Membership writes, project-row locking, grantable ranks, last-Owner guard |
 | `packages/core/src/services/projectMetadata.ts`      | Synchronize root `project.json` from database truth                       |
@@ -34,17 +34,18 @@ primitives, and `weaver-database` when changing schema or migrations.
   evidence that its storage can be deleted.
 - Project reads use `notDeleted` and membership checks. Global Admin is not a
   content superuser. Soft deletion rechecks Owner access under the repository
-  lock and pauses active scheduled tasks with `nextRunAt: null`. Administrative
+  lock, conditionally updates live projects with no personal owner, and pauses
+  active scheduled tasks with `nextRunAt: null` in the same transaction. Administrative
   project views currently inspect live projects; they do not implement a
   restoration or purge workflow.
 - The public `project.list` response is capped at 1,000 projects in updated/id
   order. Internal membership and assistant/search scope enumeration keeps its
   complete authorized set; never apply the public list cap to authorization.
 - `personalOwnerId` uniqueness also covers soft-deleted rows. Clear a deleted
-  holder's ownership before claiming a replacement. The advisory transaction
-  ends before `createProject`; the later unique ownership claim chooses the
-  winner. Its P2002 path returns the winner and cleans up only its own fresh
-  project, organization, and repository under the project lock.
+  holder's ownership before claiming a replacement. The creation transaction
+  holds a per-user advisory lock through project publication and sets
+  `personalOwnerId` together with the Owner membership. A waiting caller reuses
+  the active workspace.
 - `ensurePersonalWorkspace` also repairs a missing Owner membership, reviewer
   links, and `project.json`. Personal workspaces cannot be deleted, and their
   personal Owner cannot be demoted or removed.

@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PrismaClient } from "@weaver/db/client";
 import type { Capability, UserSecurityContext } from "../security/context";
-import { createProject, listProjectsForUser } from "./projects";
+import {
+  createProject,
+  listProjectsForUser,
+  softDeleteProject,
+} from "./projects";
+
+vi.mock("./projectRepo", () => ({
+  withProjectRepo: async (_projectId: string, run: () => Promise<unknown>) =>
+    run(),
+}));
 
 function restrictedActor(): UserSecurityContext {
   return Object.freeze({
@@ -22,6 +31,33 @@ describe("createProject", () => {
     await expect(
       createProject(db, restrictedActor(), { name: "New Project" }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("softDeleteProject", () => {
+  it("rechecks personal workspace protection at deletion", async () => {
+    const actor = {
+      ...restrictedActor(),
+      allowedProjectIds: "all-accessible" as const,
+    };
+    const project = { organization: { members: [{ role: "owner" }] } };
+    const findFirst = vi
+      .fn()
+      .mockResolvedValueOnce({ ...project, personalOwnerId: null })
+      .mockResolvedValue({ ...project, personalOwnerId: actor.userId });
+    const update = vi.fn();
+    const updateMany = vi.fn();
+    const session = { project: { findFirst, update, updateMany } };
+    const db = {
+      ...session,
+      $transaction: (run: (tx: typeof session) => unknown) => run(session),
+    } as unknown as PrismaClient;
+    await expect(softDeleteProject(db, "p1", actor)).rejects.toMatchObject({
+      code: "PRECONDITION_FAILED",
+      message: "Personal workspaces cannot be deleted",
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(updateMany).not.toHaveBeenCalled();
   });
 });
 

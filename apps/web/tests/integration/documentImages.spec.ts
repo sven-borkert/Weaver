@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addMembership,
@@ -11,6 +12,10 @@ import {
 } from "./_harness";
 import { getSessionUser, type SessionUser } from "~/server/auth";
 import { openProjectRepo, withProjectRepo } from "@weaver/git-store";
+import {
+  composeDocumentFile,
+  parseDocumentFile,
+} from "@weaver/core/documents/frontmatter";
 import {
   createDocument,
   deleteDocument,
@@ -399,6 +404,80 @@ describe("storeDocumentImage and readProjectImage", () => {
 });
 
 describe("document lifecycle with images", () => {
+  it("leaves a replacement document and its assets intact while the requested path is stale", async () => {
+    const db = getPrisma();
+    const { project, actor } = await projectWithEditor("stale-path");
+    const selected = await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Plan",
+        content: {
+          kind: "markdown",
+          contentJson: IMAGE_DOC("plan.assets/chart.png"),
+        },
+      },
+      actor,
+    );
+    await createFolder(
+      db,
+      { projectId: project.id, parentPath: [], name: "New" },
+      actor,
+    );
+    const incomingId = randomUUID();
+    const head = await withProjectRepo(project.id, async (repo) => {
+      const original = parseDocumentFile(
+        await repo.readFileFromWorktree(selected.path),
+        "markdown",
+      );
+      await repo.mv(selected.path, "plan-2.md");
+      await repo.writeFileAtomic(
+        selected.path,
+        composeDocumentFile(
+          { ...original.meta, id: incomingId, title: "Incoming Plan" },
+          "Incoming notes\n",
+          "markdown",
+        ),
+      );
+      await repo.writeBinaryFileAtomic("plan.assets/chart.png", PNG_1X1);
+      return repo.commitAll("merge fixture", actor);
+    });
+    const input = { projectId: project.id, documentId: selected.id };
+    const upload = await storeDocumentImage(
+      db,
+      { ...input, fileName: "other.gif", bytes: GIF_1X1 },
+      actor,
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    const move = await moveDocument(
+      db,
+      { ...input, folderPath: ["new"] },
+      actor,
+    ).then(
+      () => null,
+      (error: unknown) => error,
+    );
+
+    const repo = (await openProjectRepo(project.id))!;
+    expect(await repo.resolveHead()).toBe(head);
+    expect(await repo.listTrackedFiles()).toContain("plan.assets/chart.png");
+    expect(
+      (await repo.readCommittedBlobAt(head, "plan.assets/chart.png", 1024))
+        ?.bytes,
+    ).toEqual(PNG_1X1);
+    expect(
+      parseDocumentFile(
+        (await repo.readCommittedFile(selected.path))!.content,
+        "markdown",
+      ).meta.id,
+    ).toBe(incomingId);
+    expect(upload).toMatchObject({ code: "CONFLICT" });
+    expect(move).toMatchObject({ code: "CONFLICT" });
+  });
+
   async function docWithImage(suffix: string, folderPath: string[] = []) {
     const db = getPrisma();
     const ctx = await projectWithEditor(suffix);

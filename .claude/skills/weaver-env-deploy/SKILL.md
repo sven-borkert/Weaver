@@ -305,8 +305,16 @@ cache Corepack in world-readable `/usr/local/share/corepack` during the build.
 PgBoss uses 2 publisher/4 worker connections; with Prisma 10 and Git locks 4 the
 four-process maximum is 68 connections, against Compose Postgres 150. Leave room
 for migrations, backup, diagnostics and administrative connections; each replica
-adds its own pools. CI serializes releases, refuses existing version aliases,
-updates cache aliases only from main, and executes the web lifecycle guard.
+adds its own pools. CI serializes releases and stages all four smoke-tested
+runtime images under `weaver-ci-stage-<full SHA>`. A `weaver-ci-release-<full SHA>`
+manifest in the tools repository binds the commit, base path and exact registry
+digests before public tag publication. Retries resume from those digests without
+rebuilding the frozen runtime images. Keep stage and release tags available for
+retries. All immutable runtime aliases must match before `latest` moves. The
+`weaver-ci-latest-<full SHA>` marker prevents completed releases from moving
+`latest` again. Runtime digest inspection and alias copies use the Buildx plugin
+bundled in both CI runners. CI updates cache aliases only from main and executes
+the web lifecycle guard.
 
 Published images carry no agent instructions, internal docs, deploy files or
 Git data. `.dockerignore` excludes them from the context; in

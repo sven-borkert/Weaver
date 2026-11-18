@@ -12,6 +12,7 @@ import {
   pullProjectGitRemote,
   pushProjectGitRemote,
 } from "../services/projectGitRemoteJobs";
+import { runProjectGitProjectionRepair } from "../services/projectGitProjectionRepairs";
 import { reconcileExternalMcpState } from "../services/externalMcp/retention";
 import type { PrismaClient } from "@weaver/db/client";
 import { parseServerEnv } from "@weaver/config/server";
@@ -593,6 +594,16 @@ export async function registerKnowledgeJobHandlers(input: {
           payload,
           signal: execution.signal,
         });
+      }),
+    );
+    await input.queue.work(
+      "project.git-rebuild",
+      instrumentedJob("project.git-rebuild", async (payload, execution) => {
+        await runProjectGitProjectionRepair(
+          input.db,
+          payload,
+          execution.signal,
+        );
       }),
     );
     await input.queue.schedule("project.git-sync", "* * * * *");

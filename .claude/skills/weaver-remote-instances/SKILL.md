@@ -43,18 +43,22 @@ outbound network policy.
   generation. Receiver authentication uses `resolveMcpPrincipal`; a transfer
   route must not invent a new audience, trust arbitrary user IDs, or bypass
   consent, bans, password-change restrictions or project access.
-- Authorization state belongs to the signed-in initiating user and expires.
-  Preserve callback-user and expiry checks when changing error navigation.
-  Registration alone does not connect every user or grant project access.
+- Authorization state belongs to the initiating user and current endpoint
+  generation. Preserve the user and expiry checks during callback. Base URL
+  replacement advances the generation and deletes pending state and connections.
+  Name and enabled changes preserve the generation. Registration alone grants no
+  user connection or project access.
 
 ## Token lifetime and concurrency
 
 - Store per-user tokens encrypted with the versioned ring and
   `remote-instance-connection` AAD bound to the connection ID. Startup checks and
   rotation include these payloads; do not expose them in registry/account DTOs.
-- Refresh locks the connection row and rereads tokens before contacting the
-  peer. A parallel sender may already have refreshed; reusing its old refresh
-  token can trigger the peer's theft detection and revoke the grant family.
+- Token resolution reads the peer and its credential under a shared endpoint
+  lock. Each outward request checks that its captured generation is still current
+  before dispatch. Refresh holds the endpoint lock, locks the connection row and
+  rereads tokens before contacting the peer. Reusing a refresh token rotated by
+  another sender can revoke the grant family.
 - For HTTP failures during refresh, peer 400/401 refusal requires reconnect.
   An unreachable peer remains a transport failure; it must not silently
   disconnect the user. A transfer endpoint's 401 also requires reconnect.
@@ -62,10 +66,9 @@ outbound network policy.
   temporary failures omit that field. The send dialog relies on this field,
   not just the error status or wording.
 - Secret rotation uses ciphertext/version compare-and-swap so it cannot
-  overwrite tokens refreshed concurrently. Callback atomically stores tokens
-  and consumes authorization state; disconnect deletes connection/pending state.
-  Neither has a general shared lock with callback/refresh. Preserve their actual
-  transactions rather than assuming broader serialization.
+  overwrite tokens refreshed concurrently. Callback holds the endpoint lock
+  while atomically consuming same-generation authorization state and storing
+  tokens. Disconnect deletes the connection and pending authorization state.
 
 ## Transfer boundaries
 

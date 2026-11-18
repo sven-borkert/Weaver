@@ -113,7 +113,7 @@ export async function buildDocumentTransferPayload(
       {
         projectId: input.projectId,
         segments: relPath.split("/"),
-        at: document.baseCommitSha,
+        at: document.snapshotCommitSha,
       },
       actor,
     );

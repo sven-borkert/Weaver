@@ -6,6 +6,8 @@ import {
   writeFileSync,
   chmodSync,
   existsSync,
+  mkdirSync,
+  readdirSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -18,9 +20,79 @@ function runBuild(env, expectedStatus = 0) {
   try {
     const log = join(dir, "calls.log");
     const stub = join(dir, "docker");
+    const local = join(dir, "local");
+    const registry = join(dir, "registry");
+    mkdirSync(local);
+    mkdirSync(registry);
     writeFileSync(
       stub,
-      `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\nif [ "$1" = manifest ]; then echo "no such manifest" >&2; exit 1; fi\n`,
+      `#!/usr/bin/env node
+const { appendFileSync, existsSync, readFileSync, readdirSync, writeFileSync } = require("node:fs");
+const { createHash } = require("node:crypto");
+const { join } = require("node:path");
+const args = process.argv.slice(2);
+const [command, subcommand, operation] = args;
+const local = ${JSON.stringify(local)};
+const registry = process.env.TEST_REGISTRY;
+const leaf = (ref) => ref.split("/").at(-1);
+const load = (path) => JSON.parse(readFileSync(path, "utf8"));
+const save = (path, value) => writeFileSync(path, JSON.stringify(value));
+const option = (name) => args[args.indexOf(name) + 1];
+const fail = (message) => { console.error(message); process.exit(1); };
+appendFileSync(${JSON.stringify(log)}, args.join(" ") + "\\n");
+function lookup(ref) {
+  const [name, digest] = leaf(ref).split("@");
+  if (digest) {
+    for (const key of readdirSync(registry)) {
+      if (!key.startsWith(name + ":")) continue;
+      const image = load(join(registry, key));
+      if (image.digest === digest) return image;
+    }
+    return undefined;
+  }
+  const path = join(registry, name);
+  return existsSync(path) ? load(path) : undefined;
+}
+function publish(ref, image) {
+  if (leaf(ref) === process.env.TEST_FAILED_PUSH) fail("simulated push failed: " + ref);
+  save(join(registry, leaf(ref)), image);
+}
+if (command === "build") {
+  if (process.env.TEST_FAIL_BUILD === "1") fail("local build unavailable");
+  const ref = leaf(option("-t"));
+  const name = ref.split(":")[0];
+  const manifest = ref.includes(":weaver-ci-release-") ? readFileSync(join(args.at(-1), "release"), "utf8").trim() : undefined;
+  const image = {
+    commit: process.env.COMMIT_SHA,
+    basePath: process.env.BASE_PATH,
+    buildId: manifest ? undefined : process.env.TEST_BUILD_ID,
+    manifest,
+  };
+  image.digest = "sha256:" + createHash("sha256").update(name + JSON.stringify(image)).digest("hex");
+  save(join(local, ref), image);
+} else if (command === "buildx" && subcommand === "imagetools" && operation === "inspect") {
+  const ref = args.at(-1);
+  if (leaf(ref) === process.env.TEST_FAILED_INSPECT) fail("ERROR: config was not found at the registry");
+  const image = lookup(ref);
+  if (!image) fail("ERROR: " + ref + ": not found");
+  const template = option("--format");
+  if (template.includes(".Manifest.Digest")) console.log(image.digest);
+  else if (template.includes("org.weaver.release.digests")) console.log(image.commit + "|" + image.basePath + "|" + image.manifest);
+  else if (template.includes("org.weaver.base-path")) console.log(image.commit + "|" + image.basePath);
+  else fail("unsupported inspect template: " + template);
+} else if (command === "buildx" && subcommand === "imagetools" && operation === "create") {
+  const source = lookup(args.at(-1));
+  if (!source) fail("missing alias source");
+  publish(option("--tag"), source);
+} else if (command === "tag") {
+  save(join(local, leaf(args[2])), load(join(local, leaf(args[1]))));
+} else if (command === "push") {
+  const ref = args.at(-1);
+  publish(ref, load(join(local, leaf(ref))));
+} else if (command !== "run") {
+  fail("unsupported docker command: " + args.join(" "));
+}
+`,
     );
     chmodSync(stub, 0o755);
     const result = spawnSync("sh", ["deploy/ci/build-images.sh"], {
@@ -35,6 +107,8 @@ function runBuild(env, expectedStatus = 0) {
         BUILD_TIME: "2026-09-22T10:00:00Z",
         BASE_PATH: "/weaver",
         DOCKER: stub,
+        TEST_REGISTRY: registry,
+        TEST_BUILD_ID: "default",
         ...env,
       },
       encoding: "utf8",
@@ -47,7 +121,15 @@ function runBuild(env, expectedStatus = 0) {
 }
 
 const builds = (calls) => calls.filter((c) => c.startsWith("build "));
-const pushes = (calls) => calls.filter((c) => c.startsWith("push "));
+const pushes = (calls) =>
+  calls.flatMap((call) => {
+    const target = call.startsWith("push ")
+      ? call.slice("push ".length)
+      : /^buildx imagetools create --prefer-index=false --tag (\S+)/.exec(
+          call,
+        )?.[1];
+    return target && !target.includes(":weaver-ci-") ? [`push ${target}`] : [];
+  });
 
 test("builds the seven images in order with registry cache and build args", () => {
   const calls = runBuild({ PUSH_TAGS: "" });
@@ -140,10 +222,10 @@ test("pushes nothing without PUSH_TAGS, every requested tag for app images, and 
   }
   assert.deepEqual(pushed, expected.sort());
   assert.ok(
-    calls.some(
-      (c) =>
-        c ===
-        "tag registry.test/weaver/web:01234567 registry.test/weaver/web:0.1.117",
+    calls.some((c) =>
+      /^buildx imagetools create --prefer-index=false --tag registry\.test\/weaver\/web:0\.1\.117 registry\.test\/weaver\/web@sha256:[0-9a-f]{64}$/.test(
+        c,
+      ),
     ),
   );
   assert.ok(
@@ -159,6 +241,138 @@ test("pushes nothing without PUSH_TAGS, every requested tag for app images, and 
 test("tag pipelines leave the default branch build caches alone", () => {
   const calls = runBuild({ PUSH_TAGS: "v0.1.119" });
   assert.ok(pushes(calls).every((call) => !call.endsWith(":latest")));
+});
+
+const runtimeImages = ["tools", "web", "worker", "mcp"];
+const commit = "0123456789abcdef0123456789abcdef01234567";
+const stageTag = `weaver-ci-stage-${commit}`;
+const manifestTag = `weaver-ci-release-${commit}`;
+const readImage = (registry, name, tag) =>
+  JSON.parse(readFileSync(join(registry, `${name}:${tag}`), "utf8"));
+
+function withRegistry(run) {
+  const registry = mkdtempSync(join(tmpdir(), "weaver-release-"));
+  try {
+    run(registry, { TEST_REGISTRY: registry, PUSH_TAGS: "latest 0.1.117" });
+  } finally {
+    rmSync(registry, { recursive: true, force: true });
+  }
+}
+
+test("an interrupted staging publishes no aliases and retains staged images for the next attempt", () => {
+  withRegistry((registry, env) => {
+    const failed = runBuild(
+      {
+        ...env,
+        TEST_BUILD_ID: "first",
+        TEST_FAILED_PUSH: `worker:${stageTag}`,
+      },
+      1,
+    );
+    assert.deepEqual(pushes(failed), []);
+    assert.equal(existsSync(join(registry, `tools:${manifestTag}`)), false);
+    runBuild({ ...env, TEST_BUILD_ID: "retry" });
+    for (const name of runtimeImages) {
+      const version = readImage(registry, name, "0.1.117");
+      assert.equal(
+        version.buildId,
+        ["tools", "web"].includes(name) ? "first" : "retry",
+      );
+      assert.equal(version.digest, readImage(registry, name, stageTag).digest);
+    }
+  });
+});
+
+test("resumes an interrupted publish from the same complete digest manifest and updates latest last", () => {
+  withRegistry((registry, env) => {
+    runBuild(
+      { ...env, TEST_BUILD_ID: "first", TEST_FAILED_PUSH: "web:01234567" },
+      1,
+    );
+    assert.ok(existsSync(join(registry, "tools:0.1.117")));
+    assert.equal(existsSync(join(registry, "tools:latest")), false);
+    const originalManifest = readImage(registry, "tools", manifestTag);
+    const originalDigests = runtimeImages.map(
+      (name) => readImage(registry, name, stageTag).digest,
+    );
+    assert.equal(originalManifest.manifest, originalDigests.join(" "));
+
+    const retry = runBuild({ ...env, TEST_FAIL_BUILD: "1" });
+    assert.deepEqual(builds(retry), []);
+    const publishing = pushes(retry);
+    const firstLatest = publishing.findIndex((call) =>
+      call.endsWith(":latest"),
+    );
+    assert.ok(firstLatest > 0);
+    assert.ok(
+      publishing.slice(firstLatest).every((call) => call.endsWith(":latest")),
+    );
+    assert.equal(
+      publishing.some((call) => call.endsWith("/tools:0.1.117")),
+      false,
+    );
+    assert.deepEqual(
+      readImage(registry, "tools", manifestTag),
+      originalManifest,
+    );
+    for (const [index, name] of runtimeImages.entries()) {
+      const latest = readImage(registry, name, "latest");
+      assert.equal(latest.buildId, "first");
+      assert.equal(latest.digest, originalDigests[index]);
+      assert.equal(latest.digest, readImage(registry, name, "0.1.117").digest);
+      assert.equal(latest.digest, readImage(registry, name, "01234567").digest);
+    }
+  });
+});
+
+test("rejects an immutable alias with a different digest despite matching build labels", () => {
+  withRegistry((registry, env) => {
+    runBuild(
+      { ...env, TEST_BUILD_ID: "first", TEST_FAILED_PUSH: "web:01234567" },
+      1,
+    );
+    const alias = readImage(registry, "tools", "0.1.117");
+    writeFileSync(
+      join(registry, "tools:0.1.117"),
+      JSON.stringify({ ...alias, digest: "sha256:" + "0".repeat(64) }),
+    );
+    assert.deepEqual(
+      pushes(runBuild({ ...env, TEST_BUILD_ID: "retry" }, 1)),
+      [],
+    );
+    assert.equal(
+      readImage(registry, "tools", "0.1.117").digest,
+      "sha256:" + "0".repeat(64),
+    );
+    assert.equal(existsSync(join(registry, "tools:latest")), false);
+  });
+});
+
+test("does not republish latest when rerunning a completed older release", () => {
+  withRegistry((registry, env) => {
+    runBuild({ ...env, TEST_BUILD_ID: "first" });
+    runBuild({
+      ...env,
+      COMMIT_SHA: "fedcba9876543210fedcba9876543210fedcba98",
+      SHORT_SHA: "fedcba98",
+      PUSH_TAGS: "latest 0.1.118",
+      TEST_BUILD_ID: "newer",
+    });
+    assert.deepEqual(pushes(runBuild({ ...env, TEST_BUILD_ID: "retry" })), []);
+    for (const name of runtimeImages)
+      assert.equal(readImage(registry, name, "latest").buildId, "newer");
+  });
+});
+
+test("fails closed on registry inspection failure even when the error contains not found", () => {
+  withRegistry((registry, env) => {
+    const calls = runBuild(
+      { ...env, TEST_FAILED_INSPECT: `tools:${manifestTag}` },
+      1,
+    );
+    assert.deepEqual(pushes(calls), []);
+    assert.equal(readdirSync(registry).length, 0);
+  });
 });
 
 test("web smoke executes the version guard", () => {

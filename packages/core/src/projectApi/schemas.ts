@@ -173,6 +173,7 @@ export const createProjectApiKeyInput = z.strictObject({
 });
 export const updateProjectApiKeyInput = createProjectApiKeyInput.extend({
   keyId: machineUuid,
+  expectedPolicyVersion: z.int32().positive(),
 });
 export const projectApiKeyIdInput = z.strictObject({
   projectId: machineUuid,

@@ -22,7 +22,11 @@ import {
   documentKindFromPath,
   type DocumentKind,
 } from "../documents/kinds";
-import { assetsDirForDocPath, hasAssetsSegment } from "../documents/images";
+import {
+  assetsDirForDocPath,
+  hasAssetsSegment,
+  rewriteOwnAssetsPrefix,
+} from "../documents/images";
 import { withoutTitleHeading } from "../documents/importMarkdown";
 import {
   MAX_MARKDOWN_CHARS,
@@ -67,6 +71,7 @@ import {
   moveDocumentInRepo,
   repairDocumentProjectionInRepo,
   restoreDocumentInRepo,
+  serializeForSave,
   writeDocumentInRepo,
   type DocumentAssetFile,
   type DocumentMetadataOverride,
@@ -87,6 +92,7 @@ import {
 import {
   deleteTableInRepo,
   getTableInRepo,
+  MAX_DATA_FILE_BYTES,
   moveTableInRepo,
   restoreTableInRepo,
   writeTableInRepo,
@@ -655,12 +661,23 @@ export type TableAtHead = Awaited<ReturnType<typeof getTableInRepo>>;
 export type RecoveryIdentity =
   | { requestHash: string; toolName: string }
   | { wikiAgentId: string; wikiRequestHash: string }
-  | { wikiRevertRequestHash: string };
+  | { wikiRevertRequestHash: string }
+  | IngestionRecoveryIdentity;
+
+export type IngestionRecoveryIdentity = {
+  ingestionRequestHash: string;
+  matchesLegacyCommit: (commitSha: string) => Promise<boolean>;
+};
 
 export function matchesRecoveryIdentity(
   entry: GitLogEntry,
   identity: RecoveryIdentity,
 ): boolean {
+  if ("ingestionRequestHash" in identity)
+    return (
+      entry.trustedAuthor === true &&
+      entry.ingestionRequestHash === identity.ingestionRequestHash
+    );
   if ("wikiRevertRequestHash" in identity)
     return (
       entry.trustedAuthor === true &&
@@ -674,6 +691,18 @@ export function matchesRecoveryIdentity(
     : entry.trustedAuthor === true &&
         entry.mcpRequestHash === identity.requestHash &&
         entry.mcpToolName === identity.toolName;
+}
+
+export async function matchesIngestionRecoveryIdentity(
+  entry: GitLogEntry,
+  identity: IngestionRecoveryIdentity,
+): Promise<boolean> {
+  return (
+    matchesRecoveryIdentity(entry, identity) ||
+    (entry.trustedAuthor === true &&
+      !entry.ingestionRequestHash &&
+      (await identity.matchesLegacyCommit(entry.sha)))
+  );
 }
 
 // Verified trailers identify writes whose database acknowledgement was lost.
@@ -806,6 +835,43 @@ async function recoverLifecycleOperation(
   };
 }
 
+async function priorCreatedResourcePath(
+  repo: ProjectRepoReader,
+  commitSha: string,
+  resourceId: string,
+  isDocument: boolean,
+): Promise<string | null> {
+  const [change] = await repo.logChangesBefore(commitSha, { limit: 1 });
+  if (change?.sha !== commitSha) return null;
+  const candidates: string[] = [];
+  for (const item of change.changes) {
+    if (item.status === "D") continue;
+    if (
+      isDocument
+        ? documentKindFromPath(item.path) === null ||
+          hasAssetsSegment(item.path) ||
+          item.path.startsWith(`${TABLES_ROOT}/`)
+        : !item.path.endsWith(".table/schema.json")
+    )
+      continue;
+    if (((await repo.blobSizeAt(commitSha, item.path)) ?? Infinity) > 2_000_000)
+      continue;
+    const content = await repo.showFileAt(commitSha, item.path);
+    try {
+      const id = isDocument
+        ? parseDocumentFile(content, documentKindOfPath(item.path)).meta.id
+        : (JSON.parse(content) as { id: string }).id;
+      if (id === resourceId)
+        candidates.push(
+          isDocument ? item.path : item.path.slice(0, -"/schema.json".length),
+        );
+    } catch {
+      continue;
+    }
+  }
+  return candidates.length === 1 ? candidates[0]! : null;
+}
+
 /** Recovers a write whose outcome cannot be re-derived from current state
  * after the acknowledgement that would have replayed it was lost: a create or
  * a deleted recovery, whose identity is fixed before the commit, and a
@@ -846,57 +912,57 @@ export async function recoverPriorOperation(
       "CONFLICT",
       "idempotency key was already used for a different request",
     );
+  const ingestionIdentity =
+    identity && "ingestionRequestHash" in identity ? identity : null;
   const entries = await repo.logForPath(".", {
     skip: 0,
     limit: RECOVERY_LOG_LIMIT + 1,
     operationId,
+    ...(ingestionIdentity && { trustedOperationsOnly: true }),
   });
   const matching = entries.filter((entry) => entry.operationId === operationId);
-  if (entries.length > RECOVERY_LOG_LIMIT || matching.length > 1)
+  if (entries.length > RECOVERY_LOG_LIMIT)
     throw new CoreError("CONFLICT", "prior create history is ambiguous");
-  const entry = matching[0];
-  if (!entry) {
+  if (!matching.length) {
     if (existing)
       throw new CoreError("CONFLICT", "prior create commit cannot be verified");
-    return null;
+    if (!ingestionIdentity) return null;
+    const [unverified] = await repo.logForPath(".", {
+      skip: 0,
+      limit: 1,
+      operationId,
+    });
+    if (unverified?.operationId !== operationId) return null;
   }
-  if (identity && !matchesRecoveryIdentity(entry, identity))
+  let verified = matching;
+  if (ingestionIdentity) {
+    verified = [];
+    for (const candidate of matching)
+      if (await matchesIngestionRecoveryIdentity(candidate, ingestionIdentity))
+        verified.push(candidate);
+  }
+  if (verified.length > 1)
+    throw new CoreError("CONFLICT", "prior create history is ambiguous");
+  const entry = verified[0];
+  if (
+    !entry ||
+    (identity &&
+      !ingestionIdentity &&
+      !matchesRecoveryIdentity(entry, identity))
+  )
     throw new CoreError(
       "CONFLICT",
       "idempotency key was already used for a different request, or its prior commit cannot be verified",
       { reason: "IDEMPOTENCY_KEY_REUSED" },
     );
-  const [change] = await repo.logChangesBefore(entry.sha, { limit: 1 });
-  const candidates: string[] = [];
-  for (const item of change?.changes ?? []) {
-    if (item.status === "D") continue;
-    const isDocument = operation.kind === "document.create";
-    if (
-      isDocument
-        ? documentKindFromPath(item.path) === null ||
-          hasAssetsSegment(item.path) ||
-          item.path.startsWith(`${TABLES_ROOT}/`)
-        : !item.path.endsWith(".table/schema.json")
-    )
-      continue;
-    if (((await repo.blobSizeAt(entry.sha, item.path)) ?? Infinity) > 2_000_000)
-      continue;
-    try {
-      const content = await repo.showFileAt(entry.sha, item.path);
-      const id = isDocument
-        ? parseDocumentFile(content, documentKindOfPath(item.path)).meta.id
-        : (JSON.parse(content) as { id: string }).id;
-      if (id === resourceId)
-        candidates.push(
-          isDocument ? item.path : item.path.slice(0, -"/schema.json".length),
-        );
-    } catch {
-      continue;
-    }
-  }
-  if (candidates.length !== 1)
+  const path = await priorCreatedResourcePath(
+    repo,
+    entry.sha,
+    resourceId,
+    operation.kind === "document.create",
+  );
+  if (path === null)
     throw new CoreError("CONFLICT", "prior create identity cannot be verified");
-  const path = candidates[0]!;
   const id = resourceId;
   if (operation.kind === "document.create") {
     await repairDocumentProjectionInRepo(
@@ -1225,6 +1291,8 @@ export type ApplyOperationOptions = {
   runId?: string;
   /** Weaver-Wiki-Request-Hash, required on every wiki agent commit. */
   wikiRequestHash?: string;
+  /** Weaver-Ingestion-Request-Hash, for reviewed import creation. */
+  ingestionRequestHash?: string;
   /** Runs under the project lock immediately before the commit. */
   beforeCommit?: () => Promise<void>;
   /** Overrides the default document commit message (direct writes). */
@@ -1609,6 +1677,7 @@ async function createImages(
   db: PrismaClient,
   author: ContentWriteActor,
   operation: { projectId: string; title: string; markdown: string },
+  maxTotalBytes?: number,
 ) {
   const assetsFromSlug = slugify(operation.title);
   const contentJson = parseDocumentBody(
@@ -1620,12 +1689,107 @@ async function createImages(
     contentJson,
     assetsSlug: assetsFromSlug,
     takenNames: new Set(),
+    maxTotalBytes,
   });
   return {
     content: { kind: "markdown" as const, contentJson: images.contentJson },
     assets: images.assets,
     assetsFromSlug,
   };
+}
+
+/** Older reviewed imports can recover only when the committed create still verifies against their draft. */
+export async function matchesLegacyIngestionCreate(
+  db: PrismaClient,
+  repo: ProjectRepoReader,
+  operation: ContentOperation,
+  operationId: string,
+  actor: EnrichedActor,
+  commitSha: string,
+): Promise<boolean> {
+  if (operation.kind !== "document.create" && operation.kind !== "table.create")
+    return false;
+  const path = await priorCreatedResourcePath(
+    repo,
+    commitSha,
+    createdResourceId(operationId),
+    operation.kind === "document.create",
+  );
+  if (!path) return false;
+  const folder = operation.folderPath.join("/");
+  if (operation.kind === "document.create") {
+    if (
+      documentKindFromPath(path) !== "markdown" ||
+      path.split("/").slice(0, -1).join("/") !== folder
+    )
+      return false;
+    const { meta, body } = parseDocumentFile(
+      await repo.showFileAt(commitSha, path),
+      "markdown",
+    );
+    if (meta.title !== operation.title) return false;
+    const images = await createImages(
+      db,
+      actor,
+      operation,
+      MAX_IMPORT_IMAGE_BYTES,
+    );
+    const expected = rewriteOwnAssetsPrefix(
+      images.content.contentJson,
+      slugify(operation.title),
+      documentSlugFromPath(path),
+    );
+    const [reviewed, committed] = await Promise.all([
+      serializeForSave(db, operation.projectId, expected),
+      serializeForSave(db, operation.projectId, parseDocumentBody(body)),
+    ]);
+    if (reviewed.body !== committed.body) return false;
+    for (const asset of images.assets) {
+      const stored = await repo.readCommittedBlobAt(
+        commitSha,
+        `${assetsDirForDocPath(path)}/${asset.name}`,
+        asset.bytes.byteLength,
+      );
+      if (!stored?.bytes.equals(asset.bytes)) return false;
+    }
+    return true;
+  }
+  if (
+    !path.startsWith(`${TABLES_ROOT}/`) ||
+    folderPathOfTableDir(path).join("/") !== folder
+  )
+    return false;
+  const { title, columns } = parseSchemaFile(
+    await repo.showFileAt(commitSha, `${path}/schema.json`),
+  );
+  if (
+    title !== operation.title ||
+    columns.length !== operation.columns.length ||
+    !columns.every(
+      (column, index) =>
+        column.name === operation.columns[index]?.name &&
+        column.type === operation.columns[index]?.type,
+    )
+  )
+    return false;
+  const dataPath = `${path}/data.jsonl`;
+  if (
+    ((await repo.blobSizeAt(commitSha, dataPath)) ?? Infinity) >
+    MAX_DATA_FILE_BYTES
+  )
+    return false;
+  const rows = parseRows(await repo.showFileAt(commitSha, dataPath));
+  return (
+    rows.length === operation.rows.length &&
+    validateRows(columns, rows).ok &&
+    rows.every((row, rowIndex) =>
+      columns.every(
+        (column, columnIndex) =>
+          row.cells[column.id] ===
+          operation.rows[rowIndex]?.cells[operation.columns[columnIndex]!.id!],
+      ),
+    )
+  );
 }
 
 /** Copies referenced images in beside the ones the document already has. */
@@ -1702,6 +1866,7 @@ function operationAudit(options: ApplyOperationOptions) {
     mcpToolName: options.mcpToolName,
     runId: options.runId,
     wikiRequestHash: options.wikiRequestHash,
+    ingestionRequestHash: options.ingestionRequestHash,
     beforeCommit: options.beforeCommit,
   };
 }

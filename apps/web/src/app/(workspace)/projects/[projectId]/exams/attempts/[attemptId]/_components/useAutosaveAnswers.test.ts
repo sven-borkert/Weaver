@@ -160,11 +160,11 @@ it("a failed save keeps flush pending and cannot authorize submission", async ()
   expect(rejected).toBe(true);
   expect(get().slots.q?.value.text).toBe("unsaved");
 });
-it("stale acknowledgements reload the canonical sequence and value", async () => {
+it("keeps a different same-sequence answer pending until the user resolves it", async () => {
   vi.useFakeTimers();
   mock.save.mockResolvedValue({
     outcome: "stale",
-    sequence: 30,
+    sequence: 9,
     timing: {
       startedAt: new Date(),
       deadlineAt: new Date(),
@@ -177,7 +177,7 @@ it("stale acknowledgements reload the canonical sequence and value", async () =>
       {
         id: "q",
         answer: {
-          sequence: 30,
+          sequence: 9,
           selectedChoiceIds: [],
           text: "newer canonical",
           savedAt: new Date(),
@@ -188,10 +188,17 @@ it("stale acknowledgements reload the canonical sequence and value", async () =>
   const get = await harness();
   await act(async () => {
     get().setText("q", "local");
-    await get().flush();
+    await vi.advanceTimersByTimeAsync(750);
   });
-  expect(get().slots.q?.sequence).toBe(30);
+  expect(get().slots.q).toMatchObject({
+    status: "conflict",
+    value: { text: "local" },
+  });
+  expect(get().pendingCount).toBe(1);
+  await expect(get().flush()).rejects.toThrow("Resolve");
+  await act(async () => get().useSavedAnswer("q"));
   expect(get().slots.q?.value.text).toBe("newer canonical");
+  expect(get().pendingCount).toBe(0);
 });
 
 const recoveryTiming = {
@@ -273,7 +280,7 @@ it.each(["older answer", "failed refresh"])(
     expect(get().pendingCount).toBe(1);
   },
 );
-it("rebases edits made during recovery above the canonical sequence before saving", async () => {
+it("preserves edits made during recovery until the user chooses to save them", async () => {
   vi.useFakeTimers();
   let resolveRead!: (value: ReturnType<typeof canonical>) => void;
   cachedRecovery(
@@ -304,11 +311,11 @@ it("rebases edits made during recovery above the canonical sequence before savin
     resolveRead(canonical(30, "another tab"));
   });
   expect(get().slots.q).toMatchObject({
-    sequence: 31,
-    status: "pending",
+    status: "conflict",
     value: { text: "typed during recovery" },
   });
   await act(async () => {
+    get().keepDraftAnswer("q");
     await get().flush();
   });
   expect(mock.save).toHaveBeenLastCalledWith(

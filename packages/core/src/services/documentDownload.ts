@@ -32,7 +32,7 @@ import { slugify } from "@weaver/core/documents/slug";
 import { assertOutsideTablesRoot } from "@weaver/core/tables/paths";
 import type { PrismaClient } from "@weaver/db/client";
 import { openProjectRepo, type ProjectRepoReader } from "@weaver/git-store";
-import { getDocument } from "./documents";
+import { getDocumentWithSnapshot } from "./documents";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 
 const MAX_DOCUMENT_FILE_BYTES = 2_000_000;
@@ -43,11 +43,10 @@ export async function readDocumentFile(
   input: { projectId: string; documentId: string },
   actor: ProjectActor,
 ): Promise<{ bytes: Buffer; fileName: string; mimeType: string }> {
-  // Resolves access, the current path, and the last commit that wrote the file.
-  const document = await getDocument(db, input, actor);
+  const document = await getDocumentWithSnapshot(db, input, actor);
   const repo = await openProjectRepo(input.projectId);
   const blob = await repo?.readCommittedBlobAt(
-    document.baseCommitSha,
+    document.snapshotCommitSha,
     document.path,
     MAX_DOCUMENT_FILE_BYTES,
   );
@@ -86,10 +85,10 @@ export async function createDocumentArchive(
   input: { projectId: string; documentId: string },
   actor: ProjectActor,
 ): Promise<{ stream: Readable; fileName: string }> {
-  const document = await getDocument(db, input, actor);
+  const document = await getDocumentWithSnapshot(db, input, actor);
   const repo = await openProjectRepo(input.projectId);
   if (!repo) throw new CoreError("NOT_FOUND");
-  const snapshotSha = await repo.resolveHead();
+  const snapshotSha = document.snapshotCommitSha;
   const blobs = await repo.listTrackedBlobs(snapshotSha);
   const plan = planDocumentArchive(blobs, document.path);
   if (!plan) throw new CoreError("NOT_FOUND");

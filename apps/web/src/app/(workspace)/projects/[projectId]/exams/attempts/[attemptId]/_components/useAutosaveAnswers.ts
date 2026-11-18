@@ -3,18 +3,21 @@ import { useEffect, useRef, useState } from "react";
 import type { AttemptTiming } from "@weaver/core/services/examAttempts";
 import { api } from "~/trpc/react";
 export type AnswerValue = { selectedChoiceIds: string[]; text: string | null };
-export type AnswerSlot = {
+type SavedAnswer = {
   value: AnswerValue;
-  status: "idle" | "pending" | "saving" | "saved" | "error";
   sequence: number;
   savedAt: Date | null;
+};
+export type AnswerSlot = SavedAnswer & {
+  status: "idle" | "pending" | "saving" | "saved" | "error" | "conflict";
   attempts: number;
   closed?: boolean;
+  conflictingAnswer?: SavedAnswer;
 };
 export type AutosaveAction =
   | { type: "edit"; questionId: string; value: AnswerValue }
   | {
-      type: "saving" | "stale" | "failed";
+      type: "saving" | "failed";
       questionId: string;
       sequence: number;
     }
@@ -23,9 +26,22 @@ export type AutosaveAction =
       type: "canonical";
       questionId: string;
       sequence: number;
-      slot: AnswerSlot;
+      submittedValue: AnswerValue;
+      answer: SavedAnswer;
     }
+  | { type: "resolveConflict"; choice: "saved" | "draft"; questionId: string }
   | { type: "closed" };
+
+function sameAnswer(left: AnswerValue, right: AnswerValue) {
+  return (
+    left.text === right.text &&
+    left.selectedChoiceIds.length === right.selectedChoiceIds.length &&
+    left.selectedChoiceIds.every((choice) =>
+      right.selectedChoiceIds.includes(choice),
+    )
+  );
+}
+
 export function autosaveReducer(
   state: Record<string, AnswerSlot>,
   action: AutosaveAction,
@@ -43,21 +59,52 @@ export function autosaveReducer(
         ...s,
         value: action.value,
         sequence: s.sequence + 1,
-        status: "pending",
+        status: s.status === "conflict" ? "conflict" : "pending",
         attempts: 0,
       },
     };
-  if (action.type === "canonical")
+  if (action.type === "canonical") {
+    const { answer } = action;
+    if (sameAnswer(s.value, answer.value))
+      return {
+        ...state,
+        [action.questionId]: { ...answer, status: "saved", attempts: 0 },
+      };
+    if (
+      s.sequence !== action.sequence &&
+      sameAnswer(action.submittedValue, answer.value)
+    )
+      return {
+        ...state,
+        [action.questionId]: {
+          ...s,
+          sequence: Math.max(s.sequence, answer.sequence + 1),
+        },
+      };
     return {
       ...state,
-      [action.questionId]:
-        s.sequence === action.sequence
-          ? action.slot
-          : {
-              ...s,
-              sequence: Math.max(s.sequence, action.slot.sequence + 1),
-            },
+      [action.questionId]: {
+        ...s,
+        status: "conflict",
+        conflictingAnswer: answer,
+      },
     };
+  }
+  if (action.type === "resolveConflict") {
+    const { conflictingAnswer } = s;
+    if (!conflictingAnswer) return state;
+    const next: AnswerSlot =
+      action.choice === "saved"
+        ? { ...conflictingAnswer, status: "saved", attempts: 0 }
+        : {
+            ...conflictingAnswer,
+            value: s.value,
+            sequence: Math.max(conflictingAnswer.sequence + 1, s.sequence),
+            status: "pending",
+            attempts: 0,
+          };
+    return { ...state, [action.questionId]: next };
+  }
   if (s.sequence !== action.sequence) return state;
   return {
     ...state,
@@ -78,9 +125,10 @@ export function nextRetryDelayMs(attempts: number) {
   return Math.min(10000, 2000 * 2 ** Math.max(0, attempts - 1));
 }
 export function hasUnacknowledgedAnswers(slots: Record<string, AnswerSlot>) {
-  return Object.values(slots).some((s) =>
-    ["pending", "saving", "error"].includes(s.status),
-  );
+  return Object.values(slots).some(needsAcknowledgement);
+}
+function needsAcknowledgement(slot: AnswerSlot) {
+  return slot.status !== "idle" && slot.status !== "saved";
 }
 export function useAutosaveAnswers(input: {
   attemptId: string;
@@ -153,15 +201,14 @@ export function useAutosaveAnswers(input: {
               type: "canonical",
               questionId: id,
               sequence: s.sequence,
-              slot: {
+              submittedValue: s.value,
+              answer: {
                 value: {
                   selectedChoiceIds: q.answer.selectedChoiceIds,
                   text: q.answer.text,
                 },
                 sequence: q.answer.sequence,
                 savedAt: q.answer.savedAt,
-                status: "saved",
-                attempts: 0,
               },
             });
           else throw new Error("Could not refresh the saved answer");
@@ -187,7 +234,7 @@ export function useAutosaveAnswers(input: {
   function edit(id: string, value: AnswerValue, delay: number) {
     if (closed.current) return;
     dispatch({ type: "edit", questionId: id, value });
-    schedule(id, delay);
+    if (current.current[id]?.status === "pending") schedule(id, delay);
   }
   async function flush() {
     const until = Date.now() + 9000;
@@ -201,6 +248,8 @@ export function useAutosaveAnswers(input: {
           "Some answers could not be saved. Retry before submitting.",
         );
       await Promise.all(Object.keys(current.current).map(save));
+      if (Object.values(current.current).some((s) => s.status === "conflict"))
+        throw new Error("Resolve the conflicting answers before submitting.");
       if (hasUnacknowledgedAnswers(current.current))
         await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -224,9 +273,14 @@ export function useAutosaveAnswers(input: {
       if (s) edit(id, { ...s.value, text }, 750);
     },
     flush,
-    pendingCount: Object.values(slots).filter((s) =>
-      ["pending", "saving", "error"].includes(s.status),
-    ).length,
+    useSavedAnswer: (id: string) => {
+      dispatch({ type: "resolveConflict", choice: "saved", questionId: id });
+    },
+    keepDraftAnswer: (id: string) => {
+      dispatch({ type: "resolveConflict", choice: "draft", questionId: id });
+      if (current.current[id]?.status === "pending") schedule(id, 0);
+    },
+    pendingCount: Object.values(slots).filter(needsAcknowledgement).length,
     lastSavedAt: Object.values(slots).reduce<Date | null>(
       (last, s) =>
         s.savedAt && (!last || s.savedAt > last) ? s.savedAt : last,

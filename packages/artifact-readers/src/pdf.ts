@@ -1,7 +1,12 @@
 /** Pure reader for .pdf artifacts (no OCR). unpdf resolves pdf.js into a
  *  process-wide singleton, so this package configures the same legacy build
  *  packages/ingestion does — see the weaver-artifacts skill. */
-import { definePDFJSModule, extractText, getMeta } from "unpdf";
+import {
+  definePDFJSModule,
+  extractText,
+  getDocumentProxy,
+  getMeta,
+} from "unpdf";
 import { ArtifactReadError } from "./errors";
 
 const SNIPPET_CONTEXT_CHARS = 80;
@@ -162,51 +167,56 @@ export async function readPdfPages(
 ): Promise<PdfPagesResult> {
   requirePageNumber(input.startPage, "startPage");
   requirePageNumber(input.endPage, "endPage");
-  const pages = await extractPages(data);
-  const pageCount = pages.length;
   const startPage = input.startPage ?? 1;
-  const maxChars = clampNumber(
+  let remaining = clampNumber(
     input.maxChars,
     DEFAULT_MAX_CHARS,
     MIN_MAX_CHARS,
     MAX_MAX_CHARS,
   );
-  if (startPage > pageCount) {
-    throw new ArtifactReadError(
-      "not_found",
-      `startPage ${startPage} is beyond the last page (${pageCount}).`,
-    );
-  }
-  const endPage = Math.min(input.endPage ?? pageCount, pageCount);
-  if (endPage < startPage) {
-    throw new ArtifactReadError(
-      "invalid_input",
-      "endPage must not be smaller than startPage.",
-    );
-  }
-
-  const out: PdfPageText[] = [];
-  let budget = maxChars;
-  let truncated = false;
-  for (let page = startPage; page <= endPage; page++) {
-    const text = pages[page - 1] ?? "";
-    if (text.length <= budget) {
-      out.push({ page, text });
-      budget -= text.length;
-    } else {
-      out.push({ page, text: text.slice(0, budget) });
-      truncated = true;
-      break;
+  await ensurePdfJs();
+  let pdf: Awaited<ReturnType<typeof getDocumentProxy>> | undefined;
+  try {
+    pdf = await getDocumentProxy(new Uint8Array(data));
+    const pageCount = pdf.numPages;
+    if (startPage > pageCount) {
+      throw new ArtifactReadError(
+        "not_found",
+        `startPage ${startPage} is beyond the last page (${pageCount}).`,
+      );
     }
+    const endPage = Math.min(input.endPage ?? pageCount, pageCount);
+    if (endPage < startPage) {
+      throw new ArtifactReadError(
+        "invalid_input",
+        "endPage must not be smaller than startPage.",
+      );
+    }
+    const pages: PdfPageText[] = [];
+    for (let page = startPage; page <= endPage; page++) {
+      if (remaining === 0) {
+        // An empty final entry tells the tool to resume at this page.
+        pages.push({ page, text: "" });
+        return { pageCount, startPage, endPage: page, truncated: true, pages };
+      }
+      const { items } = await (await pdf.getPage(page)).getTextContent();
+      const text = items
+        .flatMap((item) =>
+          "str" in item ? [item.str + (item.hasEOL ? "\n" : "")] : [],
+        )
+        .join("");
+      pages.push({ page, text: text.slice(0, remaining) });
+      if (text.length > remaining)
+        return { pageCount, startPage, endPage: page, truncated: true, pages };
+      remaining -= text.length;
+    }
+    return { pageCount, startPage, endPage, truncated: false, pages };
+  } catch (cause) {
+    if (cause instanceof ArtifactReadError) throw cause;
+    throw classifyPdfReadError(cause);
+  } finally {
+    await pdf?.loadingTask.destroy().catch(() => undefined);
   }
-  const lastReturned = out.at(-1)?.page ?? startPage;
-  return {
-    pageCount,
-    startPage,
-    endPage: truncated ? lastReturned : endPage,
-    truncated,
-    pages: out,
-  };
 }
 
 export async function searchPdfText(
