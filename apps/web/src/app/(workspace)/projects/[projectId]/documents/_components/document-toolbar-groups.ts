@@ -151,8 +151,8 @@ export function documentToolbarGroups({
   disabled: boolean;
   run: (command: DocumentCommand) => void;
   onLink: () => void;
-  onImage: () => void;
-  onReference: () => void;
+  onImage?: () => void;
+  onReference?: () => void;
   onMermaid?: () => void;
   onMath?: (type: "inlineMath" | "mathBlock") => void;
 }): ToolbarGroup[] {
@@ -481,15 +481,18 @@ export function documentToolbarGroups({
       false,
       Table2,
     ),
-    {
+  ];
+  if (onImage)
+    insertEntries.push({
       kind: "item",
       label: "Image",
       icon: ImageIcon,
       disabled,
       closeFocus: "keep",
       onSelect: onImage,
-    },
-    {
+    });
+  if (onReference)
+    insertEntries.push({
       kind: "item",
       label: "Reference",
       icon: FileSymlink,
@@ -497,8 +500,7 @@ export function documentToolbarGroups({
       // The picker is non-modal, so the closing menu must not take focus back.
       closeFocus: "after-close",
       onSelect: onReference,
-    },
-  ];
+    });
   if (onMermaid)
     insertEntries.push({
       kind: "item",

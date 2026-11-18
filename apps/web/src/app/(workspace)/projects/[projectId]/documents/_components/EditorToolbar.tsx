@@ -38,8 +38,9 @@ type EditorToolbarProps = {
   editor: Editor;
   disabled: boolean;
   sourceOpen?: boolean;
-  crossReferenceOpen: boolean;
-  onCrossReferenceOpenChange: (open: boolean) => void;
+  crossReferenceOpen?: boolean;
+  onCrossReferenceOpenChange?: (open: boolean) => void;
+  allowImages?: boolean;
   onMermaid?: () => void;
   onMath?: (type: "inlineMath" | "mathBlock") => void;
   onUploadImage?: (file: File) => void;
@@ -53,8 +54,9 @@ export function EditorToolbar({
   editor,
   disabled,
   sourceOpen = false,
-  crossReferenceOpen,
+  crossReferenceOpen = false,
   onCrossReferenceOpenChange,
+  allowImages = true,
   onMermaid,
   onMath,
   onUploadImage,
@@ -156,9 +158,11 @@ export function EditorToolbar({
     setError(null);
     setPanel(type);
   };
-  const showReference = () => {
-    if (capture()) onCrossReferenceOpenChange(true);
-  };
+  const showReference = onCrossReferenceOpenChange
+    ? () => {
+        if (capture()) onCrossReferenceOpenChange(true);
+      }
+    : undefined;
   const insertMermaid = onMermaid
     ? () => {
         if (!capture() || !restore()) return;
@@ -188,7 +192,7 @@ export function EditorToolbar({
           locked={locked}
           run={runImmediate}
           onLink={() => showForm("link")}
-          onImage={() => showForm("image")}
+          onImage={allowImages ? () => showForm("image") : undefined}
           onReference={showReference}
           onMermaid={insertMermaid}
           onMath={insertMath}
@@ -391,18 +395,20 @@ export function EditorToolbar({
           </form>
         </DialogContent>
       </Dialog>
-      <CrossReferencePicker
-        projectId={projectId}
-        editor={editor}
-        open={crossReferenceOpen}
-        onOpenChange={(open) => {
-          if (open && !capture()) return;
-          onCrossReferenceOpenChange(open);
-        }}
-        disabled={locked}
-        hideTrigger
-        onBeforeSelect={restore}
-      />
+      {onCrossReferenceOpenChange ? (
+        <CrossReferencePicker
+          projectId={projectId}
+          editor={editor}
+          open={crossReferenceOpen}
+          onOpenChange={(open) => {
+            if (open && !capture()) return;
+            onCrossReferenceOpenChange(open);
+          }}
+          disabled={locked}
+          hideTrigger
+          onBeforeSelect={restore}
+        />
+      ) : null}
     </>
   );
 }

@@ -14,7 +14,8 @@ import {
 } from "~/components/ui/breadcrumb";
 import { Skeleton } from "~/components/ui/skeleton";
 import { formatItemLocation } from "~/lib/copy-location";
-import { parseFolderParam } from "~/lib/documents/explorer";
+import { documentsBase, parseFolderParam } from "~/lib/documents/explorer";
+import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import { folderDisplayName, folderHref } from "~/lib/explorer/entries";
 import { tablesBase } from "~/lib/tables/explorer";
 import { api } from "~/trpc/react";
@@ -739,6 +740,25 @@ function WorkspaceBreadcrumbsContent() {
           <ProjectCrumb />
           <BreadcrumbItem>
             <BreadcrumbPage>Settings</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+    );
+  }
+
+  if (projectId && pathname === localDocumentsHref(projectId)) {
+    return (
+      <Breadcrumb>
+        <BreadcrumbList>
+          <ProjectCrumb />
+          <BreadcrumbItem>
+            <BreadcrumbLink asChild>
+              <Link href={documentsBase(projectId)}>Documents</Link>
+            </BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>Outside Git</BreadcrumbPage>
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>

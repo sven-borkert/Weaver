@@ -4,6 +4,12 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+## [0.1.245] - 2026-11-18
+
+### Added
+
+- Choose **Keep out of Git** when creating Markdown documents or folders. The project's **Outside Git** area supports nested folders and editing with normal project access. Weaver saves the latest revision in its database and includes it in regular backups.
+
 ## [0.1.244] - 2026-11-18
 
 ### Added

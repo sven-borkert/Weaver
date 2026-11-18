@@ -19,9 +19,6 @@ import {
   type RefObject,
 } from "react";
 import { documentExtensions } from "@weaver/core/editor/extensions";
-import { InlineMath, MathBlock } from "@weaver/core/editor/math";
-import { MathPlot } from "@weaver/core/editor/math-plot";
-import { Mermaid } from "@weaver/core/editor/mermaid";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { isDocumentImageFile } from "~/lib/documents/image-upload";
@@ -52,42 +49,19 @@ import {
 } from "./DocumentImageNodeView";
 import { DocumentActionsMenu } from "./DocumentActionsMenu";
 import { DocumentDraftDialogs } from "./DocumentDraftDialogs";
-import { CodeBlockWithCopy } from "./DocumentCodeBlock";
 import { DocumentHeader } from "./DocumentHeader";
 import { DocumentSectionStatus } from "./DocumentSectionStatus";
 import { DocumentSourceView } from "./DocumentSourceView";
-import { MathNodeView } from "./MathNodeView";
-import { MathPlotNodeView } from "./MathPlotNodeView";
-import { MermaidNodeView } from "./MermaidNodeView";
+import {
+  documentRichExtensions,
+  insertDocumentMath,
+  insertDocumentMermaid,
+} from "./document-rich-extensions";
 import { useDocumentPresentation } from "./useDocumentPresentation";
 
 const ImageWithNodeView = DocumentImage.extend({
   addNodeView() {
     return ReactNodeViewRenderer(DocumentImageNodeView);
-  },
-});
-
-const MermaidWithNodeView = Mermaid.extend({
-  addNodeView() {
-    return ReactNodeViewRenderer(MermaidNodeView);
-  },
-});
-
-const InlineMathWithNodeView = InlineMath.extend({
-  addNodeView() {
-    return ReactNodeViewRenderer(MathNodeView, { as: "span" });
-  },
-});
-
-const MathBlockWithNodeView = MathBlock.extend({
-  addNodeView() {
-    return ReactNodeViewRenderer(MathNodeView);
-  },
-});
-
-const MathPlotWithNodeView = MathPlot.extend({
-  addNodeView() {
-    return ReactNodeViewRenderer(MathPlotNodeView);
   },
 });
 
@@ -110,13 +84,9 @@ export function DocumentEditor(props: DocumentEditorProps) {
   const extensions = useMemo(
     () => [
       ...documentExtensions({
-        mermaid: MermaidWithNodeView,
-        inlineMath: InlineMathWithNodeView,
-        mathBlock: MathBlockWithNodeView,
-        mathPlot: MathPlotWithNodeView,
+        ...documentRichExtensions,
         crossref: DocumentCrossref,
         image: ImageWithNodeView,
-        codeBlock: CodeBlockWithCopy,
       }),
       DocumentSectionAnchors,
       createCrossrefTrigger(openReference),
@@ -386,25 +356,6 @@ function DocumentDraftEditor({
       }
     }
   };
-  const insertMermaid = () => {
-    if (!editor.isEditable) return;
-    editor
-      .chain()
-      .focus()
-      .insertContent({
-        type: "mermaid",
-        attrs: { source: "flowchart TD\n  A[Start] --> B[End]" },
-      })
-      .run();
-  };
-  const insertMath = (type: "inlineMath" | "mathBlock") => {
-    if (!editor.isEditable) return;
-    editor
-      .chain()
-      .focus()
-      .insertContent({ type, attrs: { source: "x^2" } })
-      .run();
-  };
 
   return (
     <DocumentEditingProvider disabled={disabled || sourceOpen}>
@@ -519,8 +470,8 @@ function DocumentDraftEditor({
             sourceOpen={sourceOpen}
             crossReferenceOpen={crossReferenceOpen}
             onCrossReferenceOpenChange={setCrossReferenceOpen}
-            onMermaid={insertMermaid}
-            onMath={insertMath}
+            onMermaid={() => insertDocumentMermaid(editor)}
+            onMath={(type) => insertDocumentMath(editor, type)}
             onUploadImage={(file) => void images.upload([file])}
             onTransientOpenChange={setTransientOpen}
             onViewSource={toggleSource}

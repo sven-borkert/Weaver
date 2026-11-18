@@ -5,8 +5,10 @@ description: Use when changing Weaver Git-backed documents, the rich/raw Markdow
 
 # Weaver documents
 
-Git is authoritative for document content and history. PostgreSQL `Document`
-and `DocumentLink` rows are derived projections that `rebuildIndex` can repair.
+Git is authoritative for tracked document content and history. PostgreSQL
+`Document` and `DocumentLink` rows are derived projections that `rebuildIndex`
+can repair. The Outside Git area stores its own document and folder rows in
+PostgreSQL.
 
 Shared repository readers, advisory locks, recovery and transport primitives use `weaver-git-store`. Project-machine publishing uses `weaver-project-api`; peer connection/refresh and receiver HTTP rules use `weaver-remote-instances`. Document-specific review, editor, Git pull merge and conversion rules remain here.
 
@@ -803,6 +805,11 @@ HEAD` + clean before writes. Atomic replacement prevents truncated worktree
 
 The component map and layout description live in `docs/IMPLEMENTATION.md`.
 
+- **Keep out of Git** in the document and folder creation dialogs opens the
+  project's Outside Git area. `localDocument` procedures use the separate
+  `LocalDocumentEntry` model and the ordinary project roles. A folder's children
+  share its project and storage. Guard edits and deletes with the saved revision
+  and allow deleting only empty folders.
 - Creating a folder stays on the current level (`onFolderCreated` is a no-op in
   `ContentExplorerScreen`) so the new folder can be filled by drag and drop.
   Items and folders are draggable for Editors (`lib/explorer/drag.ts` payload, MIME

@@ -21,6 +21,7 @@ import { ingestionRouter } from "~/server/api/routers/ingestion";
 import { ingestionAdminRouter } from "~/server/api/routers/ingestionAdmin";
 import { knowledgeRouter } from "~/server/api/routers/knowledge";
 import { llmRouter } from "~/server/api/routers/llm";
+import { localDocumentRouter } from "~/server/api/routers/localDocument";
 import { oauthConsentRouter } from "~/server/api/routers/oauthConsent";
 import { projectRouter } from "~/server/api/routers/project";
 import { projectGitRemoteRouter } from "~/server/api/routers/projectGitRemote";
@@ -63,6 +64,7 @@ export const appRouter = createTRPCRouter({
   ingestionAdmin: ingestionAdminRouter,
   knowledge: knowledgeRouter,
   llm: llmRouter,
+  localDocument: localDocumentRouter,
   oauthConsent: oauthConsentRouter,
   oidc: oidcRouter,
   project: projectRouter,

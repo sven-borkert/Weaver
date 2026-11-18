@@ -63,6 +63,11 @@ enum DocumentKind {
   python
 }
 
+enum LocalDocumentEntryKind {
+  document
+  folder
+}
+
 enum LlmProviderType {
   openai
   anthropic
@@ -405,6 +410,7 @@ model Project {
   organization                 Organization                  @relation(fields: [organizationId], references: [id])
   personalOwner                User?                         @relation("PersonalWorkspaceOwner", fields: [personalOwnerId], references: [id], onDelete: SetNull)
   documents                    Document[]
+  localDocumentEntries         LocalDocumentEntry[]
   lastOpenedByUsers            User[]                        @relation("UserLastOpenedProject")
   tables                       DataTable[]
   knowledgeGenerations         KnowledgeGeneration[]
@@ -499,6 +505,30 @@ model ProjectContentPin {
   @@unique([projectId, kind, resourceId])
   @@index([projectId, createdAt, id])
   @@index([createdById])
+}
+
+/// Authoritative PostgreSQL content for the Documents › Outside Git area.
+model LocalDocumentEntry {
+  id          String                 @id @default(uuid()) @db.Uuid
+  projectId   String                 @db.Uuid
+  parentId    String?                @db.Uuid
+  kind        LocalDocumentEntryKind
+  title       String                 @db.VarChar(200)
+  /// The migration requires a body for documents and forbids one for folders.
+  markdown    String?
+  /// Number of ancestor folders, including this entry when it is a folder.
+  folderDepth Int
+  revision    Int                    @default(1)
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  project  Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   LocalDocumentEntry?  @relation("LocalDocumentTree", fields: [projectId, parentId], references: [projectId, id], onDelete: NoAction)
+  children LocalDocumentEntry[] @relation("LocalDocumentTree")
+
+  @@unique([projectId, id])
+  /// The migration also enforces title uniqueness at the root, where parentId is null.
+  @@unique([projectId, parentId, title])
 }
 
 model Document {

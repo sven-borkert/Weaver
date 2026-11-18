@@ -17,6 +17,7 @@ import {
   type DocumentItem,
 } from "~/lib/documents/explorer";
 import { invalidateDocumentReferenceCaches } from "~/lib/documents/document-cache-invalidation";
+import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import {
   documentArchiveDownload,
   documentDownload,
@@ -284,6 +285,9 @@ export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
   FolderActions: FolderMutations,
   rootActions: ({ projectId }) => (
     <>
+      <Button asChild variant="outline" size="sm">
+        <Link href={localDocumentsHref(projectId)}>Outside Git</Link>
+      </Button>
       <Button asChild variant="outline" size="sm">
         <Link href={`${documentsBase(projectId)}/index-view`}>Index view</Link>
       </Button>

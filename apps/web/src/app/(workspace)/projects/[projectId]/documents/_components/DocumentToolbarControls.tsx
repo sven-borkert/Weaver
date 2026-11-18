@@ -286,8 +286,8 @@ export function DocumentFormattingControls({
   locked: boolean;
   run: (command: DocumentCommand) => void;
   onLink: () => void;
-  onImage: () => void;
-  onReference: () => void;
+  onImage?: () => void;
+  onReference?: () => void;
   onMermaid?: () => void;
   onMath?: (type: "inlineMath" | "mathBlock") => void;
   canOpenMenu: () => boolean;

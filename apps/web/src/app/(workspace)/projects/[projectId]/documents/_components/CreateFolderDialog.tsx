@@ -2,8 +2,9 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FolderPlus } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { useForm } from "react-hook-form";
+import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
 
@@ -20,17 +21,20 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
+import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import { applyTrpcErrorToForm } from "~/lib/trpcErrors";
 import { api } from "~/trpc/react";
+import { KeepOutOfGitField } from "./KeepOutOfGitField";
 
-/** Client-side mirror of the server's folder.create input (minus projectId and parentPath). */
+/** Client-side mirror of the folder creation fields, with the storage choice. */
 const createFolderFormSchema = z.object({
   name: z.string().trim().min(1).max(120),
+  keepOutOfGit: z.boolean(),
 });
 
 type CreateFolderFormValues = z.infer<typeof createFolderFormSchema>;
 
-const defaultValues: CreateFolderFormValues = { name: "" };
+const defaultValues: CreateFolderFormValues = { name: "", keepOutOfGit: false };
 
 type CreateFolderDialogProps = {
   projectId: string;
@@ -43,10 +47,12 @@ export function CreateFolderDialog({
   parentPath,
   onFolderCreated,
 }: CreateFolderDialogProps) {
+  const router = useRouter();
   const utils = api.useUtils();
   const [open, setOpen] = useState(false);
 
   const {
+    control,
     register,
     handleSubmit,
     setError,
@@ -56,6 +62,7 @@ export function CreateFolderDialog({
     resolver: zodResolver(createFolderFormSchema),
     defaultValues,
   });
+  const keepOutOfGit = useWatch({ control, name: "keepOutOfGit" });
 
   const createFolder = api.folder.create.useMutation({
     onSuccess: (folder) => {
@@ -76,7 +83,33 @@ export function CreateFolderDialog({
     },
   });
 
+  const createLocal = api.localDocument.create.useMutation({
+    onSuccess: (folder) => {
+      toast.success("Folder created in Outside Git");
+      const { markdown: _markdown, ...summary } = folder;
+      utils.localDocument.list.setData({ projectId }, (entries) =>
+        entries && !entries.some((entry) => entry.id === folder.id)
+          ? [...entries, summary]
+          : entries,
+      );
+      void utils.localDocument.list.invalidate({ projectId });
+      setOpen(false);
+      reset(defaultValues);
+      router.push(localDocumentsHref(projectId, { folder: folder.id }));
+    },
+    onError: (err) => {
+      if (err.data?.field === "title")
+        applyTrpcErrorToForm(err, (_name, error) => setError("name", error));
+    },
+  });
+  const pending = createFolder.isPending || createLocal.isPending;
+  const error = keepOutOfGit ? createLocal.error : createFolder.error;
+
   const onSubmit = handleSubmit((values) => {
+    if (values.keepOutOfGit) {
+      createLocal.mutate({ projectId, kind: "folder", title: values.name });
+      return;
+    }
     createFolder.mutate({ projectId, parentPath, name: values.name });
   });
 
@@ -84,8 +117,11 @@ export function CreateFolderDialog({
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (createFolder.isPending) return;
-        if (nextOpen) createFolder.reset();
+        if (pending) return;
+        if (nextOpen) {
+          createFolder.reset();
+          createLocal.reset();
+        }
         setOpen(nextOpen);
         if (!nextOpen) reset(defaultValues);
       }}
@@ -96,18 +132,23 @@ export function CreateFolderDialog({
           New folder
         </Button>
       </DialogTrigger>
-      <DialogContent showCloseButton={!createFolder.isPending}>
+      <DialogContent showCloseButton={!pending} aria-busy={pending}>
         <DialogHeader>
           <DialogTitle>New folder</DialogTitle>
           <DialogDescription>
             Create a folder in{" "}
-            {parentPath.length ? parentPath.join(" / ") : "the project root"}.
+            {keepOutOfGit
+              ? "the project’s Outside Git area"
+              : parentPath.length
+                ? parentPath.join(" / ")
+                : "the project root"}
+            .
           </DialogDescription>
         </DialogHeader>
         <form
           onSubmit={onSubmit}
           className="flex flex-col gap-3"
-          aria-busy={createFolder.isPending}
+          aria-busy={pending}
           noValidate
         >
           <div className="flex flex-col gap-1.5">
@@ -115,7 +156,7 @@ export function CreateFolderDialog({
             <Input
               id="create-folder-name"
               autoFocus
-              disabled={createFolder.isPending}
+              disabled={pending}
               placeholder="Guides"
               aria-invalid={errors.name ? true : undefined}
               aria-describedby={
@@ -133,27 +174,23 @@ export function CreateFolderDialog({
               </p>
             ) : null}
           </div>
-          {createFolder.error && !createFolder.error.data?.field ? (
+          <KeepOutOfGitField
+            field={register("keepOutOfGit")}
+            disabled={pending}
+          />
+          {error && !error.data?.field ? (
             <p role="alert" className="text-danger m-0 text-[12px]">
               Could not create the folder. Try again.
             </p>
           ) : null}
           <DialogFooter>
             <DialogClose asChild>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={createFolder.isPending}
-              >
+              <Button type="button" variant="outline" disabled={pending}>
                 Cancel
               </Button>
             </DialogClose>
-            <Button
-              type="submit"
-              disabled={createFolder.isPending}
-              aria-busy={createFolder.isPending}
-            >
-              {createFolder.isPending ? "Creating…" : "Create"}
+            <Button type="submit" disabled={pending} aria-busy={pending}>
+              {pending ? "Creating…" : "Create"}
             </Button>
           </DialogFooter>
         </form>

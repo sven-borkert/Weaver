@@ -1183,6 +1183,19 @@ breadcrumbs, pins, search results and citations.
 Saved normalization uses [`reconcile-document-content.ts`](../apps/web/src/lib/documents/reconcile-document-content.ts)
 to update attributes and changed spans while preserving unrelated undo steps.
 
+**Outside Git** is a project area within Documents, served by
+[`LocalDocumentsScreen`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/LocalDocumentsScreen.tsx>).
+The normal creation dialogs offer **Keep out of Git**, which creates the item
+at the root of that area. Creating inside an Outside Git folder uses the same
+storage for its children. The editor shares the rich Markdown extensions for
+formatting, formulas, plots, and Mermaid. The `localDocument` router uses
+[`localDocuments.ts`](../packages/core/src/services/localDocuments.ts) and the
+authoritative PostgreSQL model `LocalDocumentEntry`. Each Markdown document
+stores its latest saved body. Writes use project Editor access, a per-project
+transaction lock, and revision checks. Project Viewers can read. Weaver's
+database backups cover the area. The separate model keeps its content outside
+the Git worktree, Git sync, and Git projection rebuilds.
+
 [`EditorToolbar`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/EditorToolbar.tsx>)
 provides permanent formatting and insertion controls in the shared page header,
 left of Context. `DocumentWorkspaceToolbar` portals those controls from the editor
