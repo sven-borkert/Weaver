@@ -61,6 +61,18 @@ import {
 } from "./knowledgeReconciliation";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { captureError } from "../diagnostics/writer";
+import {
+  assertTrackedDestination,
+  createUntrackedFolder,
+  deleteUntrackedFolder,
+  isUntrackedFolderPath,
+  listUntrackedTree,
+  moveUntrackedFolder,
+  moveUntrackedPrefix,
+  renameUntrackedFolder,
+  untrackedContentUnder,
+  untrackedFolderExists,
+} from "./untrackedDocuments";
 
 type Actor = ProjectActor & { name?: string | null; email?: string };
 
@@ -296,6 +308,23 @@ export async function presentFolderTree(
     scope === "documents"
       ? (await readRootFolderMetadataAt(repo, commitish))?.reviewDefaults
       : undefined;
+  return {
+    ...(await presentFolderMetadata(db, scope, metadata)),
+    ...(rootReviewDefaults === undefined ? {} : { rootReviewDefaults }),
+  };
+}
+
+/** Names, stamps, appearances and review defaults of parsed folder metadata. */
+export async function presentFolderMetadata(
+  db: PrismaClient,
+  scope: FolderScope,
+  metadata: Record<string, FolderMetadata>,
+): Promise<{
+  folderNames: Record<string, string>;
+  folderStamps: Record<string, FolderStamps>;
+  folderAppearances: Record<string, Appearance>;
+  folderReviewDefaults: Record<string, StoredFolderReviewDefaults>;
+}> {
   const ids = new Set<string>();
   for (const { createdBy, updatedBy } of Object.values(metadata))
     for (const author of [createdBy, updatedBy])
@@ -337,7 +366,6 @@ export async function presentFolderTree(
     folderStamps,
     folderAppearances,
     folderReviewDefaults,
-    ...(rootReviewDefaults === undefined ? {} : { rootReviewDefaults }),
   };
 }
 
@@ -491,27 +519,74 @@ export async function getTree(
         : { name: row.updaterName, email: row.updaterEmail },
     ),
     machineEditor: machineEditorFromRow(row),
+    untracked: false,
     index: documentIndexLights(row, generation, {
       coveredByBuild,
       aiExempt: row.wikiSourceItemId !== null,
     }),
   }));
+  const untracked =
+    scope === "documents"
+      ? await listUntrackedTree(db, input.projectId)
+      : { documents: [], folders: [], metadata: {} };
+  const allDocuments = [
+    ...documents,
+    ...untracked.documents.map((document) => ({
+      ...document,
+      headCommitSha: document.revision,
+      machineEditor: null,
+      untracked: true,
+      index: null,
+    })),
+  ].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const untrackedPresentation = await presentFolderMetadata(
+    db,
+    scope,
+    untracked.metadata,
+  );
+  const merge = (tracked: {
+    folders: string[];
+    folderNames: Record<string, string>;
+    folderStamps: Record<string, FolderStamps>;
+    folderAppearances: Record<string, Appearance>;
+    folderReviewDefaults: Record<string, StoredFolderReviewDefaults>;
+    rootReviewDefaults?: StoredFolderReviewDefaults;
+  }) => ({
+    ...tracked,
+    folders: [...new Set([...tracked.folders, ...untracked.folders])].sort(),
+    untrackedFolders: untracked.folders,
+    folderNames: {
+      ...untrackedPresentation.folderNames,
+      ...tracked.folderNames,
+    },
+    folderStamps: {
+      ...untrackedPresentation.folderStamps,
+      ...tracked.folderStamps,
+    },
+    folderAppearances: {
+      ...untrackedPresentation.folderAppearances,
+      ...tracked.folderAppearances,
+    },
+    folderReviewDefaults: {
+      ...untrackedPresentation.folderReviewDefaults,
+      ...tracked.folderReviewDefaults,
+    },
+    documents: allDocuments,
+  });
   if (!repo)
-    return {
+    return merge({
       folders: [],
       folderNames: {},
       folderStamps: {},
       folderAppearances: {},
       folderReviewDefaults: {},
-      documents,
-    };
+    });
   const snapshotSha = await repo.resolveHead();
   const folderPaths = await listScopeDirsAt(repo, scope, snapshotSha);
-  return {
+  return merge({
     folders: folderPaths,
     ...(await presentFolderTree(db, repo, scope, snapshotSha, folderPaths)),
-    documents,
-  };
+  });
 }
 
 export async function stageFolderInRepo(
@@ -566,11 +641,35 @@ export async function createFolderInRepo(
 
 export async function createFolder(
   db: PrismaClient,
-  input: { projectId: string; parentPath: string[]; name: string },
+  input: {
+    projectId: string;
+    parentPath: string[];
+    name: string;
+    /** Keep the folder out of Git; implied inside a folder outside Git. */
+    untracked?: boolean;
+  },
   actor: Actor,
   scope: FolderScope = "documents",
 ) {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (
+    scope === "documents" &&
+    (input.untracked ||
+      (await isUntrackedFolderPath(db, input.projectId, input.parentPath)))
+  )
+    return createUntrackedFolder(db, input, actor);
+  if (
+    scope === "documents" &&
+    (await untrackedFolderExists(db, input.projectId, [
+      ...input.parentPath,
+      slugify(input.name),
+    ]))
+  )
+    throw new CoreError(
+      "CONFLICT",
+      "A folder with this (slugified) name already exists here",
+      { field: "name" },
+    );
   const result = await withProjectRepo(input.projectId, (repo) =>
     createFolderInRepo(repo, input, actor, scope),
   );
@@ -612,6 +711,15 @@ export async function moveFolderToInRepo(
     "newParentPath",
   );
   await assertNoSibling(repo, toRel(scope, to.slice(0, -1)), to.at(-1)!);
+  if (scope === "documents") {
+    if (await untrackedFolderExists(db, projectId, to))
+      throw new CoreError(
+        "CONFLICT",
+        "A folder with this (slugified) name already exists here",
+        { field: "name" },
+      );
+    await assertTrackedDestination(db, projectId, to.slice(0, -1));
+  }
   const scopeDirs =
     scope === "tables"
       ? (await listScopeDirs(repo, scope)).map((dir) => `${TABLES_ROOT}/${dir}`)
@@ -717,6 +825,25 @@ export async function moveFolderToInRepo(
     );
     await enqueueProjectReconcile(projectId);
   }
+  if (
+    scope === "documents" &&
+    (await untrackedContentUnder(db, projectId, fromRel)) > 0
+  ) {
+    try {
+      // Git-ignored content below the folder moves with it.
+      await db.$transaction((tx) =>
+        moveUntrackedPrefix(tx, projectId, fromRel, toRelPath),
+      );
+    } catch (error) {
+      captureError({
+        event: "content.projection.failed",
+        message: "untracked content did not follow a folder move",
+        error,
+        projectId,
+        details: { kind: "folder", from: fromRel, to: toRelPath },
+      });
+    }
+  }
   for (const source of affected) {
     if (scope === "documents") {
       await enqueueDocumentChanged({
@@ -799,6 +926,11 @@ export async function renameFolder(
   scope: FolderScope = "documents",
 ) {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (
+    scope === "documents" &&
+    (await untrackedFolderExists(db, input.projectId, input.path))
+  )
+    return renameUntrackedFolder(db, input, actor);
   const result = await withProjectRepo(input.projectId, (repo) =>
     renameFolderInRepo(db, repo, input.projectId, input, actor, scope),
   );
@@ -813,6 +945,13 @@ export async function moveFolder(
   scope: FolderScope = "documents",
 ) {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (
+    scope === "documents" &&
+    (await untrackedFolderExists(db, input.projectId, input.path))
+  )
+    return moveUntrackedFolder(db, input, actor);
+  if (scope === "documents")
+    await assertTrackedDestination(db, input.projectId, input.newParentPath);
   const to = [...input.newParentPath, input.path.at(-1)!];
   await withProjectRepo(input.projectId, (repo) =>
     moveFolderToInRepo(db, repo, input.projectId, input.path, to, actor, scope),
@@ -855,6 +994,12 @@ export async function deleteFolder(
   scope: FolderScope = "documents",
 ) {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (scope === "documents") {
+    if (await untrackedFolderExists(db, input.projectId, input.path))
+      return deleteUntrackedFolder(db, input, actor);
+    if (await untrackedContentUnder(db, input.projectId, input.path.join("/")))
+      throw new CoreError("PRECONDITION_FAILED", "folder is not empty");
+  }
   await withProjectRepo(input.projectId, (repo) =>
     deleteFolderInRepo(repo, input, actor, scope),
   );

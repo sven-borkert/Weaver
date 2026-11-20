@@ -69,7 +69,7 @@ const table: ItemEntry<TableItem> = {
 
 describe("tablesExplorerAdapter", () => {
   it("does not provide document-root reviewer actions", () => {
-    expect(tablesExplorerAdapter.rootActions).toBeUndefined();
+    expect(tablesExplorerAdapter.headerActions).toBeUndefined();
   });
   it("renders a Rows column and no index lights", () => {
     const html = renderToStaticMarkup(

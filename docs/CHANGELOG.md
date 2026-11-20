@@ -4,6 +4,11 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Changed
+
+- Documents and folders kept out of Git now appear in the normal documents explorer, in any folder, and open in the same editor as Git documents: rich and source editing, images, cross-references, contents, review, properties, appearance and Markdown, ZIP and PDF downloads all work the same. They are only Git-ignored, so they have no history, are not pushed or indexed, and carry a "Not in Git" badge. Everything inside a folder kept out of Git is kept out too. The separate Outside Git area is gone; its existing entries move into the explorer automatically.
+- The documents explorer header collects Mark all as reviewed, Set reviewers recursively and Download as ZIP in one ⋯ menu, and no longer shows an Index view button.
+
 ## [0.1.246] - 2026-11-18
 
 ### Fixed

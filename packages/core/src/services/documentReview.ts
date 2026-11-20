@@ -31,6 +31,12 @@ import {
   type ProjectActor,
 } from "./projectAccess";
 import { withProjectRepo } from "./projectRepo";
+import {
+  isUntrackedDocument,
+  markUntrackedDocumentReviewed,
+  setUntrackedDocumentReview,
+  untrackedReviewPermissions,
+} from "./untrackedDocuments";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { invalidCursorError } from "./contentCursors";
 import {
@@ -180,6 +186,8 @@ export async function markDocumentReviewed(
   // Membership first so a non-member cannot probe document ids.
   await resolveProjectAccess(db, input.projectId, actor);
   if (!hasCapability(actor, "content:write")) throw new CoreError("FORBIDDEN");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return markUntrackedDocumentReviewed(db, input, actor);
   const self = authorForUser({
     id: actor.userId,
     name: actor.name,
@@ -236,6 +244,14 @@ export async function setDocumentReview(
   const reviewers = input.reviewers
     ? await resolveReviewerTargets(db, input.projectId, input.reviewers)
     : undefined;
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return setUntrackedDocumentReview(db, input, actor, (review) => ({
+      ...review,
+      ...(reviewers && { reviewers }),
+      ...(input.everyMonths !== undefined && {
+        everyMonths: input.everyMonths,
+      }),
+    }));
   return writeReview(
     db,
     input,
@@ -259,6 +275,16 @@ export async function reviewPermissions(
   actor: ProjectActor,
 ): Promise<{ canMarkReviewed: boolean; canEditReview: boolean }> {
   const access = await resolveProjectAccess(db, projectId, actor);
+  if (await isUntrackedDocument(db, projectId, documentId))
+    return {
+      canMarkReviewed: await untrackedReviewPermissions(
+        db,
+        projectId,
+        documentId,
+        actor,
+      ),
+      canEditReview: projectRoleAtLeast(access.effectiveRole, "Maintainer"),
+    };
   return {
     canMarkReviewed: await isEffectiveReviewer(
       db,

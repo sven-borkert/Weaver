@@ -1,5 +1,6 @@
 "use client";
 
+import { NotInGitBadge } from "./NotInGitBadge";
 import type { AppearanceTarget } from "@weaver/core/appearance/metadata";
 import { AppearanceDialog } from "~/components/appearance/AppearanceDialog";
 import { AppearanceIcon } from "~/components/appearance/AppearanceIcon";
@@ -300,6 +301,7 @@ export function ContentExplorer<I extends ExplorerItem>(
         <adapter.FolderActions
           projectId={projectId}
           path={entry.path}
+          untracked={entry.untracked === true}
           folders={folders}
           folderNames={folderNames}
           canEdit={canEdit}
@@ -459,6 +461,9 @@ export function ContentExplorer<I extends ExplorerItem>(
                   <span className="line-clamp-2 text-[13px] font-medium break-words">
                     {entry.kind === "folder" ? entry.name : entry.title}
                   </span>
+                  {entry.kind === "folder" && entry.untracked ? (
+                    <NotInGitBadge compact />
+                  ) : null}
                   {entry.kind === "item" && adapter.itemBadge ? (
                     <span
                       className={cn(
@@ -614,6 +619,9 @@ export function ContentExplorer<I extends ExplorerItem>(
                       <span className="truncate">
                         {entry.kind === "folder" ? entry.name : entry.title}
                       </span>
+                      {entry.kind === "folder" && entry.untracked ? (
+                        <NotInGitBadge compact className="ml-1" />
+                      ) : null}
                       {entry.kind === "item" && adapter.itemBadge ? (
                         <span
                           className={cn(

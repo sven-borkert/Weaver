@@ -86,7 +86,7 @@ let role = "Editor";
 
 import { FolderReviewDialog } from "./FolderReviewDialog";
 import { MarkFolderReviewedDialog } from "./MarkFolderReviewedDialog";
-import { FolderMutations, DocumentRootReviewAction } from "./FolderMutations";
+import { DocumentFolderHeaderMenu, FolderMutations } from "./FolderMutations";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -157,24 +157,69 @@ describe("recursive reviewer actions", () => {
   it("root_can_assign_reviewers_without_visible_root_folder", () => {
     role = "Maintainer";
     let renderer!: ReactTestRenderer;
+    const menu = (untracked = false) => (
+      <DocumentFolderHeaderMenu
+        projectId="p1"
+        folderPath={[]}
+        folderName="Project"
+        exists
+        untracked={untracked}
+      />
+    );
     act(() => {
-      renderer = create(<DocumentRootReviewAction projectId="p1" />);
+      renderer = create(menu());
     });
-    const text = (button: (typeof renderer)["root"]) =>
-      button.children
-        .filter((child): child is string => typeof child === "string")
-        .join("");
-    const trigger = renderer.root
-      .findAllByType("button")
-      .find((button) => text(button) === "Set reviewers recursively")!;
-    act(() => (trigger.props.onClick as () => void)());
-    const dialog = renderer.root.findByType(FolderReviewDialog);
-    expect(dialog.props.path).toEqual([]);
-    role = "Editor";
-    act(() => renderer.update(<DocumentRootReviewAction projectId="p1" />));
-    expect(renderer.root.findAllByType("button").map(text)).toEqual([
+    expect(labels(renderer)).toEqual([
       "Mark all as reviewed",
+      "Set reviewers recursively",
+      "Download as ZIP",
     ]);
+    const trigger = renderer.root
+      .findAllByProps({ "data-menu-item": true })
+      .find((node) => node.type === "button")!;
+    expect(trigger).toBeTruthy();
+    expect(renderer.root.findByType(FolderReviewDialog).props.path).toEqual([]);
+    role = "Editor";
+    act(() => renderer.update(menu()));
+    expect(labels(renderer)).toEqual([
+      "Mark all as reviewed",
+      "Download as ZIP",
+    ]);
+  });
+
+  it("keeps only the download in an untracked folder's header menu", () => {
+    role = "Maintainer";
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <DocumentFolderHeaderMenu
+          projectId="p1"
+          folderPath={["scratch"]}
+          folderName="Scratch"
+          exists
+          untracked
+        />,
+      );
+    });
+    expect(labels(renderer)).toEqual(["Download as ZIP"]);
+  });
+
+  it("hides folder-wide review actions on an untracked folder row", () => {
+    role = "Maintainer";
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <FolderMutations
+          projectId="p1"
+          path={["scratch"]}
+          untracked
+          folders={["scratch"]}
+          canEdit
+        />,
+      );
+    });
+    expect(labels(renderer)).not.toContain("Mark all as reviewed");
+    expect(labels(renderer)).not.toContain("Set reviewers recursively");
   });
 });
 
@@ -199,11 +244,20 @@ describe("mark all as reviewed", () => {
     role = "Viewer";
     let renderer!: ReactTestRenderer;
     act(() => {
-      renderer = create(<DocumentRootReviewAction projectId="p1" />);
+      renderer = create(
+        <DocumentFolderHeaderMenu
+          projectId="p1"
+          folderPath={[]}
+          folderName="Project"
+          exists
+          untracked={false}
+        />,
+      );
     });
-    act(() =>
-      (renderer.root.findByType("button").props.onClick as () => void)(),
-    );
+    const item = renderer.root
+      .findAllByProps({ "data-menu-item": true })
+      .find((node) => node.type === "button")!;
+    act(() => (item.props.onClick as () => void)());
     expect(
       renderer.root.findByType(MarkFolderReviewedDialog).props,
     ).toMatchObject({ open: true, path: [] });

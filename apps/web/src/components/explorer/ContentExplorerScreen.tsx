@@ -26,6 +26,7 @@ import {
   folderDisplayName,
   folderExists,
   folderHref,
+  isUntrackedFolder,
   listFolderEntries,
   parentFolder,
   searchFolderEntries,
@@ -61,7 +62,7 @@ import {
   runEntryBatch,
   withinFolder,
 } from "~/lib/explorer/selection";
-import { FolderDownloadButton } from "./FolderDownloadButton";
+import { NotInGitBadge } from "./NotInGitBadge";
 
 const ALL_VALUES = "__all__";
 
@@ -421,6 +422,7 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
   const project = projectQuery.data;
   const folderName =
     folderDisplayName(tree?.folderNames, folderPath) || project.name;
+  const folderUntracked = isUntrackedFolder(tree, folderPath);
 
   let body: React.ReactNode;
   if (treeQuery.isLoading) {
@@ -549,8 +551,9 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
       >
         <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
           <div className="flex flex-col gap-1">
-            <h1 className="text-text m-0 text-[20px] font-semibold break-words">
+            <h1 className="text-text m-0 flex flex-wrap items-center gap-2 text-[20px] font-semibold break-words">
               {folderName}
+              {folderUntracked ? <NotInGitBadge /> : null}
             </h1>
             <p className="text-text-3 m-0 text-[13px]">
               {folders.length} folder{folders.length === 1 ? "" : "s"} ·{" "}
@@ -566,9 +569,6 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
             {importer?.dialog}
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {folderPath.length === 0
-              ? adapter.rootActions?.({ projectId })
-              : null}
             <Button
               type="button"
               variant="outline"
@@ -617,14 +617,6 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
                 <ToggleGroupItem value="compact">Compact</ToggleGroupItem>
               </ToggleGroup>
             ) : null}
-            {adapter.folderDownloadHref &&
-            tree &&
-            folderExists(tree, folderPath) ? (
-              <FolderDownloadButton
-                href={adapter.folderDownloadHref(projectId, folderPath)}
-                folderName={folderName}
-              />
-            ) : null}
             {canEdit ? (
               <>
                 <adapter.CreateFolderDialog
@@ -632,15 +624,24 @@ export function ContentExplorerScreen<I extends ExplorerItem>({
                   parentPath={folderPath}
                   // Stay on this level so the new folder can be filled by drag and drop.
                   onFolderCreated={() => undefined}
+                  inUntrackedFolder={folderUntracked}
                 />
                 <adapter.CreateItemDialog
                   projectId={projectId}
                   folderPath={folderPath}
                   folders={tree?.folders ?? []}
                   folderNames={tree?.folderNames}
+                  inUntrackedFolder={folderUntracked}
                 />
               </>
             ) : null}
+            {adapter.headerActions?.({
+              projectId,
+              folderPath,
+              folderName,
+              exists: tree ? folderExists(tree, folderPath) : false,
+              untracked: folderUntracked,
+            })}
           </div>
         </div>
 

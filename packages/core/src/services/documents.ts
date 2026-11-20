@@ -111,6 +111,17 @@ import {
 } from "./knowledgeReconciliation";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { captureError } from "../diagnostics/writer";
+import {
+  assertTrackedDestination,
+  createUntrackedDocument,
+  deleteUntrackedDocument,
+  getUntrackedDocument,
+  isUntrackedDocument,
+  isUntrackedFolderPath,
+  moveUntrackedDocument,
+  saveUntrackedDocument,
+  untrackedSlugTaken,
+} from "./untrackedDocuments";
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -453,7 +464,7 @@ export type DocumentReviewView = {
 };
 
 /** The review block with current member/group names and whether each reviewer still resolves. */
-async function presentDocumentReview(
+export async function presentDocumentReview(
   db: Db,
   projectId: string,
   review: DocumentReview | null,
@@ -518,7 +529,7 @@ export type DocumentMetadataView = {
 };
 
 /** The four metadata fields of a read revision, with current user names. */
-async function presentDocumentMetadata(
+export async function presentDocumentMetadata(
   db: Db,
   meta: DocumentMeta,
 ): Promise<DocumentMetadataView> {
@@ -545,7 +556,7 @@ async function presentDocumentMetadata(
   };
 }
 
-function assertUpdatedNotBeforeCreated(meta: DocumentMeta): void {
+export function assertUpdatedNotBeforeCreated(meta: DocumentMeta): void {
   if (meta.updated < meta.created)
     throw new CoreError(
       "BAD_REQUEST",
@@ -695,7 +706,10 @@ export function assertDocumentFileSize(file: string, path?: string): void {
   }
 }
 
-function assertImageSourcesContained(json: JSONContent, docPath: string) {
+export function assertImageSourcesContained(
+  json: JSONContent,
+  docPath: string,
+) {
   for (const src of collectImageSources(json)) {
     if (
       classifyImageSrc(src) === "relative" &&
@@ -727,7 +741,7 @@ export function documentSlugFromPath(file: string): string {
   return slug;
 }
 
-function assertDocumentTitle(title: string): void {
+export function assertDocumentTitle(title: string): void {
   const result = documentTitleSchema.safeParse(title);
   if (!result.success) {
     throw new CoreError(
@@ -1060,7 +1074,7 @@ type PreparedContent = {
   json: JSONContent | null;
 };
 
-async function prepareContent(
+export async function prepareContent(
   db: Db,
   projectId: string,
   content: DocumentContentInput,
@@ -1127,9 +1141,15 @@ export async function serializeForSave(
   const tableIds = targets
     .filter((target) => target.targetType === "table")
     .map((target) => target.targetId);
-  const [documentRows, tableRows] = await Promise.all([
+  const [trackedRows, untrackedRows, tableRows] = await Promise.all([
     documentIds.length > 0
       ? db.document.findMany({
+          where: { projectId, id: { in: documentIds } },
+          select: { id: true, title: true },
+        })
+      : [],
+    documentIds.length > 0
+      ? db.untrackedDocument.findMany({
           where: { projectId, id: { in: documentIds } },
           select: { id: true, title: true },
         })
@@ -1141,6 +1161,7 @@ export async function serializeForSave(
         })
       : [],
   ]);
+  const documentRows = [...trackedRows, ...untrackedRows];
   const titles = new Map<string, string>([
     ...documentRows.map(
       (row) => [crossrefTargetKey("document", row.id), row.title] as const,
@@ -1204,6 +1225,7 @@ export async function nextAvailableSlug(
       },
       select: { id: true },
     });
+    const untrackedTaken = await untrackedSlugTaken(db, projectId, slug);
     const isCurrentSelfPath = excluded?.path === path;
     const isOwnHistoryPath = isCurrentSelfPath || ownHistoryPaths.has(path);
     const basenames = DOCUMENT_KIND_NAMES.map(
@@ -1223,6 +1245,7 @@ export async function nextAvailableSlug(
       (await repo.fileExistsInWorktree(assetsDir)) && !isCurrentSelfPath;
     if (
       !inIndex &&
+      !untrackedTaken &&
       !trackedCollision &&
       !assetsTaken &&
       (!inWorktree || isCurrentSelfPath) &&
@@ -1563,11 +1586,39 @@ export async function createDocument(
     properties?: WikiPagePropertiesInput;
     iconAssets?: AppearanceAsset[];
     allowMissingIcon?: boolean;
+    /** Keep the document out of Git; implied inside a folder outside Git. */
+    untracked?: boolean;
   },
   actor: EnrichedActor,
   provenance?: DocumentProvenance,
 ): Promise<DocumentResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (
+    input.untracked ||
+    (await isUntrackedFolderPath(db, input.projectId, input.folderPath))
+  ) {
+    if (input.iconAssets?.length)
+      throw new CoreError(
+        "BAD_REQUEST",
+        "Image icons are not available when creating a document outside Git",
+      );
+    return createUntrackedDocument(
+      db,
+      {
+        projectId: input.projectId,
+        folderPath: input.folderPath,
+        title: input.title,
+        content: input.content,
+        ...(input.appearance && { appearance: input.appearance }),
+        ...(input.properties && { properties: input.properties }),
+        ...(input.review && { review: input.review }),
+        ...(input.reviewSource && { reviewSource: input.reviewSource }),
+        ...(input.assets && { assets: input.assets }),
+        ...(input.assetsFromSlug && { assetsFromSlug: input.assetsFromSlug }),
+      },
+      actor,
+    );
+  }
   const result = await withProjectRepo(input.projectId, async (repo) => {
     await assertProjectRole(db, input.projectId, actor, "Editor");
     return withAppearanceAssetsInRepo(
@@ -1610,9 +1661,15 @@ export async function getDocument(
   input: { projectId: string; documentId: string },
   actor: ProjectActor,
 ) {
+  await assertProjectRole(db, input.projectId, actor, "Viewer");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId)) {
+    const { snapshotCommitSha: _snapshot, ...document } =
+      await getUntrackedDocument(db, input, actor);
+    return document;
+  }
   const { snapshotCommitSha: _snapshotCommitSha, ...document } =
     await getDocumentWithSnapshot(db, input, actor);
-  return document;
+  return { ...document, untracked: false as const };
 }
 
 export async function getDocumentWithSnapshot(
@@ -1731,6 +1788,21 @@ export async function getDocumentWithSnapshot(
   };
 }
 
+/** The current revision of a tracked or untracked document. */
+export async function getCurrentDocumentWithSnapshot(
+  db: PrismaClient,
+  input: { projectId: string; documentId: string },
+  actor: ProjectActor,
+) {
+  await assertProjectRole(db, input.projectId, actor, "Viewer");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return getUntrackedDocument(db, input, actor);
+  return {
+    ...(await getDocumentWithSnapshot(db, input, actor)),
+    untracked: false as const,
+  };
+}
+
 /**
  * Read-only pinned read (concept §4.1). Unlike getDocument it repairs no
  * projection and never substitutes current content for an unavailable snapshot.
@@ -1827,6 +1899,8 @@ export async function saveDocument(
   provenance?: DocumentProvenance,
 ): Promise<DocumentResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return saveUntrackedDocument(db, input, actor);
   const summary = input.changeSummary.trim();
   return writeDocument(
     db,
@@ -1965,6 +2039,8 @@ export async function getHistory(
     input.limit > 100
   )
     throw new CoreError("BAD_REQUEST", "invalid document history pagination");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return { hasMore: false, entries: [] };
   const row = await requireDocument(db, input.projectId, input.documentId);
   const repo = await openProjectRepo(input.projectId);
   if (!repo) throw new CoreError("NOT_FOUND");
@@ -2609,6 +2685,8 @@ export async function restoreDocument(
   actor: EnrichedActor,
 ): Promise<DocumentResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    throw new CoreError("BAD_REQUEST", "Documents outside Git have no history");
   const result = await withProjectRepo(input.projectId, (repo) =>
     restoreDocumentInRepo(db, repo, input, actor),
   );
@@ -2734,6 +2812,9 @@ export async function moveDocument(
   actor: EnrichedActor,
 ): Promise<DocumentResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return moveUntrackedDocument(db, input, actor);
+  await assertTrackedDestination(db, input.projectId, input.folderPath);
   const result = await withProjectRepo(input.projectId, (repo) =>
     moveDocumentInRepo(db, repo, input, actor),
   );
@@ -2780,6 +2861,8 @@ export async function deleteDocument(
   actor: EnrichedActor,
 ): Promise<void> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return deleteUntrackedDocument(db, input, actor);
   await withProjectRepo(input.projectId, async (repo) => {
     await assertProjectRole(db, input.projectId, actor, "Editor");
     return deleteDocumentInRepo(db, repo, input, actor);
@@ -2793,7 +2876,7 @@ export async function resolveRefs(
   actor: ProjectActor,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
-  const [documentRows, tableRows] = await Promise.all([
+  const [trackedRows, untrackedRows, tableRows] = await Promise.all([
     db.document.findMany({
       where: { projectId: input.projectId, id: { in: input.ids } },
       select: {
@@ -2804,11 +2887,28 @@ export async function resolveRefs(
         lastEditedAt: true,
       },
     }),
+    db.untrackedDocument.findMany({
+      where: { projectId: input.projectId, id: { in: input.ids } },
+      select: {
+        id: true,
+        title: true,
+        path: true,
+        excerpt: true,
+        updatedAt: true,
+      },
+    }),
     db.dataTable.findMany({
       where: { projectId: input.projectId, id: { in: input.ids } },
       select: { id: true, title: true, path: true, lastEditedAt: true },
     }),
   ]);
+  const documentRows = [
+    ...trackedRows,
+    ...untrackedRows.map(({ updatedAt, ...row }) => ({
+      ...row,
+      lastEditedAt: updatedAt,
+    })),
+  ];
   const byId = new Map(
     [
       ...documentRows.map((row) => ({
@@ -2849,7 +2949,8 @@ export async function getBacklinks(
   actor: SecurityContext,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
-  await requireDocument(db, input.projectId, input.documentId);
+  if (!(await isUntrackedDocument(db, input.projectId, input.documentId)))
+    await requireDocument(db, input.projectId, input.documentId);
   const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
   const where = {
     projectId: input.projectId,

@@ -39,6 +39,8 @@ export type ExplorerTree<I extends ExplorerItem> = {
   folderAppearances?: Record<string, Appearance>;
   /** Stamps keyed by folder path; folders without metadata are absent. */
   folderStamps?: Record<string, FolderStamps>;
+  /** Folders kept out of Git; everything below them is untracked too. */
+  untrackedFolders?: string[];
   items: I[];
 };
 
@@ -48,6 +50,8 @@ export type FolderEntry = Partial<FolderStamps> & {
   path: string[];
   itemCount: number;
   appearance?: Appearance | null;
+  /** The folder (or an ancestor) is kept out of Git. */
+  untracked?: boolean;
 };
 
 export type ItemEntry<I extends ExplorerItem> = I & {
@@ -114,6 +118,18 @@ export function folderPathLabel(
     .join(" / ");
 }
 
+/** True when the folder or one of its ancestors is kept out of Git. */
+export function isUntrackedFolder<I extends ExplorerItem>(
+  tree: ExplorerTree<I> | undefined,
+  folderPath: string[],
+): boolean {
+  const untracked = tree?.untrackedFolders;
+  if (!untracked?.length || folderPath.length === 0) return false;
+  return folderPath.some((_, index) =>
+    untracked.includes(folderPath.slice(0, index + 1).join("/")),
+  );
+}
+
 export function folderExists<I extends ExplorerItem>(
   tree: ExplorerTree<I>,
   folderPath: string[],
@@ -160,6 +176,7 @@ export function listFolderEntries<I extends ExplorerItem>(
         itemCount: counts.get(segment) ?? 0,
         appearance: tree.folderAppearances?.[path.join("/")],
         ...tree.folderStamps?.[path.join("/")],
+        ...(isUntrackedFolder(tree, path) ? { untracked: true } : {}),
       };
     })
     .sort((a, b) => collator.compare(a.name, b.name));

@@ -9,8 +9,10 @@ The database package owns schema, migrations, generated client, seed, and
 runtime client construction. Prisma always uses `@prisma/adapter-pg`;
 migrations are hand-authored SQL applied with `migrate deploy` (never
 `migrate dev`); project reads respect soft delete via the `notDeleted` spread.
-`Document` rows are rebuildable Git projections. `LocalDocumentEntry` owns
-the latest saved version of documents and folders created outside Git.
+`Document` rows are rebuildable Git projections. `UntrackedDocument`,
+`UntrackedFolder` and `UntrackedFile` are authoritative for Git-ignored
+documents, folders and their images (never rebuilt from Git; `rebuildIndex`
+leaves them alone).
 
 ## Key files
 

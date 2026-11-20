@@ -12,7 +12,7 @@ import {
 } from "@weaver/core/editor/markdown";
 import { readProjectImage } from "@weaver/core/services/documentImages";
 import {
-  getDocumentWithSnapshot,
+  getCurrentDocumentWithSnapshot,
   resolveRefs,
 } from "@weaver/core/services/documents";
 import type { ProjectActor } from "@weaver/core/services/projectAccess";
@@ -33,7 +33,7 @@ export async function exportDocumentPdf(
   options: { maxImageBytes?: number } = {},
 ): Promise<{ bytes: Uint8Array; filename: string }> {
   const maxImageBytes = options.maxImageBytes ?? MAX_PDF_IMAGE_BYTES;
-  const document = await getDocumentWithSnapshot(db, input, actor);
+  const document = await getCurrentDocumentWithSnapshot(db, input, actor);
   if (document.content.kind !== "markdown")
     throw new CoreError(
       "BAD_REQUEST",

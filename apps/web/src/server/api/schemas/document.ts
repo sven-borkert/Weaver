@@ -62,6 +62,8 @@ export const createDocumentInput = z.object({
   title,
   contentJson,
   properties: wikiPagePropertiesInputSchema.optional(),
+  /** Keep the document out of Git (Git-ignored). */
+  untracked: z.boolean().optional(),
 });
 
 export const updateDocumentInput = z.object({

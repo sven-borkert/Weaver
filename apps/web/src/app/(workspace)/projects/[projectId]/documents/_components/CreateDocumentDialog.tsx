@@ -21,7 +21,6 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import { applyTrpcErrorToForm } from "~/lib/trpcErrors";
 import { api } from "~/trpc/react";
 import { KeepOutOfGitField } from "./KeepOutOfGitField";
@@ -42,11 +41,14 @@ const defaultValues: CreateDocumentFormValues = {
 type CreateDocumentDialogProps = {
   projectId: string;
   folderPath: string[];
+  /** The target folder is itself outside Git, so the document is too. */
+  inUntrackedFolder?: boolean;
 };
 
 export function CreateDocumentDialog({
   projectId,
   folderPath,
+  inUntrackedFolder = false,
 }: CreateDocumentDialogProps) {
   const router = useRouter();
   const utils = api.useUtils();
@@ -63,11 +65,16 @@ export function CreateDocumentDialog({
     resolver: zodResolver(createDocumentFormSchema),
     defaultValues,
   });
-  const keepOutOfGit = useWatch({ control, name: "keepOutOfGit" });
+  const keepOutOfGit =
+    useWatch({ control, name: "keepOutOfGit" }) || inUntrackedFolder;
 
   const createDocument = api.document.create.useMutation({
-    onSuccess: (document) => {
-      toast.success("Document created");
+    onSuccess: (document, variables) => {
+      toast.success(
+        variables.untracked
+          ? "Document created outside Git"
+          : "Document created",
+      );
       void utils.document.list.invalidate({ projectId });
       void utils.folder.tree.invalidate({ projectId });
       setOpen(false);
@@ -85,36 +92,16 @@ export function CreateDocumentDialog({
     },
   });
 
-  const createLocal = api.localDocument.create.useMutation({
-    onSuccess: (document) => {
-      toast.success("Document created in Outside Git");
-      utils.localDocument.get.setData(
-        { projectId, entryId: document.id },
-        document,
-      );
-      void utils.localDocument.list.invalidate({ projectId });
-      setOpen(false);
-      reset(defaultValues);
-      router.push(localDocumentsHref(projectId, { document: document.id }));
-    },
-    onError: (err) => {
-      if (err.data?.field === "title")
-        applyTrpcErrorToForm(err, (_name, error) => setError("title", error));
-    },
-  });
-  const pending = createDocument.isPending || createLocal.isPending;
-  const error = keepOutOfGit ? createLocal.error : createDocument.error;
+  const pending = createDocument.isPending;
+  const error = createDocument.error;
 
   const onSubmit = handleSubmit((values) => {
-    if (values.keepOutOfGit) {
-      createLocal.mutate({ projectId, kind: "document", title: values.title });
-      return;
-    }
     createDocument.mutate({
       projectId,
       folderPath,
       title: values.title,
       contentJson: { type: "doc", content: [{ type: "paragraph" }] },
+      ...(values.keepOutOfGit || inUntrackedFolder ? { untracked: true } : {}),
     });
   });
 
@@ -123,10 +110,7 @@ export function CreateDocumentDialog({
       open={open}
       onOpenChange={(nextOpen) => {
         if (pending) return;
-        if (nextOpen) {
-          createDocument.reset();
-          createLocal.reset();
-        }
+        if (nextOpen) createDocument.reset();
         setOpen(nextOpen);
         if (!nextOpen) reset(defaultValues);
       }}
@@ -142,12 +126,8 @@ export function CreateDocumentDialog({
           <DialogTitle>New document</DialogTitle>
           <DialogDescription>
             Create a document in{" "}
-            {keepOutOfGit
-              ? "the project’s Outside Git area"
-              : folderPath.length
-                ? folderPath.join(" / ")
-                : "the project root"}
-            .
+            {folderPath.length ? folderPath.join(" / ") : "the project root"}
+            {keepOutOfGit ? ", kept out of Git" : ""}.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -182,6 +162,7 @@ export function CreateDocumentDialog({
           <KeepOutOfGitField
             field={register("keepOutOfGit")}
             disabled={pending}
+            forced={inUntrackedFolder}
           />
           {error && !error.data?.field ? (
             <p role="alert" className="text-danger m-0 text-[12px]">

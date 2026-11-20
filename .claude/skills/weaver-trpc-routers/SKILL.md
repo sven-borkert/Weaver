@@ -94,15 +94,19 @@ weaver-database (schema/migrations/soft delete), weaver-testing (caller harness,
 
 ## Complete router inventory and transport policy
 
-`root.ts` registers _meta, account, project, projectMember, document, localDocument, review, reviewerGroup, folder, table, tableFolder, search, graph, knowledge, llm, assistant, apiKey, oauthConsent, diagnostics, ingestion, projectApiKey, and remoteInstance (Admin registry of peer Weaver instances — `list/create/update/delete/test`; plus authed user procedures `listForUser`, `connect`/`disconnect`, `targets`/`targetFolders`, and `sendDocument`/`sendTable`, which drive the "Send to another Weaver…" dialog). Keep this inventory aligned with the registry when adding areas.
+`root.ts` registers _meta, account, project, projectMember, document, review, reviewerGroup, folder, table, tableFolder, search, graph, knowledge, llm, assistant, apiKey, oauthConsent, diagnostics, ingestion, projectApiKey, and remoteInstance (Admin registry of peer Weaver instances — `list/create/update/delete/test`; plus authed user procedures `listForUser`, `connect`/`disconnect`, `targets`/`targetFolders`, and `sendDocument`/`sendTable`, which drive the "Send to another Weaver…" dialog). Keep this inventory aligned with the registry when adding areas.
 
 Production 5xx responses use a generic message and omit stack and internal cause metadata. The HTTP adapter always logs internal failures; expected error chatter remains development-only. Request IDs correlate tRPC diagnostic events. Public procedures have diagnostics without artificial latency.
 
 Assistant reads expose `getConversationStatus`, paged `getConversation` (`beforePosition`), lightweight `listProposals`, full `getProposal`, and message-filtered `listCitations`. Preserve current membership checks in service reads and every SSE replay page.
 
-## Outside Git procedures
+## Documents outside Git
 
-`localDocument` (`routers/localDocument.ts`, `schemas/localDocument.ts`) delegates to `services/localDocuments.ts`. `list` returns a flat project tree without Markdown bodies, and `get` returns one entry by project and UUID. The service requires a browser session and Viewer access for reads or Editor access for mutations. `create` accepts an optional parent folder UUID. `update` and `delete` require the entry's integer `revision`, with stale writes mapped to `CONFLICT`.
+There is no separate router: `document.create` and `folder.create` take an
+optional `untracked` flag, and the other document/folder procedures dispatch to
+`services/untrackedDocuments.ts` for untracked ids and folder paths. Their
+`baseCommitSha`/`expectedHeadCommitSha`/`expectedRevision` inputs carry the
+untracked content revision (also 40 hex characters).
 
 ## Review procedures
 

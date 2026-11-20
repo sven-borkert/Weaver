@@ -17,6 +17,7 @@ export type {
 } from "~/lib/explorer/entries";
 export {
   folderExists,
+  isUntrackedFolder,
   listFolderEntries,
   parentFolder,
   parseFolderParam,
@@ -41,7 +42,10 @@ export type DocumentItem = {
   createdBy: DocumentAuthor | null;
   lastEditedAt: Date;
   lastEditedBy: DocumentAuthor | null;
-  index: DocumentIndexLights;
+  /** Null for documents kept out of Git, which are not indexed. */
+  index: DocumentIndexLights | null;
+  /** Kept out of Git (Git-ignored). */
+  untracked?: boolean;
 };
 export type ExplorerTree = GenericExplorerTree<DocumentItem>;
 export type DocumentEntry = ItemEntry<DocumentItem>;

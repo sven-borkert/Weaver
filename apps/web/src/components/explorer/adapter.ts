@@ -80,11 +80,21 @@ export type ExplorerAdapter<I extends ExplorerItem> = {
   editedHeaders?: { at: string; by: string };
   /** Tile subtitle in icons view; defaults to the last-edited date. */
   tileMeta?: (item: I, formattedDate: string) => ReactNode;
-  /** Optional root-only actions, independent of a visible folder entry. */
-  rootActions?: (input: { projectId: string }) => ReactNode;
+  /** Actions for the open folder (the empty path is the root), rendered in the header. */
+  headerActions?: (input: {
+    projectId: string;
+    folderPath: string[];
+    folderName: string;
+    /** The open folder exists (the root always does). */
+    exists: boolean;
+    /** The open folder is kept out of Git. */
+    untracked: boolean;
+  }) => ReactNode;
   FolderActions: ComponentType<{
     projectId: string;
     path: string[];
+    /** The folder is kept out of Git. */
+    untracked?: boolean;
     folders: string[];
     folderNames?: Record<string, string>;
     canEdit: boolean;
@@ -107,12 +117,14 @@ export type ExplorerAdapter<I extends ExplorerItem> = {
     projectId: string;
     parentPath: string[];
     onFolderCreated: (path: string[]) => void;
+    inUntrackedFolder?: boolean;
   }>;
   CreateItemDialog: ComponentType<{
     projectId: string;
     folderPath: string[];
     folders: string[];
     folderNames?: Record<string, string>;
+    inUntrackedFolder?: boolean;
   }>;
   copy: {
     workspaceLabel: string; // "Document workspace"

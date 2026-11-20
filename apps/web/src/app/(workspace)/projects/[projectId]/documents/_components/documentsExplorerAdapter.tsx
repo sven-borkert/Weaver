@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { toast } from "sonner";
 
 import { MAX_MARKDOWN_CHARS } from "@weaver/core/documents/limits";
@@ -17,7 +16,6 @@ import {
   type DocumentItem,
 } from "~/lib/documents/explorer";
 import { invalidateDocumentReferenceCaches } from "~/lib/documents/document-cache-invalidation";
-import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import {
   documentArchiveDownload,
   documentDownload,
@@ -25,14 +23,14 @@ import {
 } from "~/lib/documents/download";
 import { partitionDroppedFiles } from "~/lib/documents/document-drop";
 import { documentKindIcon } from "~/components/icons/document-kind-icon";
-import { Button } from "~/components/ui/button";
+import { NotInGitBadge } from "~/components/explorer/NotInGitBadge";
 import { ClientDateTime } from "~/components/ui/client-date";
 import { api } from "~/trpc/react";
 import { useExplorerOperations } from "~/components/explorer/useExplorerOperations";
 import { CreateDocumentDialog } from "./CreateDocumentDialog";
 import { CreateFolderDialog } from "./CreateFolderDialog";
 import { DocumentMutations } from "./DocumentMutations";
-import { FolderMutations, DocumentRootReviewAction } from "./FolderMutations";
+import { DocumentFolderHeaderMenu, FolderMutations } from "./FolderMutations";
 import { ImportZipDialog } from "./ImportZipDialog";
 import { IndexLights } from "./IndexLights";
 import { ReviewStatusIcon } from "./ReviewStatusIcon";
@@ -55,6 +53,7 @@ function useDocumentsTree(projectId: string, enabled: boolean) {
             folderNames: query.data.folderNames,
             folderStamps: query.data.folderStamps,
             folderAppearances: query.data.folderAppearances,
+            untrackedFolders: query.data.untrackedFolders,
             items: query.data.documents,
           }
         : undefined,
@@ -209,13 +208,21 @@ function DocumentItemActions({
 function DocumentCreateItemDialog({
   projectId,
   folderPath,
+  inUntrackedFolder,
 }: {
   projectId: string;
   folderPath: string[];
   folders: string[];
   folderNames?: Record<string, string>;
+  inUntrackedFolder?: boolean;
 }) {
-  return <CreateDocumentDialog projectId={projectId} folderPath={folderPath} />;
+  return (
+    <CreateDocumentDialog
+      projectId={projectId}
+      folderPath={folderPath}
+      inUntrackedFolder={inUntrackedFolder}
+    />
+  );
 }
 
 export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
@@ -235,7 +242,8 @@ export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
   folderDownloadHref: folderArchiveHref,
   itemBadge: (item) => (
     <span className="inline-flex items-center gap-1.5">
-      <IndexLights lights={item.index} />
+      {item.index ? <IndexLights lights={item.index} /> : null}
+      {item.untracked ? <NotInGitBadge compact /> : null}
       <ReviewStatusIcon review={item} />
     </span>
   ),
@@ -283,17 +291,7 @@ export const documentsExplorerAdapter: ExplorerAdapter<DocumentItem> = {
   },
   editedHeaders: { at: "Updated", by: "Updated by" },
   FolderActions: FolderMutations,
-  rootActions: ({ projectId }) => (
-    <>
-      <Button asChild variant="outline" size="sm">
-        <Link href={localDocumentsHref(projectId)}>Outside Git</Link>
-      </Button>
-      <Button asChild variant="outline" size="sm">
-        <Link href={`${documentsBase(projectId)}/index-view`}>Index view</Link>
-      </Button>
-      <DocumentRootReviewAction projectId={projectId} />
-    </>
-  ),
+  headerActions: (input) => <DocumentFolderHeaderMenu {...input} />,
   ItemActions: DocumentItemActions,
   CreateFolderDialog,
   CreateItemDialog: DocumentCreateItemDialog,

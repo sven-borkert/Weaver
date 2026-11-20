@@ -21,8 +21,9 @@ type ContextRailProps = {
   onActiveTabChange?: (tab: ContextTab) => void;
   contents: ReactNode;
   links: ReactNode;
-  history: ReactNode;
-  index: ReactNode;
+  /** Omitted for documents outside Git, which have no history or index. */
+  history?: ReactNode;
+  index?: ReactNode;
 };
 
 export function ContextRail({
@@ -62,8 +63,12 @@ export function ContextRail({
           <TabsList variant="line" aria-label="Document context sections">
             <TabsTrigger value="contents">Contents</TabsTrigger>
             <TabsTrigger value="links">Links</TabsTrigger>
-            <TabsTrigger value="history">History</TabsTrigger>
-            <TabsTrigger value="index">Index</TabsTrigger>
+            {history === undefined ? null : (
+              <TabsTrigger value="history">History</TabsTrigger>
+            )}
+            {index === undefined ? null : (
+              <TabsTrigger value="index">Index</TabsTrigger>
+            )}
           </TabsList>
         </header>
         <div
@@ -84,20 +89,24 @@ export function ContextRail({
           >
             {links}
           </TabsContent>
-          <TabsContent
-            value="history"
-            forceMount
-            className="m-0 data-[state=inactive]:hidden"
-          >
-            {history}
-          </TabsContent>
-          <TabsContent
-            value="index"
-            forceMount
-            className="m-0 data-[state=inactive]:hidden"
-          >
-            {index}
-          </TabsContent>
+          {history === undefined ? null : (
+            <TabsContent
+              value="history"
+              forceMount
+              className="m-0 data-[state=inactive]:hidden"
+            >
+              {history}
+            </TabsContent>
+          )}
+          {index === undefined ? null : (
+            <TabsContent
+              value="index"
+              forceMount
+              className="m-0 data-[state=inactive]:hidden"
+            >
+              {index}
+            </TabsContent>
+          )}
         </div>
       </Tabs>
     </aside>

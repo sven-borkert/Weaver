@@ -25,6 +25,7 @@ const document = {
   appearance: null,
   review: null,
   properties: null,
+  untracked: false as const,
 };
 
 describe("DocumentHeader", () => {
@@ -34,6 +35,15 @@ describe("DocumentHeader", () => {
     expect(html).toContain("by Sven Borkert");
     expect(html).toContain("Updated");
     expect(html).toContain("by Ada Lovelace");
+  });
+
+  it("marks a document kept out of Git", () => {
+    const html = renderToStaticMarkup(
+      <DocumentHeader
+        document={{ ...document, untracked: true, machineEditor: null }}
+      />,
+    );
+    expect(html).toContain("Not in Git");
   });
 
   it("names an unknown author for a document written before authorship", () => {

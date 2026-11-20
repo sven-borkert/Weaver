@@ -44,6 +44,32 @@ import {
   imageIconFromBytes,
   readAppearanceAssetInRepo,
 } from "./appearanceAssets";
+import {
+  isUntrackedDocument,
+  readUntrackedAppearance,
+  readUntrackedFile,
+  untrackedFolderExists,
+  writeUntrackedAppearance,
+} from "./untrackedDocuments";
+
+/** The untracked document or folder a target names, if it is kept out of Git. */
+async function untrackedTarget(
+  db: PrismaClient,
+  target: AppearanceTarget,
+): Promise<
+  { kind: "document"; id: string } | { kind: "folder"; path: string[] } | null
+> {
+  if (target.kind === "document")
+    return (await isUntrackedDocument(db, target.projectId, target.id))
+      ? { kind: "document", id: target.id }
+      : null;
+  if (target.kind === "folder" && target.scope === "documents")
+    return target.path.length > 0 &&
+      (await untrackedFolderExists(db, target.projectId, target.path))
+      ? { kind: "folder", path: target.path }
+      : null;
+  return null;
+}
 
 type LoadedAppearance = {
   path: string;
@@ -162,7 +188,22 @@ export async function getContentAppearance(
   revision: string;
   canEdit: boolean;
 }> {
-  await assertProjectRole(db, target.projectId, actor, "Viewer");
+  const access = await assertProjectRole(db, target.projectId, actor, "Viewer");
+  const untracked = await untrackedTarget(db, target);
+  if (untracked) {
+    const current = await readUntrackedAppearance(
+      db,
+      target.projectId,
+      untracked,
+    );
+    if (!current) throw new CoreError("NOT_FOUND");
+    return {
+      ...current,
+      canEdit:
+        projectRoleAtLeast(access.effectiveRole, "Editor") &&
+        hasCapability(actor, "content:write"),
+    };
+  }
   const result = await withExistingProjectRepoReader(
     target.projectId,
     async (repo) => {
@@ -198,6 +239,29 @@ export async function setContentAppearance(
 ): Promise<{ headCommitSha: string; revision: string }> {
   const { target } = input;
   await assertProjectRole(db, target.projectId, actor, "Editor");
+  const untracked = await untrackedTarget(db, target);
+  if (untracked) {
+    const patch = assertAppearancePatch(input.patch);
+    if (image) patch.icon = imageIconFromBytes(image.bytes);
+    const iconPath =
+      patch.icon?.type === "image" ? iconAssetPath(patch.icon) : null;
+    if (iconPath && !image) {
+      const stored = await readUntrackedFile(db, target.projectId, iconPath);
+      if (!stored)
+        throw new CoreError("BAD_REQUEST", "The selected icon is unavailable", {
+          field: "icon",
+        });
+    }
+    return writeUntrackedAppearance(
+      db,
+      target.projectId,
+      untracked,
+      input.expectedRevision,
+      (current) => applyAppearancePatch(current, patch),
+      actor,
+      iconPath && image ? { path: iconPath, bytes: image.bytes } : undefined,
+    );
+  }
   let changed = false;
   const result = await withProjectRepo(target.projectId, async (repo) => {
     await assertProjectRole(db, target.projectId, actor, "Editor");

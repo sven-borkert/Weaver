@@ -65,6 +65,7 @@ const initialDocument: MarkdownDocument = {
   appearance: null,
   review: null,
   properties: null,
+  untracked: false,
 };
 const savedDocument: MarkdownDocument = {
   ...initialDocument,

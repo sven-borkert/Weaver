@@ -4,6 +4,7 @@ import type { ReactNode, Ref } from "react";
 import { useMounted } from "~/lib/use-mounted";
 import { cn } from "~/lib/utils";
 import type { RouterOutputs } from "~/trpc/react";
+import { NotInGitBadge } from "~/components/explorer/NotInGitBadge";
 import { DocumentReviewLine } from "./DocumentReviewLine";
 
 const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -57,9 +58,12 @@ export function DocumentHeader({
         >
           {titleControl ?? document.title}
         </h1>
-        <p className="text-text-3 mt-2 mb-0 text-[12px]">
-          {stamp("Created", document.createdAt, document.createdBy)} ·{" "}
-          {stamp("Updated", document.updatedAt, document.updatedBy)}
+        <p className="text-text-3 mt-2 mb-0 flex flex-wrap items-center gap-x-1 text-[12px]">
+          {document.untracked ? <NotInGitBadge className="mr-1" /> : null}
+          <span>
+            {stamp("Created", document.createdAt, document.createdBy)} ·{" "}
+            {stamp("Updated", document.updatedAt, document.updatedBy)}
+          </span>
         </p>
         <DocumentReviewLine review={document.review} />
       </div>

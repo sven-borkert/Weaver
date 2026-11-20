@@ -2,7 +2,14 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { projectRoleAtLeast } from "@weaver/core/roles";
-import { FolderDown, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import {
+  CheckCheck,
+  FolderDown,
+  MoreHorizontal,
+  Pencil,
+  Trash2,
+  UserCheck,
+} from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
@@ -59,6 +66,8 @@ type FolderNameValues = z.infer<typeof folderNameSchema>;
 type FolderMutationsProps = {
   projectId: string;
   path: string[];
+  /** Folder-wide review runs over Git content only. */
+  untracked?: boolean;
   folders: string[];
   folderNames?: Record<string, string>;
   canEdit: boolean;
@@ -70,6 +79,7 @@ type FolderMutationsProps = {
 export function FolderMutations({
   projectId,
   path,
+  untracked = false,
   folders,
   folderNames,
   canEdit,
@@ -147,10 +157,12 @@ export function FolderMutations({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
-        <DropdownMenuItem onSelect={() => setMarkOpen(true)}>
-          Mark all as reviewed
-        </DropdownMenuItem>
-        {canManage ? (
+        {untracked ? null : (
+          <DropdownMenuItem onSelect={() => setMarkOpen(true)}>
+            Mark all as reviewed
+          </DropdownMenuItem>
+        )}
+        {canManage && !untracked ? (
           <DropdownMenuItem onSelect={() => setReviewOpen(true)}>
             Set reviewers recursively
           </DropdownMenuItem>
@@ -476,47 +488,82 @@ function useCanManageReviewers(projectId: string) {
   return project ? projectRoleAtLeast(project.myRole, "Maintainer") : false;
 }
 
-export function DocumentRootReviewAction({ projectId }: { projectId: string }) {
+/** The open folder's ⋯ menu in the explorer header; the empty path is the project root. */
+export function DocumentFolderHeaderMenu({
+  projectId,
+  folderPath,
+  folderName,
+  exists,
+  untracked,
+}: {
+  projectId: string;
+  folderPath: string[];
+  folderName: string;
+  exists: boolean;
+  untracked: boolean;
+}) {
   const canManage = useCanManageReviewers(projectId);
-  const [open, setOpen] = useState(false);
-  if (!canManage && open) setOpen(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
+  if (!canManage && reviewOpen) setReviewOpen(false);
   const [markOpen, setMarkOpen] = useState(false);
+  const triggerKey = folderReviewTriggerKey(projectId, folderPath);
+  const canReview = exists && !untracked;
+  if (!exists) return null;
   return (
     <>
-      <Button
-        type="button"
-        variant="outline"
-        size="sm"
-        data-mark-reviewed-trigger={projectId}
-        onClick={() => setMarkOpen(true)}
-      >
-        Mark all as reviewed
-      </Button>
-      <MarkFolderReviewedDialog
-        projectId={projectId}
-        path={[]}
-        open={markOpen}
-        onOpenChange={setMarkOpen}
-        triggerSelector={`[data-mark-reviewed-trigger="${projectId}"]`}
-      />
-      {canManage ? (
-        <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
           <Button
             type="button"
             variant="outline"
-            size="sm"
-            data-review-trigger={folderReviewTriggerKey(projectId, [])}
-            onClick={() => setOpen(true)}
+            size="icon-sm"
+            data-review-trigger={triggerKey}
+            aria-label={`More actions for ${folderName}`}
           >
-            Set reviewers recursively
+            <MoreHorizontal />
           </Button>
-          <FolderReviewDialog
-            projectId={projectId}
-            path={[]}
-            open={open}
-            onOpenChange={setOpen}
-          />
-        </>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          {canReview ? (
+            <DropdownMenuItem onSelect={() => setMarkOpen(true)}>
+              <CheckCheck />
+              Mark all as reviewed
+            </DropdownMenuItem>
+          ) : null}
+          {canReview && canManage ? (
+            <DropdownMenuItem onSelect={() => setReviewOpen(true)}>
+              <UserCheck />
+              Set reviewers recursively
+            </DropdownMenuItem>
+          ) : null}
+          {canReview ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem asChild>
+            <a
+              href={folderArchiveHref(projectId, folderPath)}
+              download={`${folderPath.at(-1) ?? "documents"}.zip`}
+            >
+              <FolderDown />
+              Download as ZIP
+            </a>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {canReview ? (
+        <MarkFolderReviewedDialog
+          projectId={projectId}
+          path={folderPath}
+          open={markOpen}
+          onOpenChange={setMarkOpen}
+          triggerSelector={`[data-review-trigger="${triggerKey}"]`}
+        />
+      ) : null}
+      {canReview && canManage ? (
+        <FolderReviewDialog
+          projectId={projectId}
+          path={folderPath}
+          open={reviewOpen}
+          onOpenChange={setReviewOpen}
+        />
       ) : null}
     </>
   );

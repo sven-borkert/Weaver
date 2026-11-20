@@ -879,7 +879,7 @@ The documents-only
 [`FolderReviewDialog.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/FolderReviewDialog.tsx>)
 shows configured/effective defaults and inheritance, then previews the selected
 replacement before explicit Apply with that preflight HEAD. Folder menus and the
-adapter's optional `rootActions` entry point expose it to Owners/Maintainers,
+open folder's header ⋯ menu (adapter `headerActions`, also at the root) expose it to Owners/Maintainers,
 without adding a visible root folder or a Tables action. Selection changes cancel
 obsolete previews, and preview-specific zero stale time forces a new preflight
 when revisiting a cached selection. Conflicts retain the draft and require a
@@ -1050,7 +1050,7 @@ header-only `document.setProperties` ([`documentProperties.ts`](../packages/core
 `properties` on a create request stays the internal system path. Reads: `getDocument` returns `properties` with
 `sources` resolved inside the project (`wikiProperties.ts`), `document.list` filters by `type`/`tag`,
 `document.pageIndex` (`wikiReads.listPageIndex`) pages the Index view
-(`documents/index-view`, `PageIndexScreen`), `folder.tree` documents carry `wikiType`/`wikiSummary` for the explorer's
+(`documents/index-view`, `PageIndexScreen`; reachable by URL, no explorer button), `folder.tree` documents carry `wikiType`/`wikiSummary` for the explorer's
 Type/Summary columns and filter. Importers (`documents/importProperties.ts`) and transfer map only type, summary, tags.
 
 A document file starts with a hidden `<!-- weaver … -->` comment holding
@@ -1189,21 +1189,24 @@ breadcrumbs, pins, search results and citations.
 Saved normalization uses [`reconcile-document-content.ts`](../apps/web/src/lib/documents/reconcile-document-content.ts)
 to update attributes and changed spans while preserving unrelated undo steps.
 
-**Outside Git** is a project area within Documents, served by
-[`LocalDocumentsScreen`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/LocalDocumentsScreen.tsx>).
-The normal creation dialogs offer **Keep out of Git**, which creates the item
-at the root of that area. Creating inside an Outside Git folder uses the same
-storage for its children. The editor shares the rich Markdown extensions for
-formatting, formulas, plots, and Mermaid. The `localDocument` router uses
-[`localDocuments.ts`](../packages/core/src/services/localDocuments.ts) and the
-authoritative PostgreSQL model `LocalDocumentEntry`. Each Markdown document
-stores its latest saved body. Writes use project Editor access, a per-project
-transaction lock, and revision checks. Project Viewers can read. Weaver's
-database backups cover the area. The separate model keeps its content outside
-the Git worktree, Git sync, and Git projection rebuilds.
-The editor retains its in-memory draft under the same principal when the
-project, folder list, or detail returns a session error. The screen hides the
-editor and suspends writes until those queries confirm access after sign-in.
+**Documents outside Git** (Git-ignored) live in the normal explorer and
+document screens. The creation dialogs' **Keep out of Git** passes `untracked`
+to `document.create`/`folder.create`; everything below an untracked folder is
+untracked too. [`untrackedDocuments.ts`](../packages/core/src/services/untrackedDocuments.ts)
+stores them in `UntrackedDocument` (the same header + body file text as Git, a
+content-hash `revision` standing in for the commit SHA, and explorer projection
+columns), `UntrackedFolder` (`.folder.json` text) and `UntrackedFile` (images,
+icons). The public document, folder, review, properties, appearance, image and
+download services dispatch to it, so `folder.tree` merges untracked documents
+(`untracked: true`, `index: null`) and folders (`untrackedFolders`), and
+`document.get` returns the same shape with `untracked: true`. Slugs stay unique
+across both stores; tracked folder moves carry untracked content along, deleting
+a tracked folder with untracked content is refused, and Git content cannot move
+into an untracked folder. History/diff/restore, change summaries, knowledge
+indexing, graph and remote send stay Git-only: the History and Index tabs and
+those actions are hidden, and a `NotInGitBadge` marks untracked items. Folder-wide
+review actions are hidden on untracked folders. The former `/documents/local`
+route redirects to Documents.
 
 [`EditorToolbar`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/EditorToolbar.tsx>)
 provides permanent formatting and insertion controls in the shared page header,

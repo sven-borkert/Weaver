@@ -238,9 +238,11 @@ project when present, else the stored last-opened project. The switcher and
 showing the last-opened project's sections without claiming it as "current".
 Project creation still opens Settings.
 
-The shared explorer adapter's optional `rootActions({ projectId })` renders only
-at the root, independent of folder discovery. Documents use it for recursive
-reviewers; Tables omit it. The screen's focusable `data-explorer-workspace-focus` container
+The shared explorer adapter's optional `headerActions({ projectId, folderPath,
+folderName, exists, untracked })` renders the open folder's header actions
+(including the root, independent of folder discovery). Documents use one ⋯ menu
+(Mark all as reviewed, Set reviewers recursively, Download as ZIP); Tables omit it.
+Keep rarely used header actions in that menu instead of adding buttons. The screen's focusable `data-explorer-workspace-focus` container
 is available in loaded, empty, loading and error states for dialog close fallback;
 prefer the existing `data-explorer-focus` list/grid target when it is present.
 

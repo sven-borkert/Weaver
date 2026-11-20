@@ -253,30 +253,44 @@ describe("adapter value filter and optional columns", () => {
   });
 });
 
-describe("adapter root actions", () => {
-  it("renders a root action without fabricating a visible root folder", () => {
-    const withRootAction = {
+describe("adapter header actions", () => {
+  it("renders the open folder's actions without fabricating a visible root folder", () => {
+    const withHeaderActions = {
       ...adapter,
-      rootActions: () => <button>Root reviewers</button>,
+      headerActions: ({
+        folderPath,
+        exists,
+        untracked,
+      }: {
+        folderPath: string[];
+        exists: boolean;
+        untracked: boolean;
+      }) =>
+        exists ? (
+          <button>
+            Folder menu {folderPath.join("/") || "root"}
+            {untracked ? " untracked" : ""}
+          </button>
+        ) : null,
     };
     const html = renderToStaticMarkup(
       <ContentExplorerScreen
         projectId="p1"
         folderPath={[]}
-        adapter={withRootAction}
+        adapter={withHeaderActions}
       />,
     );
-    expect(html).toContain("Root reviewers");
+    expect(html).toContain("Folder menu root");
     expect(html).toContain("data-explorer-workspace-focus");
     expect(html).not.toContain("Actions for root");
     const nested = renderToStaticMarkup(
       <ContentExplorerScreen
         projectId="p1"
         folderPath={["missing"]}
-        adapter={withRootAction}
+        adapter={withHeaderActions}
       />,
     );
-    expect(nested).not.toContain("Root reviewers");
+    expect(nested).not.toContain("Folder menu");
   });
   it("adapters without root actions do not receive reviewer controls", () => {
     const tables = { ...adapter, kind: "tables" as const };
@@ -288,7 +302,7 @@ describe("adapter root actions", () => {
           adapter={tables}
         />,
       ),
-    ).not.toContain("Root reviewers");
+    ).not.toContain("Folder menu");
   });
 });
 

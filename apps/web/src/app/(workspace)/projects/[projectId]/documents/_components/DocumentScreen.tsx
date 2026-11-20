@@ -304,7 +304,12 @@ export function DocumentScreen({
       contextRail={
         <ContextRail
           collapsed={!contextRailOpen}
-          activeTab={contextTab}
+          activeTab={
+            document.untracked &&
+            (contextTab === "history" || contextTab === "index")
+              ? "contents"
+              : contextTab
+          }
           onActiveTabChange={setContextTab}
           contents={
             python ? (
@@ -360,49 +365,55 @@ export function DocumentScreen({
             />
           }
           index={
-            <DocumentIndexPanel
-              projectId={projectId}
-              documentId={documentId}
-              currentSha={document.baseCommitSha}
-              active={
-                contextTab === "index" &&
-                (desktopPanels === false ? contextDrawerOpen : contextRailOpen)
-              }
-            />
+            document.untracked ? undefined : (
+              <DocumentIndexPanel
+                projectId={projectId}
+                documentId={documentId}
+                currentSha={document.baseCommitSha}
+                active={
+                  contextTab === "index" &&
+                  (desktopPanels === false
+                    ? contextDrawerOpen
+                    : contextRailOpen)
+                }
+              />
+            )
           }
           history={
-            <DocumentHistoryPanel
-              key={`${documentId}:${document.baseCommitSha}`}
-              projectId={projectId}
-              documentId={documentId}
-              currentSha={document.baseCommitSha}
-              selectedSha={selectedVersionSha}
-              focusSelectedRequest={historyFocusRequest}
-              pagination={historyPagination}
-              onPaginationChange={setHistoryPagination}
-              onSelectVersion={(sha) => {
-                if (
-                  !shouldProceedWithNavigation(editorDirty, () =>
-                    window.confirm(UNSAVED_CHANGES_CONFIRMATION),
-                  )
-                ) {
-                  return;
-                }
+            document.untracked ? undefined : (
+              <DocumentHistoryPanel
+                key={`${documentId}:${document.baseCommitSha}`}
+                projectId={projectId}
+                documentId={documentId}
+                currentSha={document.baseCommitSha}
+                selectedSha={selectedVersionSha}
+                focusSelectedRequest={historyFocusRequest}
+                pagination={historyPagination}
+                onPaginationChange={setHistoryPagination}
+                onSelectVersion={(sha) => {
+                  if (
+                    !shouldProceedWithNavigation(editorDirty, () =>
+                      window.confirm(UNSAVED_CHANGES_CONFIRMATION),
+                    )
+                  ) {
+                    return;
+                  }
 
-                setEditorDirty(false);
-                // The editor remounts after the comparison; do not replay a jump.
-                setOutlineJump(undefined);
-                setPythonJump(undefined);
-                setContextTab("history");
-                if (contextDrawerOpen) {
-                  contextDrawerCloseFocusPolicyRef.current =
-                    requestSelectionCloseFocus();
-                }
-                setContextDrawerOpen(false);
-                setSelectedVersionSha(sha);
-                setMode("diff");
-              }}
-            />
+                  setEditorDirty(false);
+                  // The editor remounts after the comparison; do not replay a jump.
+                  setOutlineJump(undefined);
+                  setPythonJump(undefined);
+                  setContextTab("history");
+                  if (contextDrawerOpen) {
+                    contextDrawerCloseFocusPolicyRef.current =
+                      requestSelectionCloseFocus();
+                  }
+                  setContextDrawerOpen(false);
+                  setSelectedVersionSha(sha);
+                  setMode("diff");
+                }}
+              />
+            )
           }
         />
       }

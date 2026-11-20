@@ -91,7 +91,8 @@ export function DocumentActionsMenu({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          {!dirty ? (
+          {/* Content outside Git is not indexed into the graph. */}
+          {!dirty && !document.untracked ? (
             <DropdownMenuItem asChild>
               <Link
                 href={`/projects/${projectId}/graph?document=${document.id}`}
@@ -173,7 +174,7 @@ export function DocumentActionsMenu({
               />
             </a>
           </DropdownMenuItem>
-          {canSend ? (
+          {canSend && !document.untracked ? (
             <DropdownMenuItem
               disabled={!spec.supportsRemoteSend}
               onSelect={() => setDialog("send")}

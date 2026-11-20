@@ -19,6 +19,10 @@ import {
 import { documentAuthorForContent } from "./contentAuthor";
 import { assertProjectRole } from "./projectAccess";
 import { withProjectRepo } from "./projectRepo";
+import {
+  isUntrackedDocument,
+  setUntrackedDocumentProperties,
+} from "./untrackedDocuments";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 
 /** Header-only edit: changes the page's properties and nothing else. */
@@ -33,6 +37,8 @@ export async function setDocumentProperties(
   actor: EnrichedActor,
 ): Promise<{ headCommitSha: string }> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return setUntrackedDocumentProperties(db, input, actor);
   let changed = false;
   const result = await withProjectRepo(input.projectId, async (repo) => {
     await assertProjectRole(db, input.projectId, actor, "Editor");

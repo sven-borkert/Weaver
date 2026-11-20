@@ -81,12 +81,11 @@ const document: ItemEntry<DocumentItem> = {
 };
 
 describe("documentsExplorerAdapter", () => {
-  it("provides a document-root reviewer action independently of the folder tree", () => {
+  it("puts folder actions in the header menu instead of separate buttons", () => {
+    expect(documentsExplorerAdapter.headerActions).toBeDefined();
     expect(
-      renderToStaticMarkup(
-        <>{documentsExplorerAdapter.rootActions?.({ projectId: "p1" })}</>,
-      ),
-    ).toContain("root reviewers");
+      (documentsExplorerAdapter as { rootActions?: unknown }).rootActions,
+    ).toBeUndefined();
   });
   it("matches the copy and identity the shared explorer relies on", () => {
     expect(documentsExplorerAdapter.copy.dropZoneTestId).toBe(

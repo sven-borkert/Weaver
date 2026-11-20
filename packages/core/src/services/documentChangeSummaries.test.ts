@@ -19,6 +19,9 @@ vi.mock("../diagnostics/writer", () => ({ emitDiagnostic: vi.fn() }));
 vi.mock("../jobs/queue", () => ({ requestKnowledgeJob: vi.fn() }));
 vi.mock("./llmRoutes", () => ({ resolveLlmRoute: vi.fn() }));
 vi.mock("./documents", () => ({ saveDocument: vi.fn() }));
+vi.mock("./untrackedDocuments", () => ({
+  isUntrackedDocument: vi.fn(async () => false),
+}));
 vi.mock("@weaver/git-store", () => ({ openProjectRepo: vi.fn() }));
 vi.mock("../ai/registry", () => ({
   createAdapterForSnapshot: vi.fn(),

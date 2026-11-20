@@ -7,8 +7,8 @@ description: Use when changing Weaver Git-backed documents, the rich/raw Markdow
 
 Git is authoritative for tracked document content and history. PostgreSQL
 `Document` and `DocumentLink` rows are derived projections that `rebuildIndex`
-can repair. The Outside Git area stores its own document and folder rows in
-PostgreSQL.
+can repair. Untracked (Git-ignored) documents, folders and images are stored in
+PostgreSQL by `services/untrackedDocuments.ts` and shown through the same procedures.
 
 Shared repository readers, advisory locks, recovery and transport primitives use `weaver-git-store`. Project-machine publishing uses `weaver-project-api`; peer connection/refresh and receiver HTTP rules use `weaver-remote-instances`. Document-specific review, editor, Git pull merge and conversion rules remain here.
 
@@ -179,7 +179,7 @@ Shared repository readers, advisory locks, recovery and transport primitives use
   preview and apply with its path before any batch writes. Folder metadata updates its own
   stamps; document authors, clocks, history, appearance and body stay intact.
   Folder/root controls use `documents/_components/FolderReviewDialog.tsx`; root
-  access comes from the document adapter's optional `rootActions`, without a
+  access comes from the document adapter's `headerActions` ⋯ menu, without a
   visible root folder or a Tables action. Initialize from configured references,
   keep dirty picker selections across refresh, strip names from target inputs,
   and show effective reviewers/inheritance separately. Preflight is keyed by the
@@ -808,14 +808,22 @@ HEAD` + clean before writes. Atomic replacement prevents truncated worktree
 
 The component map and layout description live in `docs/IMPLEMENTATION.md`.
 
-- **Keep out of Git** in the document and folder creation dialogs opens the
-  project's Outside Git area. `localDocument` procedures use the separate
-  `LocalDocumentEntry` model and the ordinary project roles. A folder's children
-  share its project and storage. Guard edits and deletes with the saved revision
-  and allow deleting only empty folders.
-- An Outside Git 401 hides and retains the dirty draft in memory for the same
-  signed-in identity. Enable writes only after project, list and detail reads
-  succeed again. Clear the suspended draft when the identity changes.
+- **Keep out of Git** in the creation dialogs sends `untracked: true` and keeps
+  the item in the current folder; inside an untracked folder the box is forced on.
+  Untracked items appear in the same explorer and `DocumentScreen`, marked by
+  `NotInGitBadge`. Public entry points (`getDocument`, `saveDocument`,
+  `createDocument`, `moveDocument`, `deleteDocument`, `getHistory`, review,
+  properties, appearance, images, downloads, `getTree`, folder create/rename/
+  move/delete) check `isUntrackedDocument`/`untrackedFolderExists` first and
+  delegate to `untrackedDocuments.ts`; `*InRepo` writers stay Git-only. The
+  untracked `revision` (sha256 prefix of the stored file text) is the
+  `baseCommitSha`/`expectedHeadCommitSha` precondition. Keep slugs unique across
+  `Document` and `UntrackedDocument`, carry untracked paths in tracked folder
+  moves, refuse deleting a tracked folder that holds untracked content, and refuse
+  moving Git content into an untracked folder. Untracked documents have no
+  history, change summaries, index, graph or remote send; hide those controls
+  (`document.untracked`). ZIP archive import and folder-wide review cover Git
+  content only.
 - Creating a folder stays on the current level (`onFolderCreated` is a no-op in
   `ContentExplorerScreen`) so the new folder can be filled by drag and drop.
   Items and folders are draggable for Editors (`lib/explorer/drag.ts` payload, MIME

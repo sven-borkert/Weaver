@@ -11,6 +11,7 @@ import { imageExtension, sniffImageType } from "../documents/images";
 import { CoreError } from "../errors";
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import { withExistingProjectRepoReader } from "./projectRepo";
+import { readUntrackedFile } from "./untrackedDocuments";
 
 export const MAX_ICON_BYTES = 2 * 1024 * 1024;
 
@@ -72,24 +73,44 @@ export async function readAppearanceAsset(
   actor: ProjectActor,
 ) {
   await assertProjectRole(db, input.projectId, actor, "Viewer");
-  return withExistingProjectRepoReader(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Viewer");
-    const head = await repo.resolveHead();
-    if (
-      input.at !== undefined &&
-      (!/^[a-f0-9]{40}$/.test(input.at) ||
-        !(await repo.isAncestor(input.at, head)))
-    )
-      return null;
-    const asset = await readAppearanceAssetInRepo(
-      repo,
-      input.icon,
-      input.at ?? head,
-    );
-    if (asset && input.ifNoneMatch === `"${asset.blobSha}"`)
-      return { notModified: true as const, blobSha: asset.blobSha };
-    return asset;
-  });
+  const tracked = await withExistingProjectRepoReader(
+    input.projectId,
+    async (repo) => {
+      await assertProjectRole(db, input.projectId, actor, "Viewer");
+      const head = await repo.resolveHead();
+      if (
+        input.at !== undefined &&
+        (!/^[a-f0-9]{40}$/.test(input.at) ||
+          !(await repo.isAncestor(input.at, head)))
+      )
+        return null;
+      const asset = await readAppearanceAssetInRepo(
+        repo,
+        input.icon,
+        input.at ?? head,
+      );
+      if (asset && input.ifNoneMatch === `"${asset.blobSha}"`)
+        return { notModified: true as const, blobSha: asset.blobSha };
+      return asset;
+    },
+  );
+  if (tracked) return tracked;
+  // Icons chosen for content outside Git are stored with it, content-addressed.
+  assertAppearancePatch({ icon: input.icon });
+  const stored = await readUntrackedFile(
+    db,
+    input.projectId,
+    iconAssetPath(input.icon),
+  );
+  if (!stored) return tracked;
+  if (input.ifNoneMatch === `"${stored.sha}"`)
+    return { notModified: true as const, blobSha: stored.sha };
+  return {
+    bytes: stored.bytes,
+    blobSha: stored.sha,
+    contentType: sniffImageType(stored.bytes)!,
+    fileName: `${input.icon.digest}.${input.icon.extension}`,
+  };
 }
 
 export type AppearanceAsset = {

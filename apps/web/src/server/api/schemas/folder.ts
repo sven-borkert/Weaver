@@ -12,6 +12,8 @@ export const createFolderInput = z.object({
   projectId: z.uuid(),
   parentPath: folderPathSchema,
   name: folderName,
+  /** Keep the folder and everything in it out of Git. */
+  untracked: z.boolean().optional(),
 });
 export const renameFolderInput = z.object({
   projectId: z.uuid(),

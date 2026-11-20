@@ -59,7 +59,12 @@ export function planFolderArchive(
       path.split("/").at(-1) !== ".folder.json"
     )
       continue;
-    files.push({ path, sha: blob.sha, size: blob.size });
+    files.push({
+      path,
+      sha: blob.sha,
+      size: blob.size,
+      ...(blob.bytes && { bytes: blob.bytes }),
+    });
     totalBytes += blob.size;
   }
   if (!found) return null;
@@ -93,6 +98,7 @@ export function planDocumentArchive(
       path: blob.path.slice(folderLength),
       sha: blob.sha,
       size: blob.size,
+      ...(blob.bytes && { bytes: blob.bytes }),
     });
     totalBytes += blob.size;
   }

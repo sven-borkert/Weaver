@@ -71,7 +71,8 @@ const adapter: ExplorerAdapter<DocumentItem> = {
   }),
   useMove: () => async () => undefined,
   useImport: () => null,
-  itemBadge: (item) => <IndexLights lights={item.index} />,
+  itemBadge: (item) =>
+    item.index ? <IndexLights lights={item.index} /> : null,
   FolderActions: () => <button>folder actions</button>,
   ItemActions: () => <button>document actions</button>,
   CreateFolderDialog: () => null,

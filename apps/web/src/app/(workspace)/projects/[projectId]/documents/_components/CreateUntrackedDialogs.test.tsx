@@ -7,19 +7,8 @@ import { CreateFolderDialog } from "./CreateFolderDialog";
 const mocks = vi.hoisted(() => ({
   createDocument: vi.fn(),
   createFolder: vi.fn(),
-  createLocal: vi.fn(),
   onFolderCreated: vi.fn(),
   push: vi.fn(),
-  setLocalDetail: vi.fn(),
-  setLocalList:
-    vi.fn<
-      (
-        input: { projectId: string },
-        update: (
-          entries: { id: string }[] | undefined,
-        ) => { id: string }[] | undefined,
-      ) => void
-    >(),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
@@ -44,12 +33,16 @@ vi.mock("~/trpc/react", () => {
     response: T,
   ) {
     return {
-      useMutation: ({ onSuccess }: { onSuccess: (data: T) => void }) => ({
+      useMutation: ({
+        onSuccess,
+      }: {
+        onSuccess: (data: T, variables: unknown) => void;
+      }) => ({
         isPending: false,
         reset: vi.fn(),
         mutate: (input: unknown) => {
           recordCall(input);
-          onSuccess(response);
+          onSuccess(response, input);
         },
       }),
     };
@@ -59,10 +52,6 @@ vi.mock("~/trpc/react", () => {
       useUtils: () => ({
         document: { list: query },
         folder: { tree: query },
-        localDocument: {
-          list: { ...query, setData: mocks.setLocalList },
-          get: { setData: mocks.setLocalDetail },
-        },
       }),
       document: {
         create: createProcedure(mocks.createDocument, {
@@ -73,9 +62,6 @@ vi.mock("~/trpc/react", () => {
         create: createProcedure(mocks.createFolder, {
           path: ["guides", "draft"],
         }),
-      },
-      localDocument: {
-        create: createProcedure(mocks.createLocal, { id: "local-entry" }),
       },
     },
   };
@@ -95,16 +81,25 @@ type InputNode = {
 let renderer: ReactTestRenderer;
 const inputs = new Map<string, InputNode>();
 
-async function submit(kind: "document" | "folder", keepOutOfGit = false) {
+async function submit(
+  kind: "document" | "folder",
+  keepOutOfGit = false,
+  inUntrackedFolder = false,
+) {
   await act(async () => {
     renderer = create(
       kind === "document" ? (
-        <CreateDocumentDialog projectId="p1" folderPath={["guides"]} />
+        <CreateDocumentDialog
+          projectId="p1"
+          folderPath={["guides"]}
+          inUntrackedFolder={inUntrackedFolder}
+        />
       ) : (
         <CreateFolderDialog
           projectId="p1"
           parentPath={["guides"]}
           onFolderCreated={mocks.onFolderCreated}
+          inUntrackedFolder={inUntrackedFolder}
         />
       ),
       {
@@ -171,7 +166,6 @@ describe("document and folder creation storage", () => {
       title: "Draft",
       contentJson: { type: "doc", content: [{ type: "paragraph" }] },
     });
-    expect(mocks.createLocal).not.toHaveBeenCalled();
     expect(mocks.push).toHaveBeenCalledExactlyOnceWith(
       "/projects/p1/documents/tracked-document",
     );
@@ -185,7 +179,6 @@ describe("document and folder creation storage", () => {
       parentPath: ["guides"],
       name: "Draft",
     });
-    expect(mocks.createLocal).not.toHaveBeenCalled();
     expect(mocks.onFolderCreated).toHaveBeenCalledExactlyOnceWith([
       "guides",
       "draft",
@@ -193,40 +186,46 @@ describe("document and folder creation storage", () => {
     expect(mocks.push).not.toHaveBeenCalled();
   });
 
-  it.each(["document", "folder"] as const)(
-    "opens a new %s in Outside Git when checked",
-    async (kind) => {
-      await submit(kind, true);
+  it("keeps a checked document out of Git in the same folder", async () => {
+    await submit("document", true);
 
-      expect(mocks.createLocal).toHaveBeenCalledExactlyOnceWith({
-        projectId: "p1",
-        kind,
-        title: "Draft",
-      });
-      expect(mocks.createDocument).not.toHaveBeenCalled();
-      expect(mocks.createFolder).not.toHaveBeenCalled();
-      expect(mocks.onFolderCreated).not.toHaveBeenCalled();
-      if (kind === "folder") {
-        expect(mocks.setLocalList).toHaveBeenCalledExactlyOnceWith(
-          { projectId: "p1" },
-          expect.any(Function),
-        );
-        const updateList = mocks.setLocalList.mock.calls[0]![1];
-        expect(updateList([{ id: "other-entry" }])).toEqual([
-          { id: "other-entry" },
-          { id: "local-entry" },
-        ]);
-        expect(mocks.setLocalList).toHaveBeenCalledBefore(mocks.push);
-      } else {
-        expect(mocks.setLocalDetail).toHaveBeenCalledExactlyOnceWith(
-          { projectId: "p1", entryId: "local-entry" },
-          { id: "local-entry" },
-        );
-        expect(mocks.setLocalDetail).toHaveBeenCalledBefore(mocks.push);
-      }
-      expect(mocks.push).toHaveBeenCalledExactlyOnceWith(
-        `/projects/p1/documents/local?${kind}=local-entry`,
-      );
+    expect(mocks.createDocument).toHaveBeenCalledExactlyOnceWith({
+      projectId: "p1",
+      folderPath: ["guides"],
+      title: "Draft",
+      contentJson: { type: "doc", content: [{ type: "paragraph" }] },
+      untracked: true,
+    });
+    expect(mocks.push).toHaveBeenCalledExactlyOnceWith(
+      "/projects/p1/documents/tracked-document",
+    );
+  });
+
+  it("keeps a checked folder out of Git at the same level", async () => {
+    await submit("folder", true);
+
+    expect(mocks.createFolder).toHaveBeenCalledExactlyOnceWith({
+      projectId: "p1",
+      parentPath: ["guides"],
+      name: "Draft",
+      untracked: true,
+    });
+    expect(mocks.push).not.toHaveBeenCalled();
+  });
+
+  it.each(["document", "folder"] as const)(
+    "creates a %s outside Git inside a folder that is outside Git",
+    async (kind) => {
+      await submit(kind, false, true);
+
+      const call = (
+        kind === "document" ? mocks.createDocument : mocks.createFolder
+      ).mock.calls[0]![0] as { untracked?: boolean };
+      expect(call.untracked).toBe(true);
+      const forced = renderer.root
+        .findAllByType("input")
+        .find((input) => input.props.type === "checkbox")!;
+      expect(forced.props).toMatchObject({ checked: true, disabled: true });
     },
   );
 });

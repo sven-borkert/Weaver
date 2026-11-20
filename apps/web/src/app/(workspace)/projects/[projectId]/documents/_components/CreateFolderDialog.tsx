@@ -2,7 +2,6 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FolderPlus } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { toast } from "sonner";
@@ -21,7 +20,6 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Label } from "~/components/ui/label";
-import { localDocumentsHref } from "~/lib/documents/local-documents-url";
 import { applyTrpcErrorToForm } from "~/lib/trpcErrors";
 import { api } from "~/trpc/react";
 import { KeepOutOfGitField } from "./KeepOutOfGitField";
@@ -40,14 +38,16 @@ type CreateFolderDialogProps = {
   projectId: string;
   parentPath: string[];
   onFolderCreated: (path: string[]) => void;
+  /** The parent is itself outside Git, so the new folder is too. */
+  inUntrackedFolder?: boolean;
 };
 
 export function CreateFolderDialog({
   projectId,
   parentPath,
   onFolderCreated,
+  inUntrackedFolder = false,
 }: CreateFolderDialogProps) {
-  const router = useRouter();
   const utils = api.useUtils();
   const [open, setOpen] = useState(false);
 
@@ -62,11 +62,14 @@ export function CreateFolderDialog({
     resolver: zodResolver(createFolderFormSchema),
     defaultValues,
   });
-  const keepOutOfGit = useWatch({ control, name: "keepOutOfGit" });
+  const keepOutOfGit =
+    useWatch({ control, name: "keepOutOfGit" }) || inUntrackedFolder;
 
   const createFolder = api.folder.create.useMutation({
-    onSuccess: (folder) => {
-      toast.success("Folder created");
+    onSuccess: (folder, variables) => {
+      toast.success(
+        variables.untracked ? "Folder created outside Git" : "Folder created",
+      );
       void utils.folder.tree.invalidate({ projectId });
       setOpen(false);
       reset(defaultValues);
@@ -83,34 +86,16 @@ export function CreateFolderDialog({
     },
   });
 
-  const createLocal = api.localDocument.create.useMutation({
-    onSuccess: (folder) => {
-      toast.success("Folder created in Outside Git");
-      const { markdown: _markdown, ...summary } = folder;
-      utils.localDocument.list.setData({ projectId }, (entries) =>
-        entries && !entries.some((entry) => entry.id === folder.id)
-          ? [...entries, summary]
-          : entries,
-      );
-      void utils.localDocument.list.invalidate({ projectId });
-      setOpen(false);
-      reset(defaultValues);
-      router.push(localDocumentsHref(projectId, { folder: folder.id }));
-    },
-    onError: (err) => {
-      if (err.data?.field === "title")
-        applyTrpcErrorToForm(err, (_name, error) => setError("name", error));
-    },
-  });
-  const pending = createFolder.isPending || createLocal.isPending;
-  const error = keepOutOfGit ? createLocal.error : createFolder.error;
+  const pending = createFolder.isPending;
+  const error = createFolder.error;
 
   const onSubmit = handleSubmit((values) => {
-    if (values.keepOutOfGit) {
-      createLocal.mutate({ projectId, kind: "folder", title: values.name });
-      return;
-    }
-    createFolder.mutate({ projectId, parentPath, name: values.name });
+    createFolder.mutate({
+      projectId,
+      parentPath,
+      name: values.name,
+      ...(values.keepOutOfGit || inUntrackedFolder ? { untracked: true } : {}),
+    });
   });
 
   return (
@@ -118,10 +103,7 @@ export function CreateFolderDialog({
       open={open}
       onOpenChange={(nextOpen) => {
         if (pending) return;
-        if (nextOpen) {
-          createFolder.reset();
-          createLocal.reset();
-        }
+        if (nextOpen) createFolder.reset();
         setOpen(nextOpen);
         if (!nextOpen) reset(defaultValues);
       }}
@@ -137,12 +119,8 @@ export function CreateFolderDialog({
           <DialogTitle>New folder</DialogTitle>
           <DialogDescription>
             Create a folder in{" "}
-            {keepOutOfGit
-              ? "the project’s Outside Git area"
-              : parentPath.length
-                ? parentPath.join(" / ")
-                : "the project root"}
-            .
+            {parentPath.length ? parentPath.join(" / ") : "the project root"}
+            {keepOutOfGit ? ", kept out of Git with everything in it" : ""}.
           </DialogDescription>
         </DialogHeader>
         <form
@@ -177,6 +155,7 @@ export function CreateFolderDialog({
           <KeepOutOfGitField
             field={register("keepOutOfGit")}
             disabled={pending}
+            forced={inUntrackedFolder}
           />
           {error && !error.data?.field ? (
             <p role="alert" className="text-danger m-0 text-[12px]">

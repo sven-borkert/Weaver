@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isUntrackedDocument } from "./untrackedDocuments";
 import type { AiUsageOutcome, PrismaClient } from "@weaver/db/client";
 import { openProjectRepo, type ProjectRepoReader } from "@weaver/git-store";
 import { emptyUsage } from "../ai/http";
@@ -118,6 +119,9 @@ export async function saveDocumentAndQueueSummary(
   },
   actor: EnrichedActor,
 ): Promise<DocumentResult> {
+  // Untracked saves have no commit to summarize.
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return saveDocument(db, { ...input, changeSummary: "" }, actor);
   if (input.changeSummary !== undefined)
     return saveDocument(
       db,

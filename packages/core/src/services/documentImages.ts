@@ -22,6 +22,11 @@ import {
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
+import {
+  isUntrackedDocument,
+  readUntrackedFile,
+  storeUntrackedImage,
+} from "./untrackedDocuments";
 
 export const MAX_SERVED_BLOB_BYTES = 52_428_800;
 const MAX_SEGMENTS = 12;
@@ -55,6 +60,12 @@ export async function storeDocumentImage(
   actor: EnrichedActor,
 ): Promise<StoredDocumentImage> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
+  if (await isUntrackedDocument(db, input.projectId, input.documentId))
+    return storeUntrackedImage(
+      db,
+      input,
+      actor,
+    ) as Promise<StoredDocumentImage>;
   const contentType = sniffImageType(input.bytes.subarray(0, SNIFF_BYTES));
   if (!contentType)
     throw new CoreError("BAD_REQUEST", "unsupported image type");
@@ -153,6 +164,20 @@ export async function readProjectImage(
   const relPath = validateFileSegments(input.segments);
   if (!relPath) return null;
   if (input.at !== undefined && !COMMIT_SHA_RE.test(input.at)) return null;
+  // Images of untracked documents are stored with them; `at` is their revision.
+  const untracked = await readUntrackedFile(db, input.projectId, relPath);
+  if (untracked) {
+    if (input.ifNoneMatch === `"${untracked.sha}"`)
+      return { notModified: true, blobSha: untracked.sha };
+    const type = sniffImageType(untracked.bytes.subarray(0, SNIFF_BYTES));
+    if (!type) return null;
+    return {
+      bytes: untracked.bytes,
+      blobSha: untracked.sha,
+      contentType: type,
+      fileName: input.segments[input.segments.length - 1]!,
+    };
+  }
   const repo = await openProjectRepo(input.projectId);
   if (!repo) return null;
   const head = await repo.resolveHead();
