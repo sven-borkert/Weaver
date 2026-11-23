@@ -2,7 +2,7 @@ import { APP_BASE_PATH } from "~/lib/basePath";
 import { withDocumentBasePath } from "./link-base-path";
 import { getSchema, type JSONContent } from "@tiptap/core";
 import { renderToReactElement } from "@tiptap/static-renderer/pm/react";
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 import { documentExtensions } from "@weaver/core/editor/extensions";
 import { documentHeadingAnchors } from "./document-heading-anchors";
 import { mathSource, renderMathHtml } from "./math-render";
@@ -68,4 +68,20 @@ export function renderDocumentContent(
       nodeMapping: { ...mathMapping, ...nodeMapping, ...headingMapping },
     },
   });
+}
+
+/** Top-level blocks keyed by position rather than the renderer's post-order counter. */
+export function renderDocumentBlocks(
+  content: JSONContent,
+  nodeMapping?: RenderMappings,
+  basePath = APP_BASE_PATH,
+): ReactNode[] {
+  const root = renderDocumentContent(content, nodeMapping, basePath);
+  const blocks: unknown = isValidElement<{ children?: unknown }>(root)
+    ? root.props.children
+    : undefined;
+  if (!Array.isArray(blocks)) return [root];
+  return blocks.map((block: ReactNode, index) =>
+    isValidElement(block) ? cloneElement(block, { key: index }) : block,
+  );
 }

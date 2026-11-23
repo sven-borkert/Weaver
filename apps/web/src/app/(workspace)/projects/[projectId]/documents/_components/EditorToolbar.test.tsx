@@ -135,6 +135,7 @@ vi.mock("~/components/ui/dropdown-menu", async () => {
 });
 vi.mock("./CrossReferencePicker", () => ({ CrossReferencePicker: () => null }));
 
+import { DialogContent } from "~/components/ui/dialog";
 import { EditorToolbar } from "./EditorToolbar";
 
 type EditorToolbarProps = Parameters<typeof EditorToolbar>[0];
@@ -292,15 +293,17 @@ describe("EditorToolbar", () => {
     editor.view.dispatch(
       editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 7)),
     );
-    generate.mockResolvedValue({ markdown: "example" });
+    generate.mockResolvedValue({
+      reply: "",
+      markdown: "example",
+      action: "insert",
+    });
     await act(() => {
       tree = create(<EditorToolbar {...props} />);
     });
 
     const openAssistant = () =>
-      (
-        button("Insert with assistant").props as { onClick: () => void }
-      ).onClick();
+      (button("Ask the assistant").props as { onClick: () => void }).onClick();
     await act(openAssistant);
     editor.view.dispatch(editor.state.tr.insertText("new ", 1));
     editor.view.dispatch(
@@ -325,11 +328,13 @@ describe("EditorToolbar", () => {
       projectId: "project",
       documentId: "document",
       instruction: "Write an example",
+      context: { before: "before", selection: "", after: "after" },
     });
     expect(editor.state.doc.textContent).toBe("new beforeafter");
     expect(
       textOf(tree!.root.findByProps({ "aria-label": "Generated preview" })),
     ).toBe("example");
+    expect(button("Replace selection")).toBeUndefined();
 
     await act(() =>
       (button("Insert at cursor").props as { onClick: () => void }).onClick(),
@@ -350,7 +355,110 @@ describe("EditorToolbar", () => {
     );
     expect(tree!.root.findAllByType("textarea")).toHaveLength(0);
     await act(() => tree!.update(<EditorToolbar {...props} sourceOpen />));
-    expect(button("Insert with assistant").props.disabled).toBe(true);
+    expect(button("Ask the assistant").props.disabled).toBe(false);
+    await act(() =>
+      tree!.update(<EditorToolbar {...props} sourceOpen disabled />),
+    );
+    expect(button("Ask the assistant").props.disabled).toBe(true);
+  });
+
+  it("answers about a source selection, then replaces it through the Markdown field", async () => {
+    const { editor } = editorFixture();
+    const input = {
+      value: "Intro\n\nOld text",
+      selectionStart: 7,
+      selectionEnd: 15,
+      readOnly: false,
+      isConnected: true,
+      focus: vi.fn(),
+      setSelectionRange: vi.fn(),
+      setRangeText(text: string, start: number, end: number) {
+        input.value =
+          input.value.slice(0, start) + text + input.value.slice(end);
+      },
+      dispatchEvent: vi.fn(),
+      ownerDocument: { execCommand: () => false },
+    };
+    const props = {
+      projectId: "project",
+      editor: editor as unknown as Editor,
+      disabled: false,
+      sourceOpen: true,
+      onViewSource: vi.fn(),
+      assistantDocument: { id: "document", baseCommitSha: "base" },
+      sourceInputRef: {
+        current: input as unknown as HTMLTextAreaElement,
+      },
+    };
+    await act(() => {
+      tree = create(<EditorToolbar {...props} />);
+    });
+    await act(() =>
+      (button("Ask the assistant").props as { onClick: () => void }).onClick(),
+    );
+    expect(
+      textOf(tree!.root.findByProps({ "aria-label": "Selected text" })),
+    ).toContain("Old text");
+
+    const ask = async (text: string) => {
+      await act(() =>
+        (
+          tree!.root.findByType("textarea").props as {
+            onChange: (event: { target: { value: string } }) => void;
+          }
+        ).onChange({ target: { value: text } }),
+      );
+      await act(() =>
+        (
+          tree!.root.findByType("form").props as {
+            onSubmit: (event: { preventDefault: () => void }) => void;
+          }
+        ).onSubmit({ preventDefault: vi.fn() }),
+      );
+    };
+    generate.mockResolvedValueOnce({
+      reply: "It is a placeholder.",
+      markdown: null,
+      action: null,
+    });
+    await ask("What is this?");
+    expect(generate).toHaveBeenLastCalledWith({
+      projectId: "project",
+      documentId: "document",
+      instruction: "What is this?",
+      context: { before: "Intro\n\n", selection: "Old text", after: "" },
+    });
+    expect(textOf(tree!.root)).toContain("It is a placeholder.");
+    expect(button("Replace selection")).toBeUndefined();
+
+    generate.mockResolvedValueOnce({
+      reply: "Here is a clearer version.",
+      markdown: "New text",
+      action: "replace",
+    });
+    await ask("Make it clearer");
+    expect(generate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        history: [
+          { role: "user", text: "What is this?" },
+          { role: "assistant", text: "It is a placeholder." },
+        ],
+      }),
+    );
+    const closeAutoFocus = tree!.root.findByType(DialogContent).props
+      .onCloseAutoFocus as (event: Event) => void;
+    await act(() =>
+      (button("Replace selection").props as { onClick: () => void }).onClick(),
+    );
+    expect(tree!.root.findAllByType("textarea")).toHaveLength(0);
+    expect(input.value).toBe("Intro\n\nOld text");
+    await act(() =>
+      closeAutoFocus({ preventDefault: vi.fn() } as unknown as Event),
+    );
+    expect(input.focus).toHaveBeenCalled();
+    expect(input.setSelectionRange).toHaveBeenCalledWith(7, 15);
+    expect(input.value).toBe("Intro\n\nNew text");
+    expect(input.dispatchEvent).toHaveBeenCalledOnce();
   });
 
   it("shows formatting before editor focus and restores the mapped cursor for upload", async () => {

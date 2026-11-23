@@ -2,6 +2,10 @@ import { validateDocumentContent } from "@weaver/core/editor/markdown";
 import { documentTitleSchema } from "@weaver/core/documents/title";
 import { DOCUMENT_KIND_NAMES } from "@weaver/core/documents/kinds";
 import {
+  MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS,
+  MAX_DOCUMENT_ASSISTANT_SELECTION_CHARS,
+  MAX_DOCUMENT_ASSISTANT_TURN_CHARS,
+  MAX_DOCUMENT_ASSISTANT_TURNS,
   MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS,
   MAX_MARKDOWN_CHARS,
 } from "@weaver/core/documents/limits";
@@ -50,6 +54,24 @@ export const generateDocumentContentInput = documentIdInput.extend({
     .trim()
     .min(1)
     .max(MAX_DOCUMENT_GENERATION_INSTRUCTION_CHARS),
+  /** The editor's draft text around and inside the selection. */
+  context: z
+    .object({
+      before: z.string().max(MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS),
+      selection: z.string().max(MAX_DOCUMENT_ASSISTANT_SELECTION_CHARS),
+      after: z.string().max(MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS),
+    })
+    .optional(),
+  /** Earlier messages of this conversation, oldest first. */
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        text: z.string().max(MAX_DOCUMENT_ASSISTANT_TURN_CHARS),
+      }),
+    )
+    .max(MAX_DOCUMENT_ASSISTANT_TURNS)
+    .optional(),
 });
 
 export const rebuildIndexInput = z.object({

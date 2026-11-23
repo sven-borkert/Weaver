@@ -10,12 +10,15 @@ import { useId, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
+import { useFigureNodeView } from "~/lib/editor/figure-node-view";
 import { MermaidRenderer } from "./MermaidRenderer";
 import { useDocumentEditingDisabled } from "./DocumentEditingContext";
 
 export function MermaidNodeView({
   node,
   editor,
+  getPos,
+  selected,
   updateAttributes,
 }: ReactNodeViewProps) {
   const sourceId = useId();
@@ -27,11 +30,18 @@ export function MermaidNodeView({
     selector: ({ editor: current }) => current.isEditable,
   });
   const disabled = parentDisabled || !editable;
+  const { wrapperProps, frameProps } = useFigureNodeView({
+    editor,
+    getPos,
+    selected,
+  });
   const source = typeof node.attrs.source === "string" ? node.attrs.source : "";
 
   return (
-    <NodeViewWrapper contentEditable={false} className="my-5">
-      <MermaidRenderer source={source} />
+    <NodeViewWrapper contentEditable={false} className="my-5" {...wrapperProps}>
+      <div {...frameProps} className="rounded-lg">
+        <MermaidRenderer source={source} />
+      </div>
       {editable || editing ? (
         <Button
           ref={trigger}

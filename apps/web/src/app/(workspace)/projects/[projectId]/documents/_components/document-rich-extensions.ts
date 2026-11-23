@@ -2,6 +2,7 @@ import { ReactNodeViewRenderer, type Editor } from "@tiptap/react";
 import { InlineMath, MathBlock } from "@weaver/core/editor/math";
 import { MathPlot } from "@weaver/core/editor/math-plot";
 import { Mermaid } from "@weaver/core/editor/mermaid";
+import { stopFigureNodeViewEvent } from "~/lib/editor/figure-node-view";
 import { CodeBlockWithCopy } from "./DocumentCodeBlock";
 import { MathNodeView } from "./MathNodeView";
 import { MathPlotNodeView } from "./MathPlotNodeView";
@@ -11,7 +12,9 @@ export const documentRichExtensions = {
   codeBlock: CodeBlockWithCopy,
   mermaid: Mermaid.extend({
     addNodeView() {
-      return ReactNodeViewRenderer(MermaidNodeView);
+      return ReactNodeViewRenderer(MermaidNodeView, {
+        stopEvent: stopFigureNodeViewEvent,
+      });
     },
   }),
   inlineMath: InlineMath.extend({
@@ -26,7 +29,9 @@ export const documentRichExtensions = {
   }),
   mathPlot: MathPlot.extend({
     addNodeView() {
-      return ReactNodeViewRenderer(MathPlotNodeView);
+      return ReactNodeViewRenderer(MathPlotNodeView, {
+        stopEvent: stopFigureNodeViewEvent,
+      });
     },
   }),
 };

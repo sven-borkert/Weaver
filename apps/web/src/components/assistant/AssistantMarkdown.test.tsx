@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { parseDocumentBody } from "@weaver/core/editor/markdown";
 import { renderDocumentContent } from "~/lib/editor/render";
-import { withAssistantBasePath } from "./AssistantMarkdown";
+import { AssistantMarkdown, withAssistantBasePath } from "./AssistantMarkdown";
 
 const html = (markdown: string, basePath: string) =>
   renderToStaticMarkup(
@@ -78,5 +78,19 @@ describe("withAssistantBasePath", () => {
     expect(html(`- ${fileLink}`, "/weaver")).toContain(
       'href="/weaver/projects/p1/artifacts?file=Plan.docx"',
     );
+  });
+});
+
+describe("AssistantMarkdown", () => {
+  it("renders formulas written with parenthesis and bracket delimiters", () => {
+    const markup = renderToStaticMarkup(
+      <AssistantMarkdown
+        text={"Euler: \\(e^{i\\pi} + 1 = 0\\)\n\n\\[\nx^2\n\\]\n\n`\\(code\\)`"}
+      />,
+    );
+    expect(markup).toContain('data-inline-math=""');
+    expect(markup).toContain('data-math-block=""');
+    expect(markup).toContain('class="katex"');
+    expect(markup).toContain("<code>\\(code\\)</code>");
   });
 });

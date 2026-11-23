@@ -5,7 +5,7 @@ import {
   useEditorState,
   type ReactNodeViewProps,
 } from "@tiptap/react";
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useState, type DragEvent } from "react";
 
 import { Label } from "~/components/ui/label";
 import {
@@ -17,12 +17,20 @@ import { Textarea } from "~/components/ui/textarea";
 import { mathSource, renderMathHtml } from "~/lib/editor/math-render";
 import { useDocumentEditingDisabled } from "./DocumentEditingContext";
 
+// A drag would drop KaTeX's HTML as text; NodeViewWrapper owns onDragStart, so the content blocks it.
+const preventDrag = (event: DragEvent) => event.preventDefault();
+
 function Formula({ source, display }: { source: string; display: boolean }) {
   const html = useMemo(
     () => renderMathHtml(source, display),
     [source, display],
   );
-  return <span dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <span
+      onDragStart={preventDrag}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
 }
 
 export function MathNodeView({
@@ -60,6 +68,7 @@ export function MathNodeView({
             type="button"
             aria-label="Edit formula"
             aria-expanded={editing}
+            onDragStart={preventDrag}
             className={`hover:bg-subtle focus-visible:ring-brand cursor-pointer rounded-[4px] text-inherit focus-visible:ring-2 focus-visible:outline-none ${display ? "block w-full" : "inline"}`}
             onClick={() => setEditing(true)}
           >

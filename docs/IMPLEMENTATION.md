@@ -1219,17 +1219,29 @@ renders them in one compact row and moves groups that do not fit into a
 "More formatting options" menu, measured by
 [`use-toolbar-overflow.ts`](../apps/web/src/lib/editor/use-toolbar-overflow.ts)
 (re-measured from the full, More-less row when the groups change or gain room).
-Insert with assistant and Source stay fixed at the right. The
-[`DocumentAssistantInsertDialog`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentAssistantInsertDialog.tsx>)
-uses the document renderer to preview generated Markdown, including LaTeX,
-Mermaid and math plots. `document.generateContent` checks Editor access to the Markdown
+Ask the assistant and Source stay fixed at the right. Ask the assistant works
+in the formatted and the source view: the
+[`DocumentAssistantDialog`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentAssistantDialog.tsx>)
+holds a short conversation about the selection (or the cursor), previews
+proposed Markdown with the document renderer (LaTeX, Mermaid, math plots) and
+offers Replace selection, Insert after selection / at cursor, or Insert answer.
+The toolbar sends the draft's Markdown before, inside and after the selection
+(`documentAssistantContext`/`sourceAssistantContext` in
+[`generated-markdown.ts`](../apps/web/src/lib/editor/generated-markdown.ts),
+bounded by [`limits.ts`](../packages/core/src/documents/limits.ts)) plus earlier
+turns. `document.generateContent` checks Editor access to the Markdown
 document, then [`documentGeneration.ts`](../packages/core/src/services/documentGeneration.ts)
-sends the instruction to the configured Assistant model without document
-content or tools. It records usage under `document.generate_content`.
-On confirmation,
-[`generated-markdown.ts`](../apps/web/src/lib/editor/generated-markdown.ts)
-inserts a single undoable edit at the mapped cursor or end of the selection.
-The result becomes part of the local draft and follows the usual Save flow.
+sends one tool-free request to the configured Assistant model, trimming older
+turns and the farthest context to fit its window. The model tags document
+content as `<replace_selection>` or `<insert>`;
+[`assistantReply.ts`](../packages/core/src/documents/assistantReply.ts) splits
+that from the answer. Usage is recorded under `document.generate_content`.
+In the formatted view `insertGeneratedMarkdown`/`replaceGeneratedMarkdown`
+apply a single undoable edit at the mapped bookmark; in the source view
+`spliceGeneratedSource` validates the raw edit and
+[`source-edit.ts`](../apps/web/src/lib/editor/source-edit.ts) types it into the
+field after the dialog closes, so the field's own undo reverts it. The result
+becomes part of the local draft and follows the usual Save flow.
 Callout commands live in
 [`callout-commands.ts`](../apps/web/src/lib/editor/callout-commands.ts); callout
 colors and labels come from `globals.css` for both editor and reader.
@@ -1272,7 +1284,12 @@ ranges and saved defaults. [`MathPlot`](../apps/web/src/lib/editor/MathPlot.tsx)
 renders the interactive chart in the editor, viewer, and assistant preview.
 Sliders and surface rotation change the current view. Edit the plot definition
 to change its saved defaults. [`plot-render.ts`](../apps/web/src/lib/editor/plot-render.ts)
-shares the SVG renderer with PDF export, which uses those defaults.
+shares the SVG renderer with PDF export, which uses those defaults. In the
+editor, plot and Mermaid node views use
+[`figure-node-view.ts`](../apps/web/src/lib/editor/figure-node-view.ts): a press
+selects the node (outlined) while the browser selects text, selected text stays
+visible and copies natively, and drags of figure content are blocked so no
+rendered HTML lands in the document.
 Code blocks show a copy button from
 [`DocumentCodeBlock.tsx`](<../apps/web/src/app/(workspace)/projects/[projectId]/documents/_components/DocumentCodeBlock.tsx>):
 a reader mapping and a client-only editor node view (the `codeBlock` override of
@@ -1328,7 +1345,13 @@ shell-owned run subscription active and records unseen completions; `⌘J`/`Ctrl
 `/assistant` and `/assistant/[conversationId]` render the same
 [`AssistantConversation`](../apps/web/src/components/assistant/AssistantConversation.tsx)
 full-width beside a conversation list. Settled messages render from
-`MessageView.text`, `assistant.listCitations`, and `assistant.listProposals`;
+`MessageView.text`, `assistant.listCitations`, and `assistant.listProposals`
+through [`AssistantMarkdown`](../apps/web/src/components/assistant/AssistantMarkdown.tsx),
+which turns `\(…\)`/`\[…\]` into `$` math
+([`latex-delimiters.ts`](../packages/core/src/editor/latex-delimiters.ts)) and
+reuses unchanged top-level blocks
+([`use-stable-document-blocks.ts`](../apps/web/src/lib/editor/use-stable-document-blocks.ts))
+so streaming keeps their DOM and text selection;
 only the live run renders from the event stream
 ([`lib/assistant/runEvents.ts`](../apps/web/src/lib/assistant/runEvents.ts),
 [`liveMessage.ts`](../apps/web/src/lib/assistant/liveMessage.ts)). Scope is a

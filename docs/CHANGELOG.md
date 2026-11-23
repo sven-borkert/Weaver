@@ -4,6 +4,18 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 
 ## [Unreleased]
 
+### Added
+
+- Ask the assistant about part of a document: select text, a formula, a plot or a diagram and choose **Ask the assistant** in the editor toolbar (formerly **Insert with assistant**). It answers questions about the selection, proposes a new version you can apply with **Replace selection**, or writes content to insert after it, and follow-up questions continue the conversation. The assistant sees the selection and the page around it.
+- **Ask the assistant** also works in the Markdown source view and edits the raw Markdown there; undo in the field reverts it.
+- Assistant answers show LaTeX formulas, including ones written with `\(…\)` and `\[…\]`, and **Save as page** keeps them as formulas.
+
+### Fixed
+
+- Text in math plots and Mermaid diagrams can be selected and copied in the editor. The selection stays visible, dragging it no longer drops the plot's labels into the page as text, a selected plot or diagram shows an outline, and the plot and diagram source fields keep a visible cursor. Dragging a formula no longer inserts its rendered text.
+- Selecting text in an assistant answer keeps working while the answer is still being written.
+- Text selection no longer stays disabled everywhere after a side panel resize ends unexpectedly.
+
 ### Changed
 
 - Documents and folders kept out of Git now appear in the normal documents explorer, in any folder, and open in the same editor as Git documents: rich and source editing, images, cross-references, contents, review, properties, appearance and Markdown, ZIP and PDF downloads all work the same. They are only Git-ignored, so they have no history, are not pushed or indexed, and carry a "Not in Git" badge. Everything inside a folder kept out of Git is kept out too. The separate Outside Git area is gone; its existing entries move into the explorer automatically.

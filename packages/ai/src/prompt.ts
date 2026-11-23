@@ -95,6 +95,7 @@ export function buildInstructions(input: {
       ? "- Edit documents with propose_document_patch (exact text or a navigate_document section), not by resubmitting the whole body; change a table's title, columns, options and rows together with propose_table_change."
       : "",
     "- Python (.py) documents hold source text, not Markdown; read_document returns their kind, and edits and patches apply to the raw source.",
+    "- Write math as LaTeX inside $...$ (inline) or $$...$$ (display); the chat renders it.",
     "- Keep answers concise and in the user's language. Say when something is outside scope or not found.",
   ]
     .filter(Boolean)

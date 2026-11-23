@@ -1,3 +1,4 @@
+import { normalizeLatexDelimiters } from "@weaver/core/editor/latex-delimiters";
 import type { CitationCard } from "@weaver/core/services/assistantCitations";
 
 export type SaveAsPageSource = {
@@ -83,7 +84,7 @@ export function buildSaveAsPagePrefill(input: {
   return {
     title: titleFromAnswer(input.answerText),
     folderPath: input.wikiFolderPath ?? [],
-    body: input.answerText,
+    body: normalizeLatexDelimiters(input.answerText),
     type: "synthesis",
     sources: sourcesFromCitations(input.citations, input.targetProjectId),
   };

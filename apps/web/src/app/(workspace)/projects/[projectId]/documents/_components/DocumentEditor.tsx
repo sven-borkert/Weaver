@@ -475,6 +475,7 @@ function DocumentDraftEditor({
             onUploadImage={(file) => void images.upload([file])}
             onTransientOpenChange={setTransientOpen}
             onViewSource={toggleSource}
+            sourceInputRef={sourceInputRef}
           />
         </DocumentWorkspaceToolbar>
         {session.titleError ? (

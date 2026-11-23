@@ -12,6 +12,7 @@ import { Button } from "~/components/ui/button";
 import { Label } from "~/components/ui/label";
 import { Textarea } from "~/components/ui/textarea";
 import { MathPlot } from "~/lib/editor/MathPlot";
+import { useFigureNodeView } from "~/lib/editor/figure-node-view";
 import { useDocumentEditingDisabled } from "./DocumentEditingContext";
 import { MATH_PLOT_EXAMPLES } from "./math-plot-examples";
 
@@ -20,6 +21,8 @@ type PlotDraft = { original: string; source: string };
 export function MathPlotNodeView({
   node,
   editor,
+  getPos,
+  selected,
   updateAttributes,
 }: ReactNodeViewProps) {
   const panelId = useId();
@@ -32,6 +35,11 @@ export function MathPlotNodeView({
     selector: ({ editor: current }) => current.isEditable,
   });
   const disabled = parentDisabled || !editable;
+  const { wrapperProps, frameProps } = useFigureNodeView({
+    editor,
+    getPos,
+    selected,
+  });
   const source = typeof node.attrs.source === "string" ? node.attrs.source : "";
   const preview = useDeferredValue(draft?.source ?? source);
   const parsed = useMemo(
@@ -52,8 +60,10 @@ export function MathPlotNodeView({
   };
 
   return (
-    <NodeViewWrapper contentEditable={false} className="my-5">
-      <MathPlot source={draft ? preview : source} />
+    <NodeViewWrapper contentEditable={false} className="my-5" {...wrapperProps}>
+      <div {...frameProps} className="rounded-lg">
+        <MathPlot source={draft ? preview : source} />
+      </div>
       {draft ? (
         <div
           id={panelId}

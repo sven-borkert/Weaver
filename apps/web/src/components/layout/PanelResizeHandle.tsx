@@ -3,6 +3,7 @@
 import {
   createContext,
   useContext,
+  useEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -50,6 +51,13 @@ export function PanelResizeHandle({
   const controls = useContext(PanelWidthsContext);
   const drag = useRef<Drag | null>(null);
   const [dragging, setDragging] = useState(false);
+  // A handle unmounted mid-drag must not leave text selection disabled page-wide.
+  useEffect(() => {
+    if (!dragging) return;
+    return () => {
+      delete document.documentElement.dataset.panelResizing;
+    };
+  }, [dragging]);
   if (!controls) return null;
   const spec = PANEL_SPECS[panel];
   const width = controls.widths[panel];
@@ -114,6 +122,7 @@ export function PanelResizeHandle({
       }}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onLostPointerCapture={endDrag}
       onDoubleClick={() => controls.commit(panel, spec.default)}
       onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
         const next = keyboardPanelWidth(

@@ -170,7 +170,7 @@ describe("document router", () => {
       };
     }
 
-    it("calls the configured assistant model and returns Markdown without saving it", async () => {
+    it("calls the configured assistant model and returns its reply and Markdown without saving it", async () => {
       const { project, actor, document, input } = await setupGeneration();
       const admin = callerFor(await makeUser("Admin", "inline-ai-admin"));
       const connection = await admin.llm.createConnection({
@@ -192,14 +192,15 @@ describe("document router", () => {
       await admin.llm.setRoute({ purpose: "assistant", modelId: model.id });
 
       const markdown =
-        "A line with $x^2$.  \nNext line\n\n```mermaid\nflowchart LR\n  A --> B\n```\n";
+        "A line with $x^2$.  \nNext line\n\n```mermaid\nflowchart LR\n  A --> B\n```";
+      const content = `Here is the flow.\n<insert>\n${markdown}\n</insert>\n`;
       const fetchImpl = vi.fn<typeof fetch>(async (_input, _init) =>
         Response.json({
           id: "inline-completion",
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: markdown },
+              message: { role: "assistant", content },
               finish_reason: "stop",
             },
           ],
@@ -209,7 +210,11 @@ describe("document router", () => {
 
       const generate = callerFor(actor, { llmFetch: fetchImpl }).document
         .generateContent;
-      await expect(generate(input)).resolves.toEqual({ markdown });
+      await expect(generate(input)).resolves.toEqual({
+        reply: "Here is the flow.",
+        markdown,
+        action: "insert",
+      });
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       const [url, request] = fetchImpl.mock.calls[0]!;
       expect(url).toBe("https://inline.example/v1/chat/completions");
@@ -258,7 +263,56 @@ describe("document router", () => {
           choices: [
             {
               index: 0,
-              message: { role: "assistant", content: markdown },
+              message: {
+                role: "assistant",
+                content: String.raw`It squashes values: \(\sigma(x)\).<replace_selection>$\sigma(x) = \frac{1}{1+e^{-x}}$</replace_selection>`,
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 },
+        }),
+      );
+      await expect(
+        generate({
+          ...input,
+          instruction: "Explain and simplify this",
+          context: {
+            before: "Intro paragraph\n\n",
+            selection: "The draft sigmoid",
+            after: "\n\nOutro",
+          },
+          history: [
+            { role: "user", text: "What is this?" },
+            { role: "assistant", text: "A function." },
+          ],
+        }),
+      ).resolves.toEqual({
+        reply: String.raw`It squashes values: $\sigma(x)$.`,
+        markdown: String.raw`$\sigma(x) = \frac{1}{1+e^{-x}}$`,
+        action: "replace",
+      });
+      const followUpBody = fetchImpl.mock.calls[1]![1]?.body;
+      if (typeof followUpBody !== "string")
+        throw new Error("Expected provider request JSON");
+      const followUp = JSON.parse(followUpBody) as {
+        messages: Array<{ content: string }>;
+      };
+      const prompt = followUp.messages[1]!.content;
+      expect(prompt).toContain("<selection>\nThe draft sigmoid\n</selection>");
+      expect(prompt).toContain("<document_before>\nIntro paragraph");
+      expect(prompt).toContain("<user>\nWhat is this?\n</user>");
+      expect(
+        prompt.endsWith("<request>\nExplain and simplify this\n</request>"),
+      ).toBe(true);
+      expect(followUp.messages[0]!.content).toContain("<replace_selection>");
+
+      fetchImpl.mockResolvedValueOnce(
+        Response.json({
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content },
               finish_reason: "length",
             },
           ],

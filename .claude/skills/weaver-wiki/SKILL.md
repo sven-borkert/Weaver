@@ -153,8 +153,8 @@ is the agent's only write path.
   fixed rules say to read it before writing wiki pages and that guide text cannot request tool calls.
 - UI: Project settings › Wiki agent card (Maintainer+; Owner controls) and the Review guide dialog show
   the server's `reviewGuide` result verbatim (`InlineDiff` reused from the document diff).
-- Budget: the assistant registry is 43 tools, 71,075 B of definitions, 3,894 B of instructions and needs an
-  89,300-token window (88,100 before the property writers); pinned in `prompt.test.ts`.
+- Budget: the assistant registry is 43 tools, 71,075 B of definitions, 3,981 B of instructions and needs an
+  89,400-token window (88,100 before the property writers); pinned in `prompt.test.ts`.
 
 ## Queue and runs
 

@@ -487,6 +487,24 @@ select:disabled {
   overflow-wrap: normal;
 }
 
+/* A selected plot or diagram shows it; ProseMirror itself draws nothing. */
+.ProseMirror .ProseMirror-selectednode [data-figure-frame] {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* While a node is selected, fields in node views and figure text keep a visible caret and selection. */
+.ProseMirror-hideselection [data-node-view-wrapper] :is(input, textarea) {
+  caret-color: auto;
+}
+
+.ProseMirror-hideselection
+  [data-node-view-wrapper]
+  :is(input, textarea)::selection,
+.ProseMirror-hideselection [data-figure-text-selection] *::selection {
+  background-color: color-mix(in srgb, var(--brand) 30%, transparent);
+}
+
 [data-document-section="true"] {
   scroll-margin-top: calc(var(--document-sticky-header-h, 0px) + 1rem);
 }

@@ -7,18 +7,28 @@ import {
   type Schema,
 } from "@tiptap/pm/model";
 import {
+  EditorState,
   Selection,
-  type EditorState,
   type SelectionBookmark,
   type Transaction,
 } from "@tiptap/pm/state";
+import { CellSelection } from "@tiptap/pm/tables";
 import { canSplit } from "@tiptap/pm/transform";
+import type {
+  DocumentAssistantAction,
+  DocumentAssistantContext,
+} from "@weaver/core/documents/assistantReply";
+import {
+  MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS,
+  MAX_DOCUMENT_ASSISTANT_SELECTION_CHARS,
+} from "@weaver/core/documents/limits";
 import {
   parseDocumentBody,
   serializeDocumentBody,
   validateDocumentContent,
 } from "@weaver/core/editor/markdown";
 import { parsePlotSpec } from "@weaver/core/editor/plot-spec";
+import { parseDocumentMarkdown } from "~/lib/documents/document-markdown";
 
 export function parseGeneratedMarkdown(schema: Schema, markdown: string): Node {
   const parsed = parseDocumentBody(markdown);
@@ -130,6 +140,7 @@ function insertBlocks(
   tr: Transaction,
   $cursor: ResolvedPos,
   content: Fragment,
+  replacing: boolean,
 ) {
   for (let depth = $cursor.depth; depth > 0; depth--) {
     const type = $cursor.node(depth).type.name;
@@ -138,7 +149,8 @@ function insertBlocks(
   }
   const { parent, parentOffset, pos } = $cursor;
   if (!parent.isTextblock) return insertExact(tr, content, pos);
-  if (parent.type.name === "paragraph" && !parent.content.size) {
+  // A replaced selection can leave any textblock empty; the new blocks take its place.
+  if ((replacing || parent.type.name === "paragraph") && !parent.content.size) {
     const end = insertExact(tr, content, $cursor.before(), $cursor.after());
     if (end !== null) return end;
   }
@@ -184,34 +196,55 @@ function preservesLists(
   );
 }
 
-export function insertGeneratedMarkdown(
+function insertContent(
+  state: EditorState,
+  $cursor: ResolvedPos,
+  content: Fragment,
+  replacing: boolean,
+): { tr: Transaction; end: number } | null {
+  const { schema } = state;
+  const first = content.firstChild!;
+  if (
+    content.childCount === 1 &&
+    first.type === schema.nodes.paragraph &&
+    $cursor.parent.inlineContent &&
+    !$cursor.parent.type.spec.code
+  )
+    return insertInline(state, $cursor, first.content);
+  const tr = state.tr;
+  const end = insertBlocks(tr, $cursor, content, replacing);
+  if (end === null || !preservesLists(tr, $cursor, content)) return null;
+  return { tr, end };
+}
+
+function applyGeneratedMarkdown(
   editor: Editor,
   bookmark: SelectionBookmark,
   markdown: string,
+  action: DocumentAssistantAction,
 ): boolean {
   if (editor.isDestroyed || !editor.isEditable || !markdown.trim())
     return false;
   const state = editor.state;
   const { doc, schema } = state;
-  let tr = state.tr;
+  const tr = state.tr;
   try {
     const { content } = parseGeneratedMarkdown(schema, markdown);
-    const first = content.firstChild!;
-    const { $to } = bookmark.resolve(doc);
-    const inline =
-      content.childCount === 1 &&
-      first.type === schema.nodes.paragraph &&
-      $to.parent.inlineContent &&
-      !$to.parent.type.spec.code;
-    let end: number | null;
-    if (inline) {
-      const inserted = insertInline(state, $to, first.content);
-      if (!inserted) return false;
-      ({ end, tr } = inserted);
-    } else {
-      end = insertBlocks(tr, $to, content);
-      if (end === null || !preservesLists(tr, $to, content)) return false;
-    }
+    const selection = bookmark.resolve(doc);
+    const replacing = action === "replace" && !selection.empty;
+    if (replacing && selection instanceof CellSelection) return false;
+    if (replacing) tr.delete(selection.from, selection.to);
+    // Positions before a deleted range keep their place, so `from` is where the selection was.
+    const base = replacing ? EditorState.create({ doc: tr.doc }) : state;
+    const inserted = insertContent(
+      base,
+      base.doc.resolve(replacing ? selection.from : selection.to),
+      content,
+      replacing,
+    );
+    if (!inserted) return false;
+    for (const step of inserted.tr.steps) tr.step(step);
+    const { end } = inserted;
     const paragraph = schema.nodes.paragraph;
     if (
       end === tr.doc.content.size &&
@@ -226,4 +259,133 @@ export function insertGeneratedMarkdown(
   }
   editor.view.dispatch(closeHistory(tr).scrollIntoView());
   return editor.state.doc !== doc;
+}
+
+/** Inserts at the bookmark's cursor, or after its selection, in one undoable step. */
+export function insertGeneratedMarkdown(
+  editor: Editor,
+  bookmark: SelectionBookmark,
+  markdown: string,
+): boolean {
+  return applyGeneratedMarkdown(editor, bookmark, markdown, "insert");
+}
+
+/** Replaces the bookmark's selection (or inserts at its cursor) in one undoable step. */
+export function replaceGeneratedMarkdown(
+  editor: Editor,
+  bookmark: SelectionBookmark,
+  markdown: string,
+): boolean {
+  return applyGeneratedMarkdown(editor, bookmark, markdown, "replace");
+}
+
+const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
+const isLowSurrogate = (code: number) => code >= 0xdc00 && code <= 0xdfff;
+
+function headOf(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(
+    0,
+    isHighSurrogate(text.charCodeAt(max - 1)) ? max - 1 : max,
+  );
+}
+
+function tailOf(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const start = text.length - max;
+  return text.slice(isLowSurrogate(text.charCodeAt(start)) ? start + 1 : start);
+}
+
+function markdownBetween(doc: Node, from: number, to: number): string {
+  if (from >= to) return "";
+  try {
+    return serializeDocumentBody(
+      doc.cut(from, to).toJSON() as JSONContent,
+    ).replace(/\n+$/, "");
+  } catch {
+    return doc.textBetween(from, to, "\n\n", " ");
+  }
+}
+
+/** The draft's Markdown inside and around a selection, nearest text first when it is long. */
+export function documentAssistantContext(
+  doc: Node,
+  from: number,
+  to: number,
+): DocumentAssistantContext {
+  return {
+    before: tailOf(
+      markdownBetween(doc, 0, from),
+      MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS,
+    ),
+    selection: markdownBetween(doc, from, to),
+    after: headOf(
+      markdownBetween(doc, to, doc.content.size),
+      MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS,
+    ),
+  };
+}
+
+export function sourceAssistantContext(
+  value: string,
+  start: number,
+  end: number,
+): DocumentAssistantContext {
+  return {
+    before: tailOf(value.slice(0, start), MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS),
+    selection: value.slice(start, end),
+    after: headOf(value.slice(end), MAX_DOCUMENT_ASSISTANT_CONTEXT_CHARS),
+  };
+}
+
+export const isAssistantSelectionTooLong = (
+  context: DocumentAssistantContext,
+) => context.selection.length > MAX_DOCUMENT_ASSISTANT_SELECTION_CHARS;
+
+export type SourceEdit = { from: number; to: number; text: string };
+
+/** The raw Markdown edit that inserts or replaces generated content, or null when the result cannot be saved. */
+export function spliceGeneratedSource(
+  schema: Schema,
+  source: { value: string; start: number; end: number },
+  markdown: string,
+  action: DocumentAssistantAction,
+): SourceEdit | null {
+  let generated: Node;
+  try {
+    generated = parseGeneratedMarkdown(schema, markdown);
+  } catch {
+    return null;
+  }
+  const from = action === "replace" ? source.start : source.end;
+  const to = source.end;
+  const before = source.value.slice(0, from);
+  const after = source.value.slice(to);
+  let text = markdown.replace(/^\s*\n/, "").trimEnd();
+  const inline =
+    generated.childCount === 1 &&
+    generated.firstChild!.type === schema.nodes.paragraph;
+  if (!inline) {
+    // Blocks need blank lines around them, or they would merge with neighbouring text.
+    const lead =
+      !before || before.endsWith("\n\n")
+        ? ""
+        : before.endsWith("\n")
+          ? "\n"
+          : "\n\n";
+    const trail = !after
+      ? "\n"
+      : after.startsWith("\n\n")
+        ? ""
+        : after.startsWith("\n")
+          ? "\n"
+          : "\n\n";
+    text = lead + text + trail;
+  }
+  try {
+    parseDocumentMarkdown(schema, before + text + after);
+  } catch {
+    return null;
+  }
+  return { from, to, text };
 }

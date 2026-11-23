@@ -1,8 +1,9 @@
 "use client";
 
 import { useMemo } from "react";
+import { normalizeLatexDelimiters } from "@weaver/core/editor/latex-delimiters";
 import { parseDocumentBody } from "@weaver/core/editor/markdown";
-import { renderDocumentContent } from "~/lib/editor/render";
+import { useStableDocumentBlocks } from "~/lib/editor/use-stable-document-blocks";
 
 /**
  * Tool results link to app-relative paths (`/projects/<id>/artifacts?file=…`):
@@ -16,12 +17,12 @@ export { withDocumentBasePath as withAssistantBasePath } from "~/lib/editor/link
  * Assistant text is Markdown; render it through the same static renderer as
  * documents. `prose-weaver` doesn't exist — `document-prose` (DocumentViewer.tsx)
  * is the class that gives headings, lists, and code blocks their typography,
- * so the content is wrapped the same way here.
+ * so the content is wrapped the same way here. Formulas in `\(…\)` or `\[…\]`
+ * render like `$…$` and `$$…$$`.
  */
 export function AssistantMarkdown({ text }: { text: string }) {
-  const content = useMemo(
-    () => renderDocumentContent(parseDocumentBody(text)),
-    [text],
+  const content = useStableDocumentBlocks(
+    useMemo(() => parseDocumentBody(normalizeLatexDelimiters(text)), [text]),
   );
   return (
     <div className="document-prose text-text text-[14px] leading-relaxed">

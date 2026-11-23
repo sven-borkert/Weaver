@@ -897,7 +897,7 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   submenus) and stay mounted but `invisible`/`aria-hidden`/`inert`. A changed
   group list, a wider row, or a narrower group re-measures from the full,
   More-less row; never apply a stale visible count. Never add
-  horizontal scrolling. Insert with assistant and Source stay fixed at the right.
+  horizontal scrolling. Ask the assistant and Source stay fixed at the right.
   Formatting commands run
   through `runImmediate`; menu commands return focus to the editor without
   scrolling, modal-opening items leave focus to the dialog, items opening a
@@ -916,17 +916,41 @@ The component map and layout description live in `docs/IMPLEMENTATION.md`.
   `/` is ordinary text. Preserve mapped selections across forms and consult live
   editability before writes. Cmd/Ctrl+S saves, including from portaled toolbar
   controls through React event bubbling; Escape closes transient UI or blurs.
-- Insert with assistant is available in the formatted Markdown editor. The
-  toolbar maps its captured selection while the dialog is open and closes it
-  if the draft adopts a new baseline or editing becomes unavailable.
-  `DocumentAssistantInsertDialog` previews the response using the canonical
-  Markdown renderer. `generated-markdown.ts` inserts at the mapped cursor or
-  selection end in one undoable draft transaction.
+- Ask the assistant (`DocumentAssistantDialog`) works in the formatted and the
+  source view; only formatting commands lock in source. On open the toolbar
+  captures the selection (a bookmark, or the textarea's value and range) and
+  the draft Markdown before/inside/after it (`documentAssistantContext`,
+  `sourceAssistantContext`; limits in `documents/limits.ts`). It closes the
+  dialog when the draft adopts a new baseline, editing becomes unavailable or
+  the view mode changes. Each request sends that context and earlier turns;
+  the reply's `<replace_selection>`/`<insert>` Markdown previews with the
+  canonical renderer. Formatted: `insertGeneratedMarkdown` (cursor or selection
+  end) and `replaceGeneratedMarkdown` (refuses `CellSelection`) apply one
+  undoable transaction at the mapped bookmark. Source: `spliceGeneratedSource`
+  validates the whole result, then `applySourceEdit` types it into the field
+  after the dialog returns focus (native undo; `setRangeText` fallback), and
+  refuses when the field changed meanwhile.
 - Math plots are `mathPlot` atoms in canonical fenced `plot` blocks. Use
   `packages/core/src/editor/plot-spec.ts` for the browser-safe arithmetic grammar,
   schema validation, and bounded sampling. The editor and reader share
   `MathPlot`. Sliders and rotation affect the view, while the JSON spec owns
   the saved defaults. PDF uses the same SVG renderer at those defaults.
+- Plot and Mermaid node views pass `stopFigureNodeViewEvent` as `stopEvent`
+  and use `useFigureNodeView` (`lib/editor/figure-node-view.ts`). ProseMirror
+  never sees presses inside them, so it cannot hide a text selection behind a
+  node selection or arm a node drag. The frame's press handler selects the
+  node (outlined via `.ProseMirror-selectednode [data-figure-frame]`), clears
+  the node range ProseMirror put on the page (a press inside it would start a
+  drag) and, on mouseup inside the editor, re-focuses the view (pressing
+  non-editable content blurs it) and restores the dragged text range.
+  `data-figure-text-selection` keeps that text visible under
+  `ProseMirror-hideselection`. Copy/cut of a text selection inside stays native
+  (cut copies), node-level clipboard actions and drops stay with ProseMirror,
+  and `stopEvent` cancels `dragstart` outside fields so rendered HTML never
+  lands in the draft. `NodeViewWrapper` overrides `onDragStart`, so put drag
+  handlers inside it (formula views block drags on their content). CSS keeps
+  carets and selections of fields inside node views visible while a node is
+  selected.
 - `DocumentSourceView` is a bare, auto-growing textarea in the document body:
   no box, heading, helper copy, or extra buttons. Editor+ edits raw Markdown;
   Viewers see a read-only field. Source and Cmd/Ctrl+Alt+S toggle WYSIWYG/raw.

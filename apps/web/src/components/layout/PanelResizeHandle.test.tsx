@@ -99,6 +99,43 @@ describe("PanelResizeHandle", () => {
     await act(async () => renderer.unmount());
   });
 
+  it("re-enables text selection when capture is lost or the handle unmounts mid-drag", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    const root = { dataset: {} as Record<string, string> };
+    vi.stubGlobal("window", { innerWidth: 1440 });
+    vi.stubGlobal("document", { documentElement: root });
+    const value = controls();
+    const { renderer, handle } = await mount(value);
+    const target = {
+      setPointerCapture: vi.fn(),
+      hasPointerCapture: () => false,
+      releasePointerCapture: vi.fn(),
+      parentElement: { getBoundingClientRect: () => ({ width: 300 }) },
+    };
+    const pointer = {
+      button: 0,
+      clientX: 900,
+      pointerId: 3,
+      currentTarget: target,
+      preventDefault: vi.fn(),
+    };
+    const props = () =>
+      handle() as HandleProps & {
+        onLostPointerCapture: (event: unknown) => void;
+      };
+
+    await act(async () => props().onPointerDown(pointer));
+    expect(root.dataset.panelResizing).toBe("true");
+    await act(async () => props().onLostPointerCapture(pointer));
+    expect(root.dataset.panelResizing).toBeUndefined();
+    expect(value.commit).not.toHaveBeenCalled();
+
+    await act(async () => props().onPointerDown(pointer));
+    expect(root.dataset.panelResizing).toBe("true");
+    await act(async () => renderer.unmount());
+    expect(root.dataset.panelResizing).toBeUndefined();
+  });
+
   it("keeps the saved width when a press does not move", async () => {
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("window", { innerWidth: 1440 });

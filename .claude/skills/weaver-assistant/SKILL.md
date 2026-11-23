@@ -537,7 +537,7 @@ ceiling pinned in `toolsets.test.ts`. Admin tools
 must never enter `ASSISTANT_TOOLS`.
 `WIKI_TOOLS` (`find_page`, `inspect_links`, `list_recent_changes`, `get_wiki_guide`) are in `ASSISTANT_TOOLS` (last) and the MCP `wiki` toolset; see `weaver-wiki`.
 The wiki agent's tools are a separate allowlist (`wikiAgentRegistry.ts`), never in `ASSISTANT_TOOLS` or `MCP_TOOLS`. `toAiToolSet` is generic over the tool context so both use it. A read the agent shares is `defineSharedReadTool`.
-The assistant prompt pins now read 43 tools, tool definitions 71,075 B, instructions 3,894 B (floor 89,300 tokens; 88,100 with 70,026 B before the `properties` field on `create_document`/`patch_document` and their proposal tools, `list_documents` filters), after the wiki tools and the guide rule.
+The assistant prompt pins now read 43 tools, tool definitions 71,075 B, instructions 3,981 B (floor 89,400 tokens; 88,100 with 70,026 B before the `properties` field on `create_document`/`patch_document` and their proposal tools, `list_documents` filters), after the wiki tools, the guide rule and the LaTeX math rule (+87 B).
 The admin read surface includes ingestion inspection
 (`ingestionInspection.ts` → `list_ingestion_batches`, `list_ingestion_files`,
 `get_ingestion_file`); draft markdown is clamped to the tool output budget.
@@ -880,13 +880,30 @@ tools), so the capacity figures above are 122 B lower.
 
 `document.generateContent` is a tool-free call through
 `packages/core/src/services/documentGeneration.ts`. It verifies Editor access and the
-Markdown document kind, then passes only the instruction to the configured
-Assistant model. Best-effort `document.generate_content` accounting uses the
-routed model's pricing and omits the request and generated content. The editor
-previews the returned Markdown and inserts it in the local draft after
-confirmation. Keep the plot examples in the system prompt aligned with
+Markdown document kind, then sends the instruction, the optional draft context
+(`before`/`selection`/`after`, from the editor) and up to 12 earlier turns of
+the dialog to the configured Assistant model in one prompt. Without context or
+history the prompt is exactly the instruction. Older turns, then the context
+farthest from the selection, are trimmed to keep about 1,024 output tokens.
+`packages/core/src/documents/assistantReply.ts` parses the reply: Markdown in
+`<replace_selection>` or `<insert>` becomes `{ markdown, action }`, the rest the
+`reply`; both get `normalizeLatexDelimiters`. Best-effort
+`document.generate_content` accounting uses the routed model's pricing and omits
+the request and generated content. The editor previews proposed Markdown and
+applies it to the local draft only after the user chooses an action. Keep the
+plot examples in the system prompt aligned with
 `packages/core/src/editor/plot-spec.ts`, which defines fenced `plot` blocks for
 Cartesian functions, parametric curves, and surfaces.
+
+## Transcript rendering
+
+`AssistantMarkdown` renders text through `normalizeLatexDelimiters`
+(`\(…\)`/`\[…\]` → `$`/`$$` outside code), `parseDocumentBody` and
+`useStableDocumentBlocks`. The static renderer creates new component types on
+every call, so the hook reuses the element of each top-level block whose index
+and JSON are unchanged; that keeps streamed replies' earlier blocks (and a text
+selection in them) mounted. Pass it memoized content. Save as page normalizes
+the delimiters in its body prefill.
 
 ## Exams
 

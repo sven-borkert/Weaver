@@ -2,6 +2,7 @@
 
 import type { Editor, EditorEvents } from "@tiptap/core";
 import type { SelectionBookmark } from "@tiptap/pm/state";
+import type { DocumentAssistantAction } from "@weaver/core/documents/assistantReply";
 import { useEditorState } from "@tiptap/react";
 import { FileCode2, FileText, Sparkles } from "lucide-react";
 import {
@@ -11,6 +12,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type RefObject,
 } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -26,10 +28,21 @@ import { Label } from "~/components/ui/label";
 import { DOCUMENT_IMAGE_ACCEPT } from "~/lib/documents/image-upload";
 import { restoreDocumentSelection } from "~/lib/editor/document-selection";
 import { externalUrlSchema } from "~/lib/editor/external-url";
-import { insertGeneratedMarkdown } from "~/lib/editor/generated-markdown";
+import {
+  documentAssistantContext,
+  insertGeneratedMarkdown,
+  replaceGeneratedMarkdown,
+  sourceAssistantContext,
+  spliceGeneratedSource,
+  type SourceEdit,
+} from "~/lib/editor/generated-markdown";
+import { applySourceEdit } from "~/lib/editor/source-edit";
 import { CrossReferencePicker } from "./CrossReferencePicker";
 import type { DocumentCommand } from "./document-toolbar-groups";
-import { DocumentAssistantInsertDialog } from "./DocumentAssistantInsertDialog";
+import {
+  DocumentAssistantDialog,
+  type DocumentAssistantTarget,
+} from "./DocumentAssistantDialog";
 import { DocumentToolbarButton } from "./DocumentToolbarButton";
 import { DocumentFormattingControls } from "./DocumentToolbarControls";
 
@@ -47,6 +60,14 @@ type EditorToolbarProps = {
   onTransientOpenChange?: (open: boolean) => void;
   onViewSource: () => void;
   assistantDocument?: { id: string; baseCommitSha: string };
+  /** The raw Markdown field, which the assistant edits while the source view is open. */
+  sourceInputRef?: RefObject<HTMLTextAreaElement | null>;
+};
+
+type AssistantSession = DocumentAssistantTarget & {
+  revision: string;
+  /** The source text and selection when the source view was open, else null for the formatted editor. */
+  source: { value: string; start: number; end: number } | null;
 };
 
 export function EditorToolbar({
@@ -63,6 +84,7 @@ export function EditorToolbar({
   onTransientOpenChange,
   onViewSource,
   assistantDocument,
+  sourceInputRef,
 }: EditorToolbarProps) {
   const id = useId();
   const [panel, setPanel] = useState<"link" | "image" | null>(null);
@@ -70,10 +92,9 @@ export function EditorToolbar({
   const [alt, setAlt] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [assistantRevision, setAssistantRevision] = useState<string | null>(
-    null,
-  );
+  const [assistant, setAssistant] = useState<AssistantSession | null>(null);
   const bookmark = useRef<SelectionBookmark | null>(null);
+  const sourceEdit = useRef<SourceEdit | null>(null);
   const viewButtonRef = useRef<HTMLButtonElement>(null);
   const editorState = useEditorState({
     editor,
@@ -83,11 +104,14 @@ export function EditorToolbar({
     }),
   });
   const locked = disabled || sourceOpen || !editorState.editable;
+  // The source view keeps the assistant: it edits the raw Markdown instead.
+  const assistantLocked = disabled || !editorState.editable;
   const assistantOpen =
-    !locked &&
-    assistantRevision !== null &&
-    assistantRevision === assistantDocument?.baseCommitSha;
-  if (assistantRevision !== null && !assistantOpen) setAssistantRevision(null);
+    !assistantLocked &&
+    assistant !== null &&
+    assistant.revision === assistantDocument?.baseCommitSha &&
+    (assistant.source !== null) === sourceOpen;
+  if (assistant !== null && !assistantOpen) setAssistant(null);
   const liveDisabled = useRef(locked);
   useLayoutEffect(() => {
     liveDisabled.current = locked;
@@ -179,6 +203,66 @@ export function EditorToolbar({
         bookmark.current = null;
       }
     : undefined;
+  const openAssistant = (revision: string) => {
+    if (assistantLocked || editor.isDestroyed || !editor.isEditable) return;
+    if (sourceOpen) {
+      const input = sourceInputRef?.current;
+      if (!input || input.readOnly) return;
+      const { value, selectionStart: start, selectionEnd: end } = input;
+      setAssistant({
+        revision,
+        source: { value, start, end },
+        context: sourceAssistantContext(value, start, end),
+        hasSelection: start < end,
+      });
+      return;
+    }
+    if (!capture()) return;
+    const { from, to } = editor.state.selection;
+    setAssistant({
+      revision,
+      source: null,
+      context: documentAssistantContext(editor.state.doc, from, to),
+      hasSelection: from < to,
+    });
+  };
+  const applyAssistant = (
+    markdown: string,
+    action: DocumentAssistantAction,
+  ): string | null => {
+    if (!assistantOpen || !assistant)
+      return "Editing is not available right now.";
+    if (assistant.source) {
+      const input = sourceInputRef?.current;
+      if (!input || input.readOnly || input.value !== assistant.source.value)
+        return "The Markdown source changed while the assistant was open. Close this dialog and ask again.";
+      const edit = spliceGeneratedSource(
+        editor.schema,
+        assistant.source,
+        markdown,
+        action,
+      );
+      if (!edit)
+        return "This content cannot be added here without breaking the Markdown.";
+      // The field takes the edit once the dialog has returned focus to it.
+      sourceEdit.current = edit;
+      setAssistant(null);
+      return null;
+    }
+    if (liveDisabled.current || !bookmark.current)
+      return "Editing is not available right now.";
+    const applied =
+      action === "replace"
+        ? replaceGeneratedMarkdown(editor, bookmark.current, markdown)
+        : insertGeneratedMarkdown(editor, bookmark.current, markdown);
+    if (!applied)
+      return action === "replace"
+        ? "This content cannot replace the selection."
+        : "This content cannot be inserted at the current cursor position.";
+    bookmark.current = null;
+    setAssistant(null);
+    return null;
+  };
 
   return (
     <>
@@ -202,13 +286,11 @@ export function EditorToolbar({
         />
         {assistantDocument ? (
           <DocumentToolbarButton
-            label="Insert with assistant"
+            label="Ask the assistant"
+            title="Ask the assistant about the selection or insert content"
             aria-haspopup="dialog"
-            disabled={locked}
-            onClick={() => {
-              if (capture())
-                setAssistantRevision(assistantDocument.baseCommitSha);
-            }}
+            disabled={assistantLocked}
+            onClick={() => openAssistant(assistantDocument.baseCommitSha)}
           >
             <Sparkles />
           </DocumentToolbarButton>
@@ -234,14 +316,23 @@ export function EditorToolbar({
         </div>
       </div>
       {assistantDocument ? (
-        <DocumentAssistantInsertDialog
+        <DocumentAssistantDialog
           open={assistantOpen}
-          editor={editor}
+          target={assistant}
+          schema={editor.schema}
           projectId={projectId}
           documentId={assistantDocument.id}
-          onClose={() => setAssistantRevision(null)}
+          onClose={() => setAssistant(null)}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
+            const edit = sourceEdit.current;
+            sourceEdit.current = null;
+            const input = sourceInputRef?.current;
+            if (sourceOpen && input?.isConnected) {
+              if (edit && !input.readOnly) applySourceEdit(input, edit);
+              else input.focus({ preventScroll: true });
+              return;
+            }
             if (restore())
               editor.commands.focus(undefined, {
                 scrollIntoView: bookmark.current === null,
@@ -249,15 +340,7 @@ export function EditorToolbar({
             else viewButtonRef.current?.focus({ preventScroll: true });
             bookmark.current = null;
           }}
-          onInsert={(markdown) => {
-            if (!assistantOpen || liveDisabled.current || !bookmark.current)
-              return false;
-            if (!insertGeneratedMarkdown(editor, bookmark.current, markdown))
-              return false;
-            bookmark.current = null;
-            setAssistantRevision(null);
-            return true;
-          }}
+          onApply={applyAssistant}
         />
       ) : null}
       <Dialog
