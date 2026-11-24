@@ -2271,6 +2271,375 @@ describe("mergeFetchedBranch", () => {
   });
 });
 
+/** Clones the project repository, lets `change` edit and commit it, and
+ * returns it as a fetched remote branch descending from the local head. */
+async function remoteFromLocal(
+  projectId: string,
+  change: (
+    worktree: string,
+    git: (...args: string[]) => Promise<string>,
+  ) => Promise<unknown>,
+): Promise<{ bareDirectory: string; remoteHead: string }> {
+  const worktree = path.join(tmp, `untracked-wt-${randomUUID()}`);
+  await execAsync("git", ["clone", repoDir(projectId), worktree]);
+  const git = async (...args: string[]) =>
+    (await execAsync("git", ["-C", worktree, ...args])).stdout.trim();
+  await git("config", "user.name", "Remote Fixture");
+  await git("config", "user.email", "remote-fixture@example.test");
+  await change(worktree, git);
+  await git("add", "-A");
+  await git("commit", "-m", "remote change");
+  const remoteHead = await git("rev-parse", "HEAD");
+  const bareDirectory = path.join(tmp, `untracked-bare-${randomUUID()}.git`);
+  await execAsync("git", ["clone", "--bare", worktree, bareDirectory]);
+  return { bareDirectory, remoteHead };
+}
+
+describe("mergeFetchedBranch with content kept out of Git", () => {
+  const untrackedPaths = async (projectId: string) => {
+    const prisma = getPrisma();
+    const [documents, folders, files] = await Promise.all([
+      prisma.untrackedDocument.findMany({
+        where: { projectId },
+        select: { path: true },
+        orderBy: { path: "asc" },
+      }),
+      prisma.untrackedFolder.findMany({
+        where: { projectId },
+        select: { path: true },
+        orderBy: { path: "asc" },
+      }),
+      prisma.untrackedFile.findMany({
+        where: { projectId },
+        select: { path: true },
+        orderBy: { path: "asc" },
+      }),
+    ]);
+    return {
+      documents: documents.map((row) => row.path),
+      folders: folders.map((row) => row.path),
+      files: files.map((row) => row.path),
+    };
+  };
+  const merge = (
+    projectId: string,
+    remote: { bareDirectory: string; remoteHead: string },
+    author: { name: string; email: string; userId: string },
+  ) =>
+    withExistingProjectRepo(projectId, (repo) =>
+      mergeFetchedBranch(getPrisma(), repo, {
+        projectId,
+        branch: "main",
+        author,
+        ...remote,
+      }),
+    );
+
+  it("carries untracked content along a folder the remote renamed", async () => {
+    const { owner, caller, project, author } = await ownerProject(
+      "pull-untracked-rename",
+      "Untracked Rename Project",
+    );
+    const projectId = project.id;
+    await caller.folder.create({ projectId, parentPath: [], name: "Team" });
+    await caller.document.create({
+      projectId,
+      folderPath: ["team"],
+      title: "Runbook",
+      contentJson: PARA("Shared"),
+    });
+    const notes = await caller.document.create({
+      projectId,
+      folderPath: ["team"],
+      title: "Notes",
+      contentJson: IMAGE_DOC("notes.assets/pic.png"),
+      untracked: true,
+    });
+    await storeDocumentImage(
+      getPrisma(),
+      { projectId, documentId: notes.id, fileName: "pic.png", bytes: PNG_1X1 },
+      { ...securityContextFor(owner), name: "Owner", email: owner.email },
+    );
+    await caller.folder.create({
+      projectId,
+      parentPath: ["team"],
+      name: "Scratch",
+      untracked: true,
+    });
+    await caller.document.create({
+      projectId,
+      folderPath: ["team", "scratch"],
+      title: "Idea",
+      contentJson: PARA("Private"),
+    });
+
+    const outcome = await merge(
+      projectId,
+      await remoteFromLocal(projectId, (_, git) => git("mv", "team", "crew")),
+      author,
+    );
+    expect(outcome).toMatchObject({ fastForward: true });
+
+    expect(await untrackedPaths(projectId)).toEqual({
+      documents: ["crew/notes.md", "crew/scratch/idea.md"],
+      folders: ["crew/scratch"],
+      files: ["crew/notes.assets/pic.png"],
+    });
+    const tree = await caller.folder.tree({ projectId });
+    expect(tree.folders).toEqual(["crew", "crew/scratch"]);
+    expect(tree.untrackedFolders).toEqual(["crew/scratch"]);
+    expect(
+      (await caller.document.get({ projectId, documentId: notes.id })).path,
+    ).toBe("crew/notes.md");
+  });
+
+  it("keeps the untracked content of a folder the remote deleted in a folder outside Git", async () => {
+    const { caller, project, author } = await ownerProject(
+      "pull-untracked-delete",
+      "Untracked Delete Project",
+    );
+    const projectId = project.id;
+    await caller.folder.create({ projectId, parentPath: [], name: "Archive" });
+    await caller.folder.create({
+      projectId,
+      parentPath: ["archive"],
+      name: "Old Drafts",
+    });
+    await caller.document.create({
+      projectId,
+      folderPath: ["archive", "old-drafts"],
+      title: "Shared",
+      contentJson: PARA("Shared"),
+    });
+    const kept = await caller.document.create({
+      projectId,
+      folderPath: ["archive", "old-drafts"],
+      title: "Keep",
+      contentJson: PARA("Private"),
+      untracked: true,
+    });
+
+    await merge(
+      projectId,
+      await remoteFromLocal(projectId, (_, git) =>
+        git("rm", "-r", "-q", "archive"),
+      ),
+      author,
+    );
+
+    const repo = (await openProjectRepo(projectId))!;
+    expect(
+      (await repo.listTrackedFiles()).filter((file) =>
+        file.startsWith("archive"),
+      ),
+    ).toEqual([]);
+    expect(await untrackedPaths(projectId)).toEqual({
+      documents: ["archive/old-drafts/keep.md"],
+      folders: ["archive", "archive/old-drafts"],
+      files: [],
+    });
+    const tree = await caller.folder.tree({ projectId });
+    expect(tree.untrackedFolders).toEqual(["archive", "archive/old-drafts"]);
+    expect(tree.folderNames["archive/old-drafts"]).toBe("Old Drafts");
+    await expect(
+      caller.document.get({ projectId, documentId: kept.id }),
+    ).resolves.toMatchObject({ path: "archive/old-drafts/keep.md" });
+    // The folder opens and takes new content outside Git.
+    await expect(
+      caller.document.create({
+        projectId,
+        folderPath: ["archive", "old-drafts"],
+        title: "Later",
+        contentJson: PARA("Private too"),
+      }),
+    ).resolves.toMatchObject({ path: "archive/old-drafts/later.md" });
+    expect(await repo.listTrackedFiles()).not.toContain(
+      "archive/old-drafts/later.md",
+    );
+  });
+
+  it("moves an untracked folder aside when pulled content lands in it", async () => {
+    const { caller, project, author } = await ownerProject(
+      "pull-untracked-landing",
+      "Untracked Landing Project",
+    );
+    const projectId = project.id;
+    await caller.folder.create({
+      projectId,
+      parentPath: [],
+      name: "Notes",
+      untracked: true,
+    });
+    const privateDoc = await caller.document.create({
+      projectId,
+      folderPath: ["notes"],
+      title: "Private",
+      contentJson: PARA("Mine"),
+    });
+    const remoteDocId = randomUUID();
+
+    await merge(
+      projectId,
+      await remoteFromLocal(projectId, async (worktree) => {
+        await mkdir(path.join(worktree, "notes"), { recursive: true });
+        await writeFile(
+          path.join(worktree, "notes/meeting.md"),
+          composeDocumentFile(
+            {
+              id: remoteDocId,
+              title: "Meeting",
+              created: T0,
+              createdBy: null,
+              updated: T0,
+              updatedBy: null,
+              review: null,
+            },
+            "Shared minutes\n",
+            "markdown",
+          ),
+        );
+      }),
+      author,
+    );
+
+    expect(await untrackedPaths(projectId)).toEqual({
+      documents: ["notes-2/private.md"],
+      folders: ["notes-2"],
+      files: [],
+    });
+    const tree = await caller.folder.tree({ projectId });
+    expect(tree.untrackedFolders).toEqual(["notes-2"]);
+    expect(tree.folderNames["notes-2"]).toBe("Notes");
+    expect(
+      tree.documents.map((document) => [document.path, document.untracked]),
+    ).toEqual([
+      ["notes-2/private.md", true],
+      ["notes/meeting.md", false],
+    ]);
+    expect(
+      (await caller.document.get({ projectId, documentId: privateDoc.id }))
+        .path,
+    ).toBe("notes-2/private.md");
+  });
+
+  it("re-slugs an untracked document whose slug a pulled document takes, with its images", async () => {
+    const { owner, caller, project, author } = await ownerProject(
+      "pull-untracked-slug",
+      "Untracked Slug Project",
+    );
+    const projectId = project.id;
+    const plan = await caller.document.create({
+      projectId,
+      folderPath: [],
+      title: "Plan",
+      contentJson: IMAGE_DOC("plan.assets/pic.png"),
+      untracked: true,
+    });
+    await storeDocumentImage(
+      getPrisma(),
+      { projectId, documentId: plan.id, fileName: "pic.png", bytes: PNG_1X1 },
+      { ...securityContextFor(owner), name: "Owner", email: owner.email },
+    );
+    const remotePlanId = randomUUID();
+    const { bareDirectory, remoteHead } = await buildRemoteRepo(
+      async (source) => {
+        await writeFile(path.join(source, "project.json"), "{}\n");
+        await mkdir(path.join(source, "guides/plan.assets"), {
+          recursive: true,
+        });
+        await writeFile(
+          path.join(source, "guides/plan.md"),
+          composeDocumentFile(
+            {
+              id: remotePlanId,
+              title: "Plan",
+              created: T0,
+              createdBy: null,
+              updated: T0,
+              updatedBy: null,
+              review: null,
+            },
+            "Remote plan\n",
+            "markdown",
+          ),
+        );
+        await writeFile(
+          path.join(source, "guides/plan.assets/pic.png"),
+          GIF_1X1,
+        );
+      },
+    );
+
+    await merge(projectId, { bareDirectory, remoteHead }, author);
+
+    expect(await untrackedPaths(projectId)).toEqual({
+      documents: ["plan-2.md"],
+      folders: [],
+      files: ["plan-2.assets/pic.png"],
+    });
+    const moved = await caller.document.get({
+      projectId,
+      documentId: plan.id,
+    });
+    expect(moved).toMatchObject({ slug: "plan-2", path: "plan-2.md" });
+    expect(JSON.stringify(moved.content)).toContain("plan-2.assets/pic.png");
+    expect(JSON.stringify(moved.content)).not.toContain('"plan.assets/');
+  });
+
+  it("re-slugs a local document past a slug an untracked document holds", async () => {
+    const { caller, project, author } = await ownerProject(
+      "pull-untracked-reslug",
+      "Untracked Reslug Project",
+    );
+    const projectId = project.id;
+    await caller.document.create({
+      projectId,
+      folderPath: [],
+      title: "Notes",
+      contentJson: PARA("Local tracked"),
+    });
+    const untracked = await caller.document.create({
+      projectId,
+      folderPath: [],
+      title: "Notes",
+      contentJson: PARA("Local untracked"),
+      untracked: true,
+    });
+    expect(untracked.slug).toBe("notes-2");
+    const { bareDirectory, remoteHead } = await buildRemoteRepo(
+      async (source) => {
+        await writeFile(path.join(source, "project.json"), "{}\n");
+        await writeFile(
+          path.join(source, "notes.md"),
+          composeDocumentFile(
+            {
+              id: randomUUID(),
+              title: "Notes",
+              created: T0,
+              createdBy: null,
+              updated: T0,
+              updatedBy: null,
+              review: null,
+            },
+            "Remote notes\n",
+            "markdown",
+          ),
+        );
+      },
+    );
+
+    const outcome = await merge(
+      projectId,
+      { bareDirectory, remoteHead },
+      author,
+    );
+    expect(outcome!.reslugged).toEqual([
+      { kind: "document", from: "notes.md", to: "notes-3.md" },
+    ]);
+    expect((await untrackedPaths(projectId)).documents).toEqual(["notes-2.md"]);
+  });
+});
+
 async function pullFixture(projectId: string, enabled = true): Promise<string> {
   const id = randomUUID();
   const encrypted = encryptSecret(

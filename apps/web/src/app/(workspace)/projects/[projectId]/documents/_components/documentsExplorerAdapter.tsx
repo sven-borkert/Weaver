@@ -198,6 +198,8 @@ function DocumentItemActions({
       documentId={item.id}
       documentTitle={item.title}
       documentFolderPath={folderPath}
+      untracked={item.untracked}
+      revision={item.headCommitSha}
       download={documentDownload(rest.projectId, item)}
       archive={documentArchiveDownload(rest.projectId, item)}
       {...rest}

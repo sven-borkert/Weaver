@@ -64,6 +64,6 @@ jobs:
           NODE
       - run: pnpm db:test:migrate
       - name: Verify a router caller in the isolated test environment
-        run: pnpm test:integration apps/web/tests/integration/localDocument.spec.ts -t 'stores a nested tree separately from tracked documents and Git'
+        run: pnpm test:integration apps/web/tests/integration/untrackedDocuments.spec.ts -t 'lists, reads and saves an untracked document beside tracked ones without committing'
       - name: Run the guarded full integration suite
         run: RUN_FULL_TESTS=1 pnpm test:integration

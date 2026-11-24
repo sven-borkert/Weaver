@@ -32,6 +32,14 @@ describe("defaultScope", () => {
     });
     expect(defaultScope({}, null)).toEqual({ kind: "all" });
   });
+  it("uses the project for a document kept out of Git", () => {
+    expect(
+      defaultScope(
+        { projectId: P, documentId: D, documentOutsideGit: true },
+        Q,
+      ),
+    ).toEqual({ kind: "project", projectId: P });
+  });
   it("uses the pinned project when the page has none", () => {
     expect(defaultScope({}, Q)).toEqual({ kind: "project", projectId: Q });
     expect(defaultScope({ projectId: P, documentId: D }, Q)).toEqual({
@@ -319,6 +327,55 @@ describe("deriveScopeDraftState", () => {
       null,
     );
     expect(afterNav).toBe(seeded);
+  });
+
+  it("widens the page-document default to the project once the document turns out to be kept out of Git", () => {
+    const input = {
+      conversationId: "c1",
+      lastUserSnapshot: null,
+      pinnedProjectId: null,
+    };
+    const accessible = [P];
+    const loading = deriveScopeDraftState(
+      null,
+      input,
+      { projectId: P, documentId: D },
+      accessible,
+    );
+    expect(loading.draft).toEqual({
+      kind: "document",
+      projectId: P,
+      documentId: D,
+    });
+    const outside = { projectId: P, documentId: D, documentOutsideGit: true };
+    const loaded = deriveScopeDraftState(loading, input, outside, accessible);
+    expect(loaded).toMatchObject({
+      draft: { kind: "project", projectId: P },
+      seeded: false,
+    });
+    expect(deriveScopeDraftState(loaded, input, outside, accessible)).toBe(
+      loaded,
+    );
+  });
+
+  it("keeps a chosen document focus when the page shows a document kept out of Git", () => {
+    const input = {
+      conversationId: "c1",
+      lastUserSnapshot: null,
+      pinnedProjectId: null,
+    };
+    const other = "44444444-4444-4444-8444-444444444444";
+    const chosen: ScopeDraftState = {
+      ...deriveScopeDraftState(null, input, { projectId: P }, null),
+      draft: { kind: "document", projectId: P, documentId: other },
+      seeded: true,
+    };
+    const outside = { projectId: P, documentId: D, documentOutsideGit: true };
+    expect(deriveScopeDraftState(chosen, input, outside, null)).toBe(chosen);
+    const unseededOther = { ...chosen, seeded: false };
+    expect(deriveScopeDraftState(unseededOther, input, outside, null)).toBe(
+      unseededOther,
+    );
   });
 
   it("is a no-op (same reference) once seeded and nothing about the conversation changed", () => {

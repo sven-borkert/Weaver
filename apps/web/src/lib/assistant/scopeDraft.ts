@@ -8,13 +8,18 @@ export type PageContext = {
   projectId?: string;
   documentId?: string;
   tableId?: string;
+  /**
+   * The page's document is kept out of Git. The assistant's document tools
+   * read Git snapshots only, so such a document cannot be a focus.
+   */
+  documentOutsideGit?: boolean;
 };
 
 export function defaultScope(
   page: PageContext,
   pinnedProjectId: string | null,
 ): ScopeRequest {
-  if (page.projectId && page.documentId)
+  if (page.projectId && page.documentId && !page.documentOutsideGit)
     return {
       kind: "document",
       projectId: page.projectId,
@@ -219,6 +224,22 @@ export function deriveScopeDraftState(
       dropped: 0,
       prunedAgainst: null,
       defaultPin: current.defaultPin,
+    };
+  } else if (
+    !current.seeded &&
+    page.documentOutsideGit &&
+    current.draft.kind === "document" &&
+    current.draft.documentId === page.documentId
+  ) {
+    // Whether the page's document is kept out of Git is known only once it
+    // has loaded, after the first seed may have focused it.
+    seeded = {
+      conversationId: current.conversationId,
+      draft: defaultScope(page, input.pinnedProjectId),
+      seeded: false,
+      dropped: 0,
+      prunedAgainst: null,
+      defaultPin: input.pinnedProjectId,
     };
   } else if (
     !current.seeded &&

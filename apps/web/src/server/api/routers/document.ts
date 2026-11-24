@@ -2,6 +2,7 @@ import type { JSONContent } from "@tiptap/core";
 import { generateDocumentContent } from "@weaver/core/services/documentGeneration";
 import {
   createDocumentInput,
+  deleteDocumentInput,
   diffInput,
   documentIdInput,
   documentBacklinksInput,
@@ -129,7 +130,7 @@ export const documentRouter = createTRPCRouter({
       documents.moveDocument(ctx.db, input, actorOf(ctx)),
     ),
   delete: authedProcedure
-    .input(documentIdInput)
+    .input(deleteDocumentInput)
     .mutation(({ ctx, input }) =>
       documents.deleteDocument(ctx.db, input, actorOf(ctx)),
     ),

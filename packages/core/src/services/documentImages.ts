@@ -71,40 +71,47 @@ export async function storeDocumentImage(
     throw new CoreError("BAD_REQUEST", "unsupported image type");
   const basename = imageBasename(input.fileName);
   const extension = imageExtension(contentType);
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    const row = await db.document.findFirst({
-      where: { id: input.documentId, projectId: input.projectId },
-      select: { id: true, path: true, slug: true },
-    });
-    if (!row) throw new CoreError("NOT_FOUND");
-    const { kind } = await requireCommittedDocumentAtPath(repo, row);
-    if (!DOCUMENT_KINDS[kind].supportsImages)
-      throw new CoreError("BAD_REQUEST", "This file kind does not hold images");
-    const assetsDir = assetsDirForDocPath(row.path);
-    const taken = new Set(
-      (await repo.listTrackedFiles())
-        .filter((file) => file.startsWith(`${assetsDir}/`))
-        .map((file) => file.slice(assetsDir.length + 1)),
-    );
-    let fileName = allocateImageFileName(basename, extension, taken);
-    while (await repo.fileExistsInWorktree(`${assetsDir}/${fileName}`)) {
-      taken.add(fileName);
-      fileName = allocateImageFileName(basename, extension, taken);
-    }
-    const relPath = `${assetsDir}/${fileName}`;
-    await repo.writeBinaryFileAtomic(relPath, input.bytes);
-    const commitSha = await repo.commitAll(
-      `asset: ${relPath} (for ${row.path})`,
-      { name: actor.name, email: actor.email, userId: actor.userId },
-    );
-    return {
-      src: `${assetsPrefixForSlug(row.slug)}${fileName}`,
-      path: relPath,
-      contentType,
-      byteSize: input.bytes.byteLength,
-      commitSha,
-    };
-  });
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const row = await db.document.findFirst({
+        where: { id: input.documentId, projectId: input.projectId },
+        select: { id: true, path: true, slug: true },
+      });
+      if (!row) throw new CoreError("NOT_FOUND");
+      const { kind } = await requireCommittedDocumentAtPath(repo, row);
+      if (!DOCUMENT_KINDS[kind].supportsImages)
+        throw new CoreError(
+          "BAD_REQUEST",
+          "This file kind does not hold images",
+        );
+      const assetsDir = assetsDirForDocPath(row.path);
+      const taken = new Set(
+        (await repo.listTrackedFiles())
+          .filter((file) => file.startsWith(`${assetsDir}/`))
+          .map((file) => file.slice(assetsDir.length + 1)),
+      );
+      let fileName = allocateImageFileName(basename, extension, taken);
+      while (await repo.fileExistsInWorktree(`${assetsDir}/${fileName}`)) {
+        taken.add(fileName);
+        fileName = allocateImageFileName(basename, extension, taken);
+      }
+      const relPath = `${assetsDir}/${fileName}`;
+      await repo.writeBinaryFileAtomic(relPath, input.bytes);
+      const commitSha = await repo.commitAll(
+        `asset: ${relPath} (for ${row.path})`,
+        { name: actor.name, email: actor.email, userId: actor.userId },
+      );
+      return {
+        src: `${assetsPrefixForSlug(row.slug)}${fileName}`,
+        path: relPath,
+        contentType,
+        byteSize: input.bytes.byteLength,
+        commitSha,
+      };
+    },
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
 }

@@ -433,6 +433,51 @@ describe("assistant run lifecycle", () => {
     expect(JSON.stringify(toolCall?.payload).length).toBeLessThanOrEqual(8_000);
   });
 
+  it("stores tool events whose text carries an unpaired surrogate or an emoji at the cut", async () => {
+    const { db, actor, run } = await queuedRun("surrogates");
+    const leased = await leaseRunAttempt(db, { runId: run.id, workerId: "w1" });
+    // Emoji runs at both parities, so the 8,000-char payload bound cuts one
+    // of them inside a pair, and a lone high surrogate as a model or an
+    // external tool could send one.
+    const emoji = "😀".repeat(4_100);
+    for (const [toolCallId, query] of [
+      ["even", emoji],
+      ["odd", `x${emoji}`],
+    ] as const)
+      await appendRunEvent(db, {
+        runId: run.id,
+        attemptId: leased!.attempt.id,
+        event: {
+          type: "tool.call",
+          toolCallId,
+          toolName: "search",
+          input: { query },
+        },
+      });
+    await appendRunEvent(db, {
+      runId: run.id,
+      attemptId: leased!.attempt.id,
+      event: {
+        type: "tool.result",
+        toolCallId: "c1",
+        toolName: "search",
+        ok: true,
+        summary: "half \uD83D",
+      },
+    });
+    const page = await listRunEvents(db, actor, { runId: run.id, after: -1 });
+    const queries = page.events
+      .filter((e) => e.type === "tool.call")
+      .map((e) => (e.payload as { input: { query: string } }).input.query);
+    expect(queries).toEqual([
+      expect.stringMatching(/^(😀)+…$/u),
+      expect.stringMatching(/^x(😀)+…$/u),
+    ]);
+    expect(page.events.find((e) => e.type === "tool.result")?.payload).toEqual(
+      expect.objectContaining({ summary: "half \uFFFD" }),
+    );
+  });
+
   it("preserves historical runs without external records: retries up to maxAttempts and republishes", async () => {
     const { db, run, userMessageId } = await queuedRun("retry");
     expect(

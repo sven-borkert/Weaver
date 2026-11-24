@@ -218,65 +218,69 @@ export async function applyMcpOperation(
   let irreversibleStarted = false;
   let committed = false;
   const work = withMcpOperationLock(operationId, () =>
-    withProjectRepo(operation.projectId, async (repo) => {
-      input.signal?.throwIfAborted();
-      const existing = await db.mcpOperation.findUnique({ where });
-      if (existing) {
-        if (existing.requestHash !== hash)
-          throw new CoreError(
-            "CONFLICT",
-            "idempotency key was already used for a different request",
-            { reason: "IDEMPOTENCY_KEY_REUSED" },
-          );
-        return {
-          ...(existing.result as Omit<McpWriteResult, "replayed">),
-          replayed: true,
-        };
-      }
+    withProjectRepo(
+      operation.projectId,
+      async (repo) => {
+        input.signal?.throwIfAborted();
+        const existing = await db.mcpOperation.findUnique({ where });
+        if (existing) {
+          if (existing.requestHash !== hash)
+            throw new CoreError(
+              "CONFLICT",
+              "idempotency key was already used for a different request",
+              { reason: "IDEMPOTENCY_KEY_REUSED" },
+            );
+          return {
+            ...(existing.result as Omit<McpWriteResult, "replayed">),
+            replayed: true,
+          };
+        }
 
-      const { applied, committed: wrote } = await recoverCheckApply({
-        db,
-        repo,
-        operation,
-        operationId,
-        identity: { requestHash: hash, toolName: input.toolName },
-        checkpoint: () => input.signal?.throwIfAborted(),
-        apply: (base) => {
-          irreversibleStarted = true;
-          return applyOperationInRepo(db, repo, operation, actor, {
-            table: base.table,
-            summary,
-            operationId,
-            mcpRequestHash: hash,
-            mcpToolName: input.toolName,
-            message: (path) => `mcp: ${path} — ${summary}`,
-          });
-        },
-      });
-      committed = wrote;
+        const { applied, committed: wrote } = await recoverCheckApply({
+          db,
+          repo,
+          operation,
+          operationId,
+          identity: { requestHash: hash, toolName: input.toolName },
+          checkpoint: () => input.signal?.throwIfAborted(),
+          apply: (base) => {
+            irreversibleStarted = true;
+            return applyOperationInRepo(db, repo, operation, actor, {
+              table: base.table,
+              summary,
+              operationId,
+              mcpRequestHash: hash,
+              mcpToolName: input.toolName,
+              message: (path) => `mcp: ${path} — ${summary}`,
+            });
+          },
+        });
+        committed = wrote;
 
-      const result = {
-        projectId: operation.projectId,
-        resourceId: applied.resourceId,
-        path: applied.path,
-        commitSha: applied.commitSha,
-      };
-      if (!irreversibleStarted) input.signal?.throwIfAborted();
-      await db.mcpOperation.create({
-        data: {
-          userId: actor.userId,
-          credentialId: actor.credentialId,
+        const result = {
           projectId: operation.projectId,
-          idempotencyKey: input.idempotencyKey,
-          toolName: input.toolName,
-          requestHash: hash,
           resourceId: applied.resourceId,
+          path: applied.path,
           commitSha: applied.commitSha,
-          result,
-        },
-      });
-      return { ...result, replayed: false };
-    }),
+        };
+        if (!irreversibleStarted) input.signal?.throwIfAborted();
+        await db.mcpOperation.create({
+          data: {
+            userId: actor.userId,
+            credentialId: actor.credentialId,
+            projectId: operation.projectId,
+            idempotencyKey: input.idempotencyKey,
+            toolName: input.toolName,
+            requestHash: hash,
+            resourceId: applied.resourceId,
+            commitSha: applied.commitSha,
+            result,
+          },
+        });
+        return { ...result, replayed: false };
+      },
+      { db, actor, min: "Editor" },
+    ),
   );
   const result = await awaitWhileWriteIsCancellable(
     work,

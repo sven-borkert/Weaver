@@ -118,14 +118,16 @@ async function newFolder(
   parentPath: string[],
   baseName: string,
 ): Promise<{ segments: string[]; id: string }> {
-  const { repo, run, item, hash, fence, author } = context;
+  const { db, repo, run, item, hash, fence, author } = context;
   const parentRel = (
     scope === "tables" ? [TABLES_ROOT, ...parentPath] : parentPath
   ).join("/");
   const name = await freeFolderName(repo, parentRel, baseName);
   // Random: an interrupted recreation leaves at most an empty folder behind.
   const created = await createFolderInRepo(
+    db,
     repo,
+    run.projectId,
     { parentPath, name },
     author,
     scope,

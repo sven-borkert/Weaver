@@ -6,9 +6,11 @@ const mocked = vi.hoisted(
   (): {
     query: { data: unknown; error: unknown; isLoading: boolean };
     updateMutate: ReturnType<typeof vi.fn>;
+    deleteMutate: ReturnType<typeof vi.fn>;
   } => ({
     query: { data: undefined, error: null, isLoading: false },
     updateMutate: vi.fn(),
+    deleteMutate: vi.fn(),
   }),
 );
 
@@ -89,7 +91,9 @@ vi.mock("~/trpc/react", () => {
       document: {
         get: { useQuery: () => mocked.query },
         move: { useMutation: () => idle },
-        delete: { useMutation: () => idle },
+        delete: {
+          useMutation: () => ({ ...idle, mutate: mocked.deleteMutate }),
+        },
         update: {
           useMutation: () => ({
             isPending: false,
@@ -364,5 +368,69 @@ describe("DocumentMutations download", () => {
   });
   it("renders nothing for a Viewer without a download", () => {
     expect(render(false, false).toJSON()).toBeNull();
+  });
+});
+
+describe("DocumentMutations delete dialog", () => {
+  beforeEach(() => mocked.deleteMutate.mockReset());
+
+  const openDelete = (props: { untracked?: boolean; revision?: string }) => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <DocumentMutations
+          projectId="p1"
+          documentId="d1"
+          documentTitle="Original"
+          documentFolderPath={[]}
+          folders={[]}
+          canEdit
+          {...props}
+        />,
+      );
+    });
+    const action = renderer.root
+      .findAllByProps({ "data-menu-item": true })
+      .find((node) => node.children.includes("Delete"))!;
+    act(() => {
+      (action.props.onClick as () => void)();
+    });
+    return renderer;
+  };
+  const confirm = (renderer: ReactTestRenderer) => {
+    const button = renderer.root
+      .findAllByType("button")
+      .find((node) => node.children.includes("Delete document"))!;
+    act(() => {
+      (button.props.onClick as () => void)();
+    });
+  };
+
+  it("points to Git history for a document in Git and sends no revision", () => {
+    const renderer = openDelete({ revision: "a".repeat(40) });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("Its Git history");
+    expect(text).not.toContain("Permanently delete");
+    confirm(renderer);
+    expect(mocked.deleteMutate).toHaveBeenCalledWith({
+      projectId: "p1",
+      documentId: "d1",
+    });
+    act(() => renderer.unmount());
+  });
+
+  it("warns that a document kept out of Git is gone for good and sends the listed revision", () => {
+    const renderer = openDelete({ untracked: true, revision: "b".repeat(40) });
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain("Permanently delete");
+    expect(text).toContain("cannot be recovered");
+    expect(text).not.toContain("Git history");
+    confirm(renderer);
+    expect(mocked.deleteMutate).toHaveBeenCalledWith({
+      projectId: "p1",
+      documentId: "d1",
+      expectedHeadCommitSha: "b".repeat(40),
+    });
+    act(() => renderer.unmount());
   });
 });

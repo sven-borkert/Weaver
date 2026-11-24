@@ -46,6 +46,8 @@ export type DocumentItem = {
   index: DocumentIndexLights | null;
   /** Kept out of Git (Git-ignored). */
   untracked?: boolean;
+  /** Commit of a Git document, content revision of one kept out of Git. */
+  headCommitSha?: string;
 };
 export type ExplorerTree = GenericExplorerTree<DocumentItem>;
 export type DocumentEntry = ItemEntry<DocumentItem>;

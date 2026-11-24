@@ -15,6 +15,14 @@ All notable changes to Weaver. Format: Keep a Changelog; versions match package.
 - Text in math plots and Mermaid diagrams can be selected and copied in the editor. The selection stays visible, dragging it no longer drops the plot's labels into the page as text, a selected plot or diagram shows an outline, and the plot and diagram source fields keep a visible cursor. Dragging a formula no longer inserts its rendered text.
 - Selecting text in an assistant answer keeps working while the answer is still being written.
 - Text selection no longer stays disabled everywhere after a side panel resize ends unexpectedly.
+- Content kept out of Git stays out of Git on every path. ZIP imports into such a folder keep their folders, documents, images and icons out of Git, and **Replace** works on such documents. Folder actions from MCP tools and accepted assistant proposals no longer delete a folder that still holds such documents or create a Git copy of one. A folder kept out of Git can no longer be named `tables`.
+- Renaming or moving a folder reliably carries its content kept out of Git along and reports an error instead of success when that fails. Git pull keeps such content in step: it follows folders the remote renamed, stays reachable when the remote deletes its folder, moves aside when pulled content takes its folder or name, and its names are never given to pulled documents.
+- Deleting a document kept out of Git says that it is permanent and is refused when someone saved the document after the list was loaded. ZIP downloads check their size limits before loading content kept out of Git.
+- **Ask the assistant** and the docked assistant work on documents kept out of Git; the docked assistant starts in the project scope there. Large pages and long conversations stay under the provider request limit by dropping the oldest turns first, and a selection too large to send says so.
+- Applying an assistant reply replaces whole selected blocks such as list items in place and inserts after the selected block. In the Markdown source view replies no longer merge into neighbouring paragraphs, lists or code blocks, and edits that would restructure surrounding content are refused. Square brackets written as `\[…\]`, such as citations or key names, stay text; only LaTeX-like content becomes a formula.
+- Assistant tool results and inputs containing emoji are stored without failing the tool call.
+- Every write that waits for the project lock, including restores, moves, image uploads, table and folder changes, MCP writes and proposal acceptance, checks the author's role again once it holds the lock.
+- The nightly database integration workflow runs again; its setup check pointed at a removed test file.
 
 ### Changed
 

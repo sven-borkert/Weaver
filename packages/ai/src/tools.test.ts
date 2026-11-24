@@ -338,6 +338,29 @@ describe("toAiToolSet", () => {
     ).toBeLessThanOrEqual(2_000);
   });
 
+  it("never splits an emoji in the result summary or the tool.call input", async () => {
+    // In Unicode mode the class matches unpaired surrogates only.
+    const lone = /[\uD800-\uDFFF]/u;
+    // Slide the emoji over the 200-unit summary cut and the 2,000-unit input
+    // bound, so one placement always straddles each boundary.
+    for (const [before, after] of [
+      [180, 30],
+      [1_900, 3_000],
+    ] as const) {
+      for (let offset = 0; offset < 30; offset += 1) {
+        const { events, tools } = harness([echo]);
+        const text = `${"a".repeat(before + offset)}😀${"a".repeat(after)}`;
+        await tools.echo!.execute!({ text }, options);
+        const [call, result] = events;
+        expect(JSON.stringify(call)).not.toMatch(/\\ud[89a-f]/);
+        expect(result).toMatchObject({ type: "tool.result" });
+        const summary = (result as { summary: string }).summary;
+        expect(summary.length).toBeLessThanOrEqual(200);
+        expect(summary).not.toMatch(lone);
+      }
+    }
+  });
+
   it("forwards the abort signal to the contract and rethrows aborts", async () => {
     seenSignals.length = 0;
     const controller = new AbortController();

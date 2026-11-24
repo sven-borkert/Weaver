@@ -12,6 +12,7 @@ import {
   boundedJson,
   type AssistantEvent,
 } from "@weaver/core/assistant/events";
+import { truncateText } from "@weaver/core/diagnostics/sanitize";
 import { emitDiagnostic } from "@weaver/core/diagnostics/writer";
 
 export type ToolCollector = {
@@ -32,10 +33,7 @@ function stringField(record: Record<string, unknown>, key: string): string {
 }
 
 function summarize(output: unknown): string {
-  const text = JSON.stringify(output) ?? "";
-  return text.length > MAX_SUMMARY_CHARS
-    ? `${text.slice(0, MAX_SUMMARY_CHARS - 1)}…`
-    : text;
+  return truncateText(JSON.stringify(output) ?? "", MAX_SUMMARY_CHARS);
 }
 
 /** What the adapter needs of a contract; the wiki agent's tools take their own context. */

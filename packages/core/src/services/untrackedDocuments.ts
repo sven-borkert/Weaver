@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { JSONContent } from "@tiptap/core";
 import { type Prisma, type PrismaClient } from "@weaver/db/client";
 import { openProjectRepo } from "@weaver/git-store";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
@@ -21,6 +22,7 @@ import {
   allocateImageFileName,
   assetsDirForDocPath,
   assetsPrefixForSlug,
+  collectImageSources,
   imageBasename,
   imageExtension,
   rewriteOwnAssetsPrefix,
@@ -35,7 +37,7 @@ import {
 } from "../documents/paths";
 import type { DocumentReview } from "../documents/review";
 import { slugify } from "../documents/slug";
-import { parseDocumentBody } from "../editor/markdown";
+import { parseDocumentBody, serializeDocumentBody } from "../editor/markdown";
 import { CoreError } from "../errors";
 import { hasCapability } from "../security/context";
 import { assertOutsideTablesRoot } from "../tables/paths";
@@ -199,7 +201,7 @@ export async function untrackedSlugTaken(
   );
 }
 
-/** Rewrites untracked paths after a tracked folder moved in Git. */
+/** Rewrites untracked paths after a tracked folder moved in Git; one statement per table keeps large folders cheap. */
 export async function moveUntrackedPrefix(
   db: Db,
   projectId: string,
@@ -207,36 +209,35 @@ export async function moveUntrackedPrefix(
   toRel: string,
 ): Promise<void> {
   const from = `${fromRel}/`;
-  const shift = (path: string) => `${toRel}/${path.slice(from.length)}`;
-  const [documents, folders, files] = await Promise.all([
-    db.untrackedDocument.findMany({
-      where: { projectId, path: { startsWith: from } },
-      select: { id: true, path: true },
-    }),
-    db.untrackedFolder.findMany({
-      where: { projectId, path: { startsWith: from } },
-      select: { path: true },
-    }),
-    db.untrackedFile.findMany({
-      where: { projectId, path: { startsWith: from } },
-      select: { path: true },
-    }),
-  ]);
-  for (const document of documents)
-    await db.untrackedDocument.update({
-      where: { id: document.id },
-      data: { path: shift(document.path) },
-    });
-  for (const folder of folders)
-    await db.untrackedFolder.update({
-      where: { projectId_path: { projectId, path: folder.path } },
-      data: { path: shift(folder.path) },
-    });
-  for (const file of files)
-    await db.untrackedFile.update({
-      where: { projectId_path: { projectId, path: file.path } },
-      data: { path: shift(file.path) },
-    });
+  const to = `${toRel}/`;
+  await db.$executeRaw`UPDATE "UntrackedDocument" SET path = ${to} || substr(path, char_length(${from}) + 1) WHERE "projectId" = ${projectId}::uuid AND left(path, char_length(${from})) = ${from}`;
+  await db.$executeRaw`UPDATE "UntrackedFolder" SET path = ${to} || substr(path, char_length(${from}) + 1) WHERE "projectId" = ${projectId}::uuid AND left(path, char_length(${from})) = ${from}`;
+  await db.$executeRaw`UPDATE "UntrackedFile" SET path = ${to} || substr(path, char_length(${from}) + 1) WHERE "projectId" = ${projectId}::uuid AND left(path, char_length(${from})) = ${from}`;
+}
+
+/** Serializes every write to a project's untracked content. */
+export async function lockUntracked(tx: Tx, projectId: string): Promise<void> {
+  await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:untracked:${projectId}`}, 0))::text`;
+}
+
+/**
+ * Carries untracked content along after a tracked folder move was committed.
+ * Takes the untracked write lock, so a save that read its row before cannot
+ * write the old path back afterwards.
+ */
+export async function followTrackedFolderMove(
+  db: PrismaClient,
+  projectId: string,
+  fromRel: string,
+  toRel: string,
+): Promise<void> {
+  await db.$transaction(
+    async (tx) => {
+      await lockUntracked(tx, projectId);
+      await moveUntrackedPrefix(tx, projectId, fromRel, toRel);
+    },
+    { maxWait: 10_000, timeout: 30_000 },
+  );
 }
 
 async function withUntrackedWrite<T>(
@@ -249,7 +250,7 @@ async function withUntrackedWrite<T>(
 ): Promise<T> {
   await assertProjectRole(db, projectId, actor, role);
   return db.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`weaver:untracked:${projectId}`}, 0))::text`;
+    await lockUntracked(tx, projectId);
     await assertProjectRole(tx, projectId, actor, role);
     return write(tx);
   });
@@ -591,6 +592,46 @@ async function moveAssets(
     });
 }
 
+/** Replaces a document's images: keeps those the content still references and stores the given ones. */
+async function replaceAssets(
+  tx: Tx,
+  projectId: string,
+  row: UntrackedRow,
+  contentJson: JSONContent | null,
+  assets: Array<{ name: string; bytes: Uint8Array }>,
+) {
+  const assetsDir = assetsDirForDocPath(row.path);
+  const ownPrefix = assetsPrefixForSlug(row.slug);
+  const kept = new Set(assets.map((asset) => asset.name));
+  for (const src of contentJson ? collectImageSources(contentJson) : [])
+    if (src.startsWith(ownPrefix)) kept.add(src.slice(ownPrefix.length));
+  const stale = (
+    await tx.untrackedFile.findMany({
+      where: { projectId, path: { startsWith: `${assetsDir}/` } },
+      select: { path: true },
+    })
+  )
+    .map((file) => file.path)
+    .filter((path) => !kept.has(path.slice(assetsDir.length + 1)));
+  if (stale.length)
+    await tx.untrackedFile.deleteMany({
+      where: { projectId, path: { in: stale } },
+    });
+  for (const asset of assets) {
+    const file = {
+      bytes: Buffer.from(asset.bytes),
+      sha: untrackedRevision(asset.bytes),
+    };
+    await tx.untrackedFile.upsert({
+      where: {
+        projectId_path: { projectId, path: `${assetsDir}/${asset.name}` },
+      },
+      create: { projectId, path: `${assetsDir}/${asset.name}`, ...file },
+      update: file,
+    });
+  }
+}
+
 export async function saveUntrackedDocument(
   db: PrismaClient,
   input: {
@@ -600,6 +641,8 @@ export async function saveUntrackedDocument(
     title?: string;
     content: DocumentContentInput;
     properties?: WikiPagePropertiesInput;
+    /** Replaces the stored images (archive import); without it they are left as they are. */
+    assets?: Array<{ name: string; bytes: Uint8Array }>;
   },
   actor: EnrichedActor,
 ): Promise<DocumentResult> {
@@ -663,6 +706,14 @@ export async function saveUntrackedDocument(
     assertUpdatedNotBeforeCreated(meta);
     const content = composeDocumentFile(meta, body, row.kind);
     assertDocumentFileSize(content, path);
+    if (input.assets)
+      await replaceAssets(
+        tx,
+        input.projectId,
+        row,
+        prepared.json,
+        input.assets,
+      );
     await moveAssets(tx, input.projectId, row.path, path);
     const updated = await tx.untrackedDocument.update({
       where: { id: row.id },
@@ -965,13 +1016,30 @@ export async function moveUntrackedDocument(
   });
 }
 
+/** Guarded by the revision the caller saw: without history, a delete over a newer save loses it for good. */
 export async function deleteUntrackedDocument(
   db: PrismaClient,
-  input: { projectId: string; documentId: string },
+  input: {
+    projectId: string;
+    documentId: string;
+    expectedHeadCommitSha?: string;
+  },
   actor: EnrichedActor,
 ): Promise<void> {
+  const expected = input.expectedHeadCommitSha;
+  if (expected === undefined)
+    throw new CoreError(
+      "BAD_REQUEST",
+      "Deleting a document outside Git needs the revision you loaded",
+      { field: "expectedHeadCommitSha" },
+    );
   await withUntrackedWrite(db, input.projectId, actor, async (tx) => {
     const row = await lockRow(tx, input.projectId, input.documentId);
+    assertRevision(
+      row,
+      expected,
+      "The document changed. Reload and try again.",
+    );
     await tx.untrackedFile.deleteMany({
       where: {
         projectId: input.projectId,
@@ -979,6 +1047,41 @@ export async function deleteUntrackedDocument(
       },
     });
     await tx.untrackedDocument.delete({ where: { id: row.id } });
+  });
+}
+
+/** Gives a document a new slug in its folder, with its images, after a Git pull handed its slug to tracked content. */
+export async function reslugUntrackedDocument(
+  tx: Tx,
+  projectId: string,
+  documentId: string,
+  slug: string,
+): Promise<void> {
+  const row = await lockRow(tx, projectId, documentId);
+  const path = docPath(row.path.split("/").slice(0, -1), slug, row.kind);
+  const { meta, body } = parseRow(row);
+  const nextBody =
+    row.kind === "markdown" && body.includes(assetsPrefixForSlug(row.slug))
+      ? serializeDocumentBody(
+          rewriteOwnAssetsPrefix(parseDocumentBody(body), row.slug, slug),
+        )
+      : body;
+  const content = composeDocumentFile(meta, nextBody, row.kind);
+  await moveAssets(tx, projectId, row.path, path);
+  await tx.untrackedDocument.update({
+    where: { id: row.id },
+    data: {
+      path,
+      slug,
+      ...(content === row.content
+        ? {}
+        : await projectionColumns(
+            tx,
+            meta,
+            content,
+            excerptOf(row.kind, nextBody),
+          )),
+    },
   });
 }
 
@@ -1058,24 +1161,17 @@ export async function readUntrackedFile(
   return file ? { bytes: Buffer.from(file.bytes), sha: file.sha } : null;
 }
 
-/** All files of the given document paths' asset directories. */
-export async function readUntrackedAssets(
+/** Paths and byte sizes of the stored files below `prefix`, without their bytes. */
+export async function listUntrackedFileSizes(
   db: Db,
   projectId: string,
-  documentPath: string,
-): Promise<Array<{ path: string; bytes: Buffer }>> {
-  const files = await db.untrackedFile.findMany({
-    where: {
-      projectId,
-      path: { startsWith: `${assetsDirForDocPath(documentPath)}/` },
-    },
-    select: { path: true, bytes: true },
-    orderBy: { path: "asc" },
-  });
-  return files.map((file) => ({
-    path: file.path,
-    bytes: Buffer.from(file.bytes),
-  }));
+  prefix: string,
+): Promise<Array<{ path: string; size: number }>> {
+  return db.$queryRaw<Array<{ path: string; size: number }>>`
+    SELECT path, octet_length(bytes)::int AS size FROM "UntrackedFile"
+    WHERE "projectId" = ${projectId}::uuid
+      AND left(path, char_length(${prefix})) = ${prefix}
+    ORDER BY path`;
 }
 
 /** The stored file text and its untracked path, for downloads. */
@@ -1096,35 +1192,74 @@ export async function readUntrackedDocumentFile(
   };
 }
 
-/** Untracked documents and folder metadata at or below `rel` (all when empty). */
-export async function listUntrackedUnder(
+/**
+ * Archive paths and byte sizes of the untracked documents, folder metadata
+ * and document images at or below `rel` (all when empty). Sizes come first so
+ * a download can apply its limits before any content is loaded.
+ */
+export async function listUntrackedArchiveEntries(
   db: Db,
   projectId: string,
   rel: string,
-) {
-  const below = rel ? { startsWith: `${rel}/` } : undefined;
-  const [documents, folders] = await Promise.all([
+): Promise<Array<{ path: string; size: number }>> {
+  const below = rel ? `${rel}/` : "";
+  const [documents, folders, files] = await Promise.all([
+    db.$queryRaw<Array<{ path: string; size: number }>>`
+      SELECT path, octet_length(content)::int AS size FROM "UntrackedDocument"
+      WHERE "projectId" = ${projectId}::uuid
+        AND left(path, char_length(${below})) = ${below}`,
+    db.$queryRaw<Array<{ path: string; size: number }>>`
+      SELECT path, octet_length(metadata)::int AS size FROM "UntrackedFolder"
+      WHERE "projectId" = ${projectId}::uuid
+        AND (path = ${rel} OR left(path, char_length(${below})) = ${below})`,
+    listUntrackedFileSizes(db, projectId, below),
+  ]);
+  const assetsDirs = new Set(
+    documents.map((document) => assetsDirForDocPath(document.path)),
+  );
+  return [
+    ...folders.map((folder) => ({
+      path: `${folder.path}/.folder.json`,
+      size: folder.size,
+    })),
+    ...documents,
+    ...files.filter((file) =>
+      assetsDirs.has(file.path.slice(0, file.path.lastIndexOf("/"))),
+    ),
+  ];
+}
+
+/** The bytes of untracked archive entries by archive path; vanished ones are absent. */
+export async function readUntrackedArchiveEntries(
+  db: Db,
+  projectId: string,
+  paths: string[],
+): Promise<Map<string, Buffer>> {
+  const suffix = "/.folder.json";
+  const folderPaths = paths
+    .filter((path) => path.endsWith(suffix))
+    .map((path) => path.slice(0, -suffix.length));
+  const [documents, folders, files] = await Promise.all([
     db.untrackedDocument.findMany({
-      where: { projectId, ...(below ? { path: below } : {}) },
-      select: {
-        id: true,
-        path: true,
-        kind: true,
-        content: true,
-        slug: true,
-        title: true,
-      },
-      orderBy: { path: "asc" },
+      where: { projectId, path: { in: paths } },
+      select: { path: true, content: true },
     }),
     db.untrackedFolder.findMany({
-      where: {
-        projectId,
-        ...(rel ? { OR: [{ path: rel }, { path: below! }] } : {}),
-      },
-      orderBy: { path: "asc" },
+      where: { projectId, path: { in: folderPaths } },
+      select: { path: true, metadata: true },
+    }),
+    db.untrackedFile.findMany({
+      where: { projectId, path: { in: paths } },
+      select: { path: true, bytes: true },
     }),
   ]);
-  return { documents, folders };
+  return new Map([
+    ...documents.map((row) => [row.path, Buffer.from(row.content)] as const),
+    ...folders.map(
+      (row) => [`${row.path}${suffix}`, Buffer.from(row.metadata)] as const,
+    ),
+    ...files.map((row) => [row.path, Buffer.from(row.bytes)] as const),
+  ]);
 }
 
 export type UntrackedTreeDocument = {
@@ -1229,6 +1364,15 @@ export async function listUntrackedTree(db: PrismaClient, projectId: string) {
   };
 }
 
+/** Untracked folders obey the reserved roots of tracked ones. */
+function assertFolderTarget(segments: string[]): void {
+  try {
+    assertOutsideTablesRoot(segments);
+  } catch {
+    throw new CoreError("BAD_REQUEST", "invalid folder path");
+  }
+}
+
 function requireFolderName(name: string): string {
   const normalized = normalizeFolderName(name);
   if (normalized === null)
@@ -1280,6 +1424,7 @@ export async function createUntrackedFolder(
 ): Promise<{ path: string[] }> {
   const name = requireFolderName(input.name);
   const segments = [...input.parentPath, slugify(name)];
+  assertFolderTarget(segments);
   if (segments.length > MAX_FOLDER_DEPTH)
     throw new CoreError("BAD_REQUEST", "folder depth exceeds 10");
   return withUntrackedWrite(db, input.projectId, actor, async (tx) => {
@@ -1304,6 +1449,74 @@ export async function createUntrackedFolder(
   });
 }
 
+/**
+ * Creates the missing folders of an archive import below a folder kept out
+ * of Git, shallowest first, and stores the icons the import brings. Folders
+ * that exist in either store are left as they are.
+ */
+export async function ensureUntrackedFolders(
+  db: PrismaClient,
+  input: {
+    projectId: string;
+    folders: Array<{
+      segments: string[];
+      name: string;
+      appearance?: Appearance;
+    }>;
+    icons: Array<{ path: string; bytes: Uint8Array }>;
+  },
+  actor: FolderActor,
+): Promise<void> {
+  await withUntrackedWrite(db, input.projectId, actor, async (tx) => {
+    const tracked = await trackedFolders(input.projectId);
+    for (const folder of input.folders) {
+      const rel = folderRel(folder.segments);
+      if (
+        tracked.has(rel) ||
+        (await untrackedFolderExists(tx, input.projectId, folder.segments))
+      )
+        continue;
+      assertFolderTarget(folder.segments);
+      if (
+        !(await untrackedFolderExists(
+          tx,
+          input.projectId,
+          folder.segments.slice(0, -1),
+        ))
+      )
+        throw new CoreError(
+          "BAD_REQUEST",
+          "A folder outside Git cannot be imported into a folder in Git",
+          { field: "folderPath" },
+        );
+      await assertFreeFolderPath(tx, input.projectId, folder.segments);
+      await tx.untrackedFolder.create({
+        data: {
+          projectId: input.projectId,
+          path: rel,
+          metadata: composeFolderMetadata({
+            ...newFolderMetadata(folder.name, folderAuthor(actor), new Date()),
+            ...(folder.appearance ? { appearance: folder.appearance } : {}),
+          }),
+        },
+      });
+    }
+    for (const icon of input.icons)
+      await tx.untrackedFile.upsert({
+        where: {
+          projectId_path: { projectId: input.projectId, path: icon.path },
+        },
+        create: {
+          projectId: input.projectId,
+          path: icon.path,
+          bytes: Buffer.from(icon.bytes),
+          sha: untrackedRevision(icon.bytes),
+        },
+        update: {},
+      });
+  });
+}
+
 async function moveUntrackedFolderInTx(
   tx: Tx,
   projectId: string,
@@ -1312,6 +1525,7 @@ async function moveUntrackedFolderInTx(
   actor: FolderActor,
   name?: string,
 ): Promise<void> {
+  assertFolderTarget(to);
   const fromRel = folderRel(from);
   const toRel = folderRel(to);
   const folder = await tx.untrackedFolder.findUnique({

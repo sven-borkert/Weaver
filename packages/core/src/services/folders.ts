@@ -65,10 +65,10 @@ import {
   assertTrackedDestination,
   createUntrackedFolder,
   deleteUntrackedFolder,
+  followTrackedFolderMove,
   isUntrackedFolderPath,
   listUntrackedTree,
   moveUntrackedFolder,
-  moveUntrackedPrefix,
   renameUntrackedFolder,
   untrackedContentUnder,
   untrackedFolderExists,
@@ -589,8 +589,11 @@ export async function getTree(
   });
 }
 
+/** Every tracked folder write goes through here, so the untracked guards cover all callers. */
 export async function stageFolderInRepo(
+  db: PrismaClient,
   repo: ProjectRepoWriter,
+  projectId: string,
   input: { segments: string[]; name: string; appearance?: Appearance },
   actor: FolderCreateActor,
   scope: FolderScope,
@@ -601,6 +604,20 @@ export async function stageFolderInRepo(
   if (!full.length)
     throw new CoreError("BAD_REQUEST", "A folder name is required");
   const name = requireFolderName(input.name);
+  if (scope === "documents") {
+    if (await isUntrackedFolderPath(db, projectId, parent))
+      throw new CoreError(
+        "BAD_REQUEST",
+        "A folder in Git cannot be created inside a folder outside Git",
+        { field: "parentPath" },
+      );
+    if (await untrackedFolderExists(db, projectId, full))
+      throw new CoreError(
+        "CONFLICT",
+        "A folder with this (slugified) name already exists here",
+        { field: "name" },
+      );
+  }
   if (parent.length > 0)
     await assertExistingFolder(repo, toRel(scope, parent), "parentPath");
   await assertNoSibling(repo, toRel(scope, parent), full.at(-1)!);
@@ -617,7 +634,9 @@ export async function stageFolderInRepo(
 }
 
 export async function createFolderInRepo(
+  db: PrismaClient,
   repo: ProjectRepoWriter,
+  projectId: string,
   input: { parentPath: string[]; name: string },
   actor: FolderCreateActor,
   scope: FolderScope,
@@ -626,7 +645,9 @@ export async function createFolderInRepo(
   assertScopePath(scope, input.parentPath);
   const name = requireFolderName(input.name);
   const staged = await stageFolderInRepo(
+    db,
     repo,
+    projectId,
     { segments: [...input.parentPath, slugify(name)], name },
     actor,
     scope,
@@ -658,20 +679,11 @@ export async function createFolder(
       (await isUntrackedFolderPath(db, input.projectId, input.parentPath)))
   )
     return createUntrackedFolder(db, input, actor);
-  if (
-    scope === "documents" &&
-    (await untrackedFolderExists(db, input.projectId, [
-      ...input.parentPath,
-      slugify(input.name),
-    ]))
-  )
-    throw new CoreError(
-      "CONFLICT",
-      "A folder with this (slugified) name already exists here",
-      { field: "name" },
-    );
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    createFolderInRepo(repo, input, actor, scope),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      createFolderInRepo(db, repo, input.projectId, input, actor, scope),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return { path: result.segments };
@@ -825,25 +837,6 @@ export async function moveFolderToInRepo(
     );
     await enqueueProjectReconcile(projectId);
   }
-  if (
-    scope === "documents" &&
-    (await untrackedContentUnder(db, projectId, fromRel)) > 0
-  ) {
-    try {
-      // Git-ignored content below the folder moves with it.
-      await db.$transaction((tx) =>
-        moveUntrackedPrefix(tx, projectId, fromRel, toRelPath),
-      );
-    } catch (error) {
-      captureError({
-        event: "content.projection.failed",
-        message: "untracked content did not follow a folder move",
-        error,
-        projectId,
-        details: { kind: "folder", from: fromRel, to: toRelPath },
-      });
-    }
-  }
   for (const source of affected) {
     if (scope === "documents") {
       await enqueueDocumentChanged({
@@ -861,7 +854,43 @@ export async function moveFolderToInRepo(
       });
     }
   }
+  // Git-ignored content below the folder moves with it.
+  if (scope === "documents")
+    await carryUntrackedAlong(db, projectId, fromRel, toRelPath);
   return { segments: to, path: toRelPath, headCommitSha: sha };
+}
+
+const UNTRACKED_CARRY_ATTEMPTS = 3;
+
+/**
+ * Nothing can rebuild untracked paths from Git, so a carry-along that keeps
+ * failing after the commit is reported rather than swallowed.
+ */
+async function carryUntrackedAlong(
+  db: PrismaClient,
+  projectId: string,
+  fromRel: string,
+  toRel: string,
+): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await followTrackedFolderMove(db, projectId, fromRel, toRel);
+      return;
+    } catch (error) {
+      if (attempt < UNTRACKED_CARRY_ATTEMPTS) continue;
+      const reference = captureError({
+        event: "content.projection.failed",
+        message: "untracked content did not follow a folder move",
+        error,
+        projectId,
+        details: { kind: "folder", from: fromRel, to: toRel },
+      });
+      throw new CoreError(
+        "INTERNAL_SERVER_ERROR",
+        `The folder was moved, but the content outside Git below it still has its old location. Move the folder back to reunite them (ref ${reference ?? "none"}).`,
+      );
+    }
+  }
 }
 
 /** Stores the display name and, when its slug changes, moves the directory in the same commit. */
@@ -931,8 +960,11 @@ export async function renameFolder(
     (await untrackedFolderExists(db, input.projectId, input.path))
   )
     return renameUntrackedFolder(db, input, actor);
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    renameFolderInRepo(db, repo, input.projectId, input, actor, scope),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      renameFolderInRepo(db, repo, input.projectId, input, actor, scope),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return { path: result.segments };
@@ -953,15 +985,28 @@ export async function moveFolder(
   if (scope === "documents")
     await assertTrackedDestination(db, input.projectId, input.newParentPath);
   const to = [...input.newParentPath, input.path.at(-1)!];
-  await withProjectRepo(input.projectId, (repo) =>
-    moveFolderToInRepo(db, repo, input.projectId, input.path, to, actor, scope),
+  await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      moveFolderToInRepo(
+        db,
+        repo,
+        input.projectId,
+        input.path,
+        to,
+        actor,
+        scope,
+      ),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return { path: to };
 }
 
 export async function deleteFolderInRepo(
+  db: PrismaClient,
   repo: ProjectRepoWriter,
+  projectId: string,
   input: { path: string[] },
   actor: Actor,
   scope: FolderScope,
@@ -970,6 +1015,12 @@ export async function deleteFolderInRepo(
   assertScopePath(scope, input.path);
   const rel = toRel(scope, input.path);
   await assertExistingFolder(repo, rel, "path");
+  // Git alone would call a folder holding only untracked content empty.
+  if (
+    scope === "documents" &&
+    (await untrackedContentUnder(db, projectId, rel)) > 0
+  )
+    throw new CoreError("PRECONDITION_FAILED", "folder is not empty");
   const tracked = (await repo.listTrackedFiles()).filter(
     (file) =>
       file.startsWith(`${rel}/`) &&
@@ -994,14 +1045,16 @@ export async function deleteFolder(
   scope: FolderScope = "documents",
 ) {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  if (scope === "documents") {
-    if (await untrackedFolderExists(db, input.projectId, input.path))
-      return deleteUntrackedFolder(db, input, actor);
-    if (await untrackedContentUnder(db, input.projectId, input.path.join("/")))
-      throw new CoreError("PRECONDITION_FAILED", "folder is not empty");
-  }
-  await withProjectRepo(input.projectId, (repo) =>
-    deleteFolderInRepo(repo, input, actor, scope),
+  if (
+    scope === "documents" &&
+    (await untrackedFolderExists(db, input.projectId, input.path))
+  )
+    return deleteUntrackedFolder(db, input, actor);
+  await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      deleteFolderInRepo(db, repo, input.projectId, input, actor, scope),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
 }

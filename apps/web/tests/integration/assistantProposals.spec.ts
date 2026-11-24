@@ -30,7 +30,12 @@ import {
   listContentFolders,
 } from "@weaver/core/services/folders";
 import { createTable, getTable, saveTable } from "@weaver/core/services/tables";
-import { openProjectRepo } from "@weaver/git-store";
+import {
+  openProjectRepo,
+  withProjectRepo,
+  type ProjectRepoWriter,
+} from "@weaver/git-store";
+import * as gitStore from "@weaver/git-store";
 import {
   addMembership,
   getPrisma,
@@ -826,6 +831,49 @@ describe("assistant proposals", () => {
       actor,
     );
     expect(unchanged.rows[0]!.cells[COL_TASK]).toBe("Human");
+  });
+
+  it("refuses an acceptance queued on the project lock once the user is downgraded", async () => {
+    const { db, user, project, actor, conversation, run } =
+      await setup("queued-accept");
+    const proposal = await createProposal(db, actor, {
+      conversationId: conversation.id,
+      runId: run.id,
+      summary: "queued",
+      operation: {
+        kind: "document.create",
+        projectId: project.id,
+        folderPath: [],
+        title: "Queued",
+        markdown: "queued",
+      },
+    });
+    const lock = vi
+      .spyOn(gitStore, "withProjectRepo")
+      .mockImplementationOnce(async function <T>(
+        projectId: string,
+        locked: (repo: ProjectRepoWriter) => Promise<T>,
+      ) {
+        return withProjectRepo(projectId, async (repo) => {
+          await db.member.updateMany({
+            where: { userId: user.id },
+            data: { role: toOrganizationRole("Viewer") },
+          });
+          return locked(repo);
+        });
+      });
+    try {
+      await expect(
+        acceptProposal(db, actor, proposal.id),
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(lock).toHaveBeenCalledTimes(1);
+    } finally {
+      lock.mockRestore();
+    }
+    expect(await db.document.count({ where: { projectId: project.id } })).toBe(
+      0,
+    );
+    expect((await getProposal(db, actor, proposal.id)).status).toBe("pending");
   });
 
   it("requires content:propose + Editor to create and Editor to accept; rejects and expires", async () => {

@@ -163,4 +163,18 @@ describe("ScopeSelector option rows", () => {
     expect(row).toContain('aria-selected="true"');
     expect(optionRow(html, "This project")).toContain('aria-selected="false"');
   });
+
+  it("disables the document focus for a document kept out of Git", () => {
+    const html = render({
+      draft: { kind: "project", projectId: ids.P },
+      onChange: () => undefined,
+      page: { projectId: ids.P, documentId: ids.D, documentOutsideGit: true },
+      accessibleProjects: [{ id: ids.P, name: "Platform" }],
+    });
+
+    const row = optionRow(html, "Focus on this document");
+    expect(row).toContain("disabled");
+    expect(row).toContain("Not available for documents kept out of Git");
+    expect(optionRow(html, "This project")).toContain('aria-selected="true"');
+  });
 });

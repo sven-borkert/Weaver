@@ -48,6 +48,14 @@ export const documentIdInput = z.object({
   documentId: z.uuid(),
 });
 
+/** The revision is required for documents kept out of Git, which have no history to recover from. */
+export const deleteDocumentInput = documentIdInput.extend({
+  expectedHeadCommitSha: z
+    .string()
+    .regex(/^[0-9a-f]{40}$/)
+    .optional(),
+});
+
 export const generateDocumentContentInput = documentIdInput.extend({
   instruction: z
     .string()

@@ -318,6 +318,16 @@ export function parseDocumentBody(markdown: string): JSONContent {
   return liftInlineImages(withItemParagraphs(getManager().parse(markdown)));
 }
 
+/** The top-level blocks `parseDocumentBody` reads, with the source text of each. */
+export function markdownBlocks(
+  markdown: string,
+): { type: string; raw: string }[] {
+  const { instance } = getManager();
+  return new instance.Lexer(instance.defaults)
+    .lex(markdown)
+    .map(({ type, raw }) => ({ type, raw }));
+}
+
 export function serializeDocumentBody(json: JSONContent): string {
   const markdown = getManager().serialize(
     withTagSpacing(withInlineCodeFences(flattenTableCells(json, isInlineType))),

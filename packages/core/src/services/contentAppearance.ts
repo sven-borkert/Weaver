@@ -263,95 +263,105 @@ export async function setContentAppearance(
     );
   }
   let changed = false;
-  const result = await withProjectRepo(target.projectId, async (repo) => {
-    await assertProjectRole(db, target.projectId, actor, "Editor");
-    const patch = assertAppearancePatch(input.patch);
-    const head = await repo.resolveHead();
-    const current = await load(db, repo, target, head);
-    if (input.expectedRevision !== current.revision)
-      throw new CoreError(
-        "CONFLICT",
-        "The content changed. Reload and try again.",
-        { headCommitSha: current.revision },
-      );
-    if (image) patch.icon = imageIconFromBytes(image.bytes);
-    if (
-      patch.icon?.type === "image" &&
-      !image &&
-      !(await readAppearanceAssetInRepo(repo, patch.icon, current.revision))
-    )
-      throw new CoreError(
-        "BAD_REQUEST",
-        "The selected icon is unavailable at this revision",
-        { field: "icon" },
-      );
-    const appearance = applyAppearancePatch(current.appearance, patch);
-    const file = current.compose(appearance);
-    const assetPath =
-      image && patch.icon?.type === "image" ? iconAssetPath(patch.icon) : null;
-    const assetExists = assetPath
-      ? (await repo.blobShaAt(head, assetPath)) !== null
-      : false;
-    if (
-      assetExists &&
-      patch.icon?.type === "image" &&
-      !(await readAppearanceAssetInRepo(repo, patch.icon, head))
-    )
-      throw new CoreError("BAD_REQUEST", "The existing icon asset is invalid", {
-        field: "icon",
-      });
-    if (
-      JSON.stringify(appearance) === JSON.stringify(current.appearance) &&
-      (!assetPath || assetExists)
-    )
-      return { headCommitSha: head, revision: current.revision };
-    try {
-      if (assetPath && !assetExists)
-        await repo.writeBinaryFileAtomic(assetPath, image!.bytes);
-      await repo.writeFileAtomic(current.path, file);
-      const sha = await repo.commitAll(
-        `appearance: ${current.path}`,
-        author(actor),
-      );
-      changed = true;
-      if (target.kind === "document") {
-        try {
-          await repairDocumentProjectionInRepo(
+  const result = await withProjectRepo(
+    target.projectId,
+    async (repo) => {
+      const patch = assertAppearancePatch(input.patch);
+      const head = await repo.resolveHead();
+      const current = await load(db, repo, target, head);
+      if (input.expectedRevision !== current.revision)
+        throw new CoreError(
+          "CONFLICT",
+          "The content changed. Reload and try again.",
+          { headCommitSha: current.revision },
+        );
+      if (image) patch.icon = imageIconFromBytes(image.bytes);
+      if (
+        patch.icon?.type === "image" &&
+        !image &&
+        !(await readAppearanceAssetInRepo(repo, patch.icon, current.revision))
+      )
+        throw new CoreError(
+          "BAD_REQUEST",
+          "The selected icon is unavailable at this revision",
+          { field: "icon" },
+        );
+      const appearance = applyAppearancePatch(current.appearance, patch);
+      const file = current.compose(appearance);
+      const assetPath =
+        image && patch.icon?.type === "image"
+          ? iconAssetPath(patch.icon)
+          : null;
+      const assetExists = assetPath
+        ? (await repo.blobShaAt(head, assetPath)) !== null
+        : false;
+      if (
+        assetExists &&
+        patch.icon?.type === "image" &&
+        !(await readAppearanceAssetInRepo(repo, patch.icon, head))
+      )
+        throw new CoreError(
+          "BAD_REQUEST",
+          "The existing icon asset is invalid",
+          {
+            field: "icon",
+          },
+        );
+      if (
+        JSON.stringify(appearance) === JSON.stringify(current.appearance) &&
+        (!assetPath || assetExists)
+      )
+        return { headCommitSha: head, revision: current.revision };
+      try {
+        if (assetPath && !assetExists)
+          await repo.writeBinaryFileAtomic(assetPath, image!.bytes);
+        await repo.writeFileAtomic(current.path, file);
+        const sha = await repo.commitAll(
+          `appearance: ${current.path}`,
+          author(actor),
+        );
+        changed = true;
+        if (target.kind === "document") {
+          try {
+            await repairDocumentProjectionInRepo(
+              db,
+              repo,
+              target.projectId,
+              target.id,
+              current.path,
+            );
+          } catch (error) {
+            await reportProjectionFailureAndReconcile({
+              projectId: target.projectId,
+              documentId: target.id,
+              headCommitSha: sha,
+              error,
+            });
+          }
+        } else if (target.kind === "table")
+          await repairTableProjectionInRepo(
             db,
             repo,
             target.projectId,
             target.id,
-            current.path,
           );
-        } catch (error) {
-          await reportProjectionFailureAndReconcile({
-            projectId: target.projectId,
-            documentId: target.id,
-            headCommitSha: sha,
-            error,
-          });
-        }
-      } else if (target.kind === "table")
-        await repairTableProjectionInRepo(
-          db,
-          repo,
-          target.projectId,
-          target.id,
-        );
-      const committed = await load(db, repo, target, sha);
-      return { headCommitSha: sha, revision: committed.revision };
-    } catch (error) {
-      // A committed mutation remains Git truth even if projection repair fails.
-      if ((await repo.resolveHead()) !== head) throw error;
-      if (current.original !== null)
-        await repo.writeFileAtomic(current.path, current.original);
-      await repo.resetWorktreeTo(head);
-      if (current.original === null)
-        await repo.removeUntrackedFile(current.path);
-      if (assetPath && !assetExists) await repo.removeUntrackedFile(assetPath);
-      throw error;
-    }
-  });
+        const committed = await load(db, repo, target, sha);
+        return { headCommitSha: sha, revision: committed.revision };
+      } catch (error) {
+        // A committed mutation remains Git truth even if projection repair fails.
+        if ((await repo.resolveHead()) !== head) throw error;
+        if (current.original !== null)
+          await repo.writeFileAtomic(current.path, current.original);
+        await repo.resetWorktreeTo(head);
+        if (current.original === null)
+          await repo.removeUntrackedFile(current.path);
+        if (assetPath && !assetExists)
+          await repo.removeUntrackedFile(assetPath);
+        throw error;
+      }
+    },
+    { db, actor, min: "Editor" },
+  );
   if (changed) void notifyProjectContentChanged(db, target.projectId);
   return result;
 }

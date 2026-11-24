@@ -7,6 +7,7 @@ import {
   composeDocumentFile,
   parseDocumentFile,
 } from "@weaver/core/documents/frontmatter";
+import { composeFolderMetadata } from "@weaver/core/documents/folderMetadata";
 import {
   assertSafeSegments,
   docPath,
@@ -42,10 +43,17 @@ import {
   tableSlugWithSuffix,
 } from "@weaver/core/tables/paths";
 import { documentSlugFromPath } from "./documents";
+import { listScopeDirsAt, readFolderMetadataAt } from "./folders";
 import {
   composeProjectMetadataFor,
   PROJECT_METADATA_PATH,
 } from "./projectMetadata";
+import {
+  lockUntracked,
+  moveUntrackedPrefix,
+  reslugUntrackedDocument,
+  untrackedSlugTaken,
+} from "./untrackedDocuments";
 
 export function hasCaseCollidingPaths(paths: Iterable<string>): boolean {
   const seen = new Map<string, string>();
@@ -229,6 +237,7 @@ async function nextFreeDocumentPath(
       select: { id: true },
     });
     if (row) continue;
+    if (await untrackedSlugTaken(db, projectId, slug)) continue;
     return { slug, path };
   }
   throw new Error("no available document slug");
@@ -654,6 +663,273 @@ async function prepareLocalContent(
   return { preparedHead, baseHead: preparedHead, reslugged, keepLocal };
 }
 
+function parentDir(dir: string): string {
+  return dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+}
+
+/** A sibling of `dir` that neither tree nor the untracked store uses yet. */
+function freeSiblingDir(dir: string, taken: (candidate: string) => boolean) {
+  const parent = parentDir(dir);
+  const base = dir.slice(parent ? parent.length + 1 : 0);
+  for (let i = 2; i < 1000; i++) {
+    const suffix = `-${i}`;
+    const name = `${base.slice(0, 80 - suffix.length).replace(/-+$/g, "")}${suffix}`;
+    const candidate = parent ? `${parent}/${name}` : name;
+    if (!taken(candidate)) return candidate;
+  }
+  throw new Error("no available folder path");
+}
+
+/** Moves every untracked folder that pulled Git content now occupies to a
+ * free sibling path, with everything below it. Remote content wins the path
+ * as for tracked content (R1), and the folder stays out of Git: dropping its
+ * row instead would turn it into a Git folder whose next documents are
+ * committed and pushed. Its display name is kept, like a re-slugged
+ * document's title. */
+async function moveUntrackedFoldersOffPulledContent(
+  db: PrismaClient | Prisma.TransactionClient,
+  projectId: string,
+  mergedFiles: readonly string[],
+  mergedDirs: ReadonlySet<string>,
+): Promise<void> {
+  const folders = (
+    await db.untrackedFolder.findMany({
+      where: { projectId },
+      select: { path: true },
+      orderBy: { path: "asc" },
+    })
+  ).map((folder) => folder.path);
+  if (!folders.some((folder) => mergedDirs.has(folder))) return;
+  const documents = (
+    await db.untrackedDocument.findMany({
+      where: { projectId },
+      select: { path: true },
+    })
+  ).map((document) => document.path);
+  const folderPaths = new Set(folders);
+  const files = [...mergedFiles, ...documents];
+  const taken = (candidate: string) =>
+    mergedDirs.has(candidate) ||
+    folderPaths.has(candidate) ||
+    files.some(
+      (file) =>
+        file === candidate ||
+        file.startsWith(`${candidate}/`) ||
+        file.startsWith(`${candidate}.`),
+    );
+  const moved: string[] = [];
+  // Ascending order visits a folder before its subfolders, which move with it.
+  for (const folder of folders) {
+    if (!mergedDirs.has(folder)) continue;
+    if (moved.some((parent) => folder.startsWith(`${parent}/`))) continue;
+    const target = freeSiblingDir(folder, taken);
+    await db.untrackedFolder.update({
+      where: { projectId_path: { projectId, path: folder } },
+      data: { path: target },
+    });
+    await moveUntrackedPrefix(db, projectId, folder, target);
+    folderPaths.add(target);
+    moved.push(folder);
+  }
+}
+
+/** Untracked rows hang below tracked folders by path alone. For each
+ * tracked folder that holds untracked content and is gone from the pulled
+ * tree, the content follows the folder's id (kept in `.folder.json`) to its
+ * new path. A folder the remote deleted, or one without an id, is kept as a
+ * folder outside Git at its resolved path: the untracked content was never
+ * shared, so it stays reachable instead of hanging below a folder that no
+ * longer exists, and nothing is committed back over the remote's delete. */
+async function carryUntrackedContentAlong(
+  db: PrismaClient | Prisma.TransactionClient,
+  repo: ProjectRepoWriter,
+  projectId: string,
+  localHead: string,
+  mergedSha: string,
+  mergedDirs: ReadonlySet<string>,
+): Promise<void> {
+  const [folders, documents] = await Promise.all([
+    db.untrackedFolder.findMany({
+      where: { projectId },
+      select: { path: true },
+    }),
+    db.untrackedDocument.findMany({
+      where: { projectId },
+      select: { path: true },
+    }),
+  ]);
+  const untrackedFolders = new Set(folders.map((folder) => folder.path));
+  const anchors = new Set<string>();
+  for (const container of [
+    ...folders.map((folder) => folder.path),
+    ...documents.map((document) => parentDir(document.path)),
+  ]) {
+    // The deepest tracked folder above the content; untracked folders move with it.
+    let anchor = container;
+    while (anchor && untrackedFolders.has(anchor)) anchor = parentDir(anchor);
+    if (anchor && !mergedDirs.has(anchor)) anchors.add(anchor);
+  }
+  if (anchors.size === 0) return;
+
+  const chain = new Set<string>();
+  for (const anchor of anchors)
+    for (let dir = anchor; dir; dir = parentDir(dir)) chain.add(dir);
+  const localMetadata = await readFolderMetadataAt(
+    repo,
+    "documents",
+    localHead,
+    [...chain],
+  );
+  const mergedMetadata = await readFolderMetadataAt(
+    repo,
+    "documents",
+    mergedSha,
+    await listScopeDirsAt(repo, "documents", mergedSha),
+  );
+  const pulledById = new Map<string, string>();
+  for (const [dir, meta] of Object.entries(mergedMetadata))
+    if (meta.id && !pulledById.has(meta.id)) pulledById.set(meta.id, dir);
+
+  const resolved = new Map<string, string>();
+  const keptOutside = new Map<string, string>();
+  const resolve = (dir: string): string => {
+    if (!dir || mergedDirs.has(dir)) return dir;
+    const known = resolved.get(dir);
+    if (known !== undefined) return known;
+    const id = localMetadata[dir]?.id;
+    let target = id ? pulledById.get(id) : undefined;
+    if (target === undefined) {
+      const parent = resolve(parentDir(dir));
+      const name = dir.slice(dir.lastIndexOf("/") + 1);
+      target = parent ? `${parent}/${name}` : name;
+      if (!mergedDirs.has(target)) keptOutside.set(target, dir);
+    }
+    resolved.set(dir, target);
+    return target;
+  };
+  // Deepest first: a subfolder the remote moved elsewhere must not travel
+  // with its parent's prefix.
+  const ordered = [...anchors].sort(
+    (a, b) => b.split("/").length - a.split("/").length,
+  );
+  for (const anchor of ordered) {
+    const target = resolve(anchor);
+    if (target !== anchor)
+      await moveUntrackedPrefix(db, projectId, anchor, target);
+  }
+  const created = [...keptOutside].sort(
+    ([a], [b]) => a.split("/").length - b.split("/").length,
+  );
+  for (const [path, source] of created) {
+    const metadata = composeFolderMetadata(
+      localMetadata[source] ?? {
+        name: path.slice(path.lastIndexOf("/") + 1),
+        created: null,
+        createdBy: null,
+        updated: null,
+        updatedBy: null,
+      },
+    );
+    await db.untrackedFolder.upsert({
+      where: { projectId_path: { projectId, path } },
+      create: { projectId, path, metadata },
+      update: {},
+    });
+  }
+}
+
+/** Slugs are unique across both stores, and a pulled document cannot be
+ * renamed without diverging from the remote, so an untracked document whose
+ * slug pulled content now holds moves to a free slug with its images. */
+async function reslugUntrackedDocumentsOffPulledSlugs(
+  db: PrismaClient | Prisma.TransactionClient,
+  projectId: string,
+  mergedFiles: readonly string[],
+): Promise<void> {
+  const documents = await db.untrackedDocument.findMany({
+    where: { projectId },
+    select: { id: true, path: true, slug: true, kind: true, title: true },
+    orderBy: { path: "asc" },
+  });
+  const trackedSlugs = collectDocumentSlugs(mergedFiles);
+  const colliding = documents.filter((document) =>
+    trackedSlugs.has(document.slug),
+  );
+  if (colliding.length === 0) return;
+  const files = await db.untrackedFile.findMany({
+    where: { projectId },
+    select: { path: true },
+  });
+  const taken = new Set([
+    ...mergedFiles,
+    ...documents.map((document) => document.path),
+    ...files.map((file) => file.path),
+  ]);
+  const takenDirs = collectDirPrefixes(taken);
+  const takenSlugs = new Set([
+    ...trackedSlugs,
+    ...documents.map((document) => document.slug),
+  ]);
+  for (const document of colliding) {
+    const { slug, path } = await nextFreeDocumentPath(
+      db,
+      projectId,
+      document.title,
+      folderPathOfDocPath(document.path),
+      document.kind,
+      taken,
+      takenDirs,
+      takenSlugs,
+    );
+    await reslugUntrackedDocument(db, projectId, document.id, slug);
+    taken.add(path);
+    takenSlugs.add(slug);
+    takenDirs.add(assetsDirForDocPath(path));
+  }
+}
+
+/**
+ * Brings content kept out of Git in line with the tree a pull is about to
+ * publish (`mergedSha`, not yet HEAD), so a failure leaves both unchanged.
+ * Runs in the caller's transaction; the untracked write lock held from here
+ * to its commit keeps untracked writes from validating against the old tree
+ * and writing old paths back.
+ */
+async function followPulledTree(
+  db: PrismaClient | Prisma.TransactionClient,
+  repo: ProjectRepoWriter,
+  projectId: string,
+  localHead: string,
+  mergedSha: string,
+): Promise<void> {
+  await lockUntracked(db, projectId);
+  const mergedFiles = await repo.listTrackedFiles(mergedSha);
+  const mergedDirs = collectDirPrefixes(mergedFiles);
+  // Before the carry-along too: content carried onto a pulled folder path
+  // must not be swept aside with an untracked folder that held that path.
+  await moveUntrackedFoldersOffPulledContent(
+    db,
+    projectId,
+    mergedFiles,
+    mergedDirs,
+  );
+  await carryUntrackedContentAlong(
+    db,
+    repo,
+    projectId,
+    localHead,
+    mergedSha,
+    mergedDirs,
+  );
+  await moveUntrackedFoldersOffPulledContent(
+    db,
+    projectId,
+    mergedFiles,
+    mergedDirs,
+  );
+  await reslugUntrackedDocumentsOffPulledSlugs(db, projectId, mergedFiles);
+}
+
 /**
  * Merges a fetched remote branch (already fetched into the local repository
  * by `fetchLocalRef`) into the project repository. Remote content wins the
@@ -683,6 +959,17 @@ export async function mergeFetchedBranch(
     preparedParent?: string,
   ) => {
     const sha = await repo.createTreeCommit(message, input.author, parents);
+    await repo.publishTreeCommit(sha, localHead, preparedParent);
+    return sha;
+  };
+  /** Publishes a tree that took remote content, after untracked content followed it. */
+  const publishPulled = async (
+    message: string,
+    parents: string[],
+    preparedParent?: string,
+  ) => {
+    const sha = await repo.createTreeCommit(message, input.author, parents);
+    await followPulledTree(db, repo, input.projectId, localHead, sha);
     await repo.publishTreeCommit(sha, localHead, preparedParent);
     return sha;
   };
@@ -754,7 +1041,9 @@ export async function mergeFetchedBranch(
       // any kind, even for local-only content the remote later deleted.
       await repo.resetWorktreeTo(PULL_REF);
       await writeMetadata(db, repo, input.projectId);
-      const sha = await publish(`pull: ${input.branch}`, [input.remoteHead]);
+      const sha = await publishPulled(`pull: ${input.branch}`, [
+        input.remoteHead,
+      ]);
       return {
         mergedSha: sha,
         remoteHead: input.remoteHead,
@@ -818,7 +1107,7 @@ export async function mergeFetchedBranch(
       await repo.checkoutPathsFrom(prepared.baseHead, restorePaths);
     }
     await writeMetadata(db, repo, input.projectId);
-    const sha = await publish(
+    const sha = await publishPulled(
       `pull: merge ${input.branch}`,
       [input.remoteHead, prepared.baseHead],
       prepared.preparedHead ?? undefined,

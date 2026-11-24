@@ -1503,32 +1503,34 @@ export async function createTable(
   ];
   const rows = input.rows ?? [];
   assertInputByteBudget(input.title, columns, rows);
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    return withAppearanceAssetsInRepo(
-      repo,
-      input.appearance ? [input.appearance] : [],
-      input.iconAssets ?? [],
-      (writer) =>
-        writeTableInRepo(
-          db,
-          writer,
-          input.projectId,
-          {
-            kind: "create",
-            id: randomUUID(),
-            folderPath: input.folderPath,
-            title: input.title,
-            columns,
-            rows,
-            createdAt: new Date().toISOString(),
-            ...(input.appearance ? { appearance: input.appearance } : {}),
-          },
-          actor,
-          { operation: "create" },
-        ),
-    );
-  });
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      withAppearanceAssetsInRepo(
+        repo,
+        input.appearance ? [input.appearance] : [],
+        input.iconAssets ?? [],
+        (writer) =>
+          writeTableInRepo(
+            db,
+            writer,
+            input.projectId,
+            {
+              kind: "create",
+              id: randomUUID(),
+              folderPath: input.folderPath,
+              title: input.title,
+              columns,
+              rows,
+              createdAt: new Date().toISOString(),
+              ...(input.appearance ? { appearance: input.appearance } : {}),
+            },
+            actor,
+            { operation: "create" },
+          ),
+      ),
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
 }
@@ -1709,22 +1711,25 @@ export async function saveTable(
 ): Promise<TableWriteResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
   assertInputByteBudget(input.title ?? "", input.columns, input.rows);
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    writeTableInRepo(
-      db,
-      repo,
-      input.projectId,
-      {
-        kind: "update",
-        tableId: input.tableId,
-        baseCommitSha: input.baseCommitSha,
-        title: input.title,
-        columns: input.columns,
-        rows: input.rows,
-      },
-      actor,
-      { operation: "update" },
-    ),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      writeTableInRepo(
+        db,
+        repo,
+        input.projectId,
+        {
+          kind: "update",
+          tableId: input.tableId,
+          baseCommitSha: input.baseCommitSha,
+          title: input.title,
+          columns: input.columns,
+          rows: input.rows,
+        },
+        actor,
+        { operation: "update" },
+      ),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
@@ -1933,8 +1938,10 @@ export async function moveTable(
   actor: EnrichedActor,
 ): Promise<TableWriteResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    moveTableInRepo(db, repo, input, actor),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) => moveTableInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
@@ -2016,8 +2023,10 @@ export async function deleteTable(
   actor: EnrichedActor,
 ): Promise<void> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  await withProjectRepo(input.projectId, (repo) =>
-    deleteTableInRepo(db, repo, input, actor),
+  await withProjectRepo(
+    input.projectId,
+    (repo) => deleteTableInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
 }
@@ -2508,8 +2517,10 @@ export async function restoreTable(
   actor: EnrichedActor,
 ): Promise<TableWriteResult> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    restoreTableInRepo(db, repo, input, actor),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) => restoreTableInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return result;

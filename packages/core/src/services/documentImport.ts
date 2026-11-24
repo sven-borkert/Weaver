@@ -1,4 +1,5 @@
 import { stageFolderInRepo } from "./folders";
+import { iconAssetPath } from "../appearance/icons";
 import { normalizeAppearance, type Appearance } from "../appearance/metadata";
 import {
   parseFolderMetadata,
@@ -56,6 +57,13 @@ import {
 import { assertProjectRole } from "./projectAccess";
 import { notifyProjectContentChanged } from "./projectGitRemoteJobs";
 import { withProjectRepo } from "./projectRepo";
+import {
+  createUntrackedDocument,
+  ensureUntrackedFolders,
+  findUntrackedDocument,
+  isUntrackedFolderPath,
+  saveUntrackedDocument,
+} from "./untrackedDocuments";
 
 export async function importDocumentFile(
   db: PrismaClient,
@@ -259,23 +267,29 @@ function normalizedFolders(
   return result;
 }
 
-async function ensureFolders(
-  repo: ProjectRepoWriter,
+type ArchiveFolder = {
+  segments: string[];
+  name: string;
+  appearance?: Appearance;
+};
+
+/** The folders an archive entry may create, shallowest first, named and styled as in the archive. */
+function requestedFolders(
   input: Pick<
     ArchiveImportInput,
     "folderPath" | "folderNames" | "folderMetadata"
   >,
-  actor: EnrichedActor,
-): Promise<void> {
+): ArchiveFolder[] {
   const requested = new Set([
     input.folderPath.join("/"),
     ...Object.keys(input.folderMetadata ?? {}),
   ]);
+  const folders = new Map<string, ArchiveFolder>();
   for (const requestedPath of requested) {
     const segments = requestedPath ? requestedPath.split("/") : [];
     for (let depth = 1; depth <= segments.length; depth++) {
       const rel = segments.slice(0, depth).join("/");
-      if (await repo.fileExistsInWorktree(rel)) continue;
+      if (folders.has(rel)) continue;
       const segment = segments[depth - 1]!;
       const source = input.folderMetadata?.[rel];
       const wanted = input.folderNames[rel]?.trim();
@@ -283,18 +297,77 @@ async function ensureFolders(
         source?.name ??
         (wanted && slugify(wanted) === segment ? wanted : segment);
       const appearance = normalizeAppearance(source?.appearance);
-      await stageFolderInRepo(
-        repo,
-        {
-          segments: segments.slice(0, depth),
-          name,
-          ...(appearance ? { appearance } : {}),
-        },
-        actor,
-        "documents",
-      );
+      folders.set(rel, {
+        segments: segments.slice(0, depth),
+        name,
+        ...(appearance ? { appearance } : {}),
+      });
     }
   }
+  return [...folders.values()].sort(
+    (a, b) => a.segments.length - b.segments.length,
+  );
+}
+
+async function ensureFolders(
+  db: PrismaClient,
+  repo: ProjectRepoWriter,
+  projectId: string,
+  folders: ArchiveFolder[],
+  actor: EnrichedActor,
+): Promise<void> {
+  for (const folder of folders) {
+    if (await repo.fileExistsInWorktree(folder.segments.join("/"))) continue;
+    await stageFolderInRepo(db, repo, projectId, folder, actor, "documents");
+  }
+}
+
+/** The supplied icons the appearances use, as files of the untracked store. */
+function untrackedIcons(
+  appearances: Appearance[],
+  assets: AppearanceAsset[],
+): Array<{ path: string; bytes: Uint8Array }> {
+  const used = new Set(
+    appearances.flatMap(({ icon }) =>
+      icon?.type === "image" ? [iconAssetPath(icon)] : [],
+    ),
+  );
+  return assets.flatMap((asset) => {
+    const path = iconAssetPath({
+      type: "image",
+      digest: asset.digest,
+      extension: asset.extension,
+    });
+    return used.has(path) ? [{ path, bytes: asset.bytes }] : [];
+  });
+}
+
+/** Below a folder kept out of Git, imported folders stay out of Git too. */
+async function ensureUntrackedArchiveFolders(
+  db: PrismaClient,
+  projectId: string,
+  folders: ArchiveFolder[],
+  appearances: Appearance[],
+  assets: AppearanceAsset[],
+  actor: EnrichedActor,
+): Promise<void> {
+  await ensureUntrackedFolders(
+    db,
+    {
+      projectId,
+      folders,
+      icons: untrackedIcons(
+        [
+          ...appearances,
+          ...folders.flatMap((folder) =>
+            folder.appearance ? [folder.appearance] : [],
+          ),
+        ],
+        assets,
+      ),
+    },
+    actor,
+  );
 }
 
 export async function importArchiveFolders(
@@ -326,23 +399,46 @@ export async function importArchiveFolders(
     throw new CoreError("BAD_REQUEST", "Unreferenced icon asset");
   assertSafeSegments(input.folderPath);
   assertOutsideTablesRoot(input.folderPath);
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    const fresh = Object.entries(folderMetadata);
-    const wanted: Appearance[] = [];
-    for (const [path, meta] of fresh)
-      if (!(await repo.fileExistsInWorktree(path)) && meta.appearance)
-        wanted.push(meta.appearance);
-    return withAppearanceAssetsInRepo(repo, wanted, assets, async (writer) => {
-      await ensureFolders(writer, { ...input, folderMetadata }, actor);
-      const headCommitSha = await writer.commitAll("create: imported folders", {
-        name: actor.name ?? null,
-        email: actor.email,
-        userId: actor.userId,
-      });
-      return { folders: Object.keys(folderMetadata), headCommitSha };
-    });
-  });
+  const folders = requestedFolders({ ...input, folderMetadata });
+  if (await isUntrackedFolderPath(db, input.projectId, input.folderPath)) {
+    await ensureUntrackedArchiveFolders(
+      db,
+      input.projectId,
+      folders,
+      [],
+      assets,
+      actor,
+    );
+    return { folders: Object.keys(folderMetadata), headCommitSha: null };
+  }
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const fresh = Object.entries(folderMetadata);
+      const wanted: Appearance[] = [];
+      for (const [path, meta] of fresh)
+        if (!(await repo.fileExistsInWorktree(path)) && meta.appearance)
+          wanted.push(meta.appearance);
+      return withAppearanceAssetsInRepo(
+        repo,
+        wanted,
+        assets,
+        async (writer) => {
+          await ensureFolders(db, writer, input.projectId, folders, actor);
+          const headCommitSha = await writer.commitAll(
+            "create: imported folders",
+            {
+              name: actor.name ?? null,
+              email: actor.email,
+              userId: actor.userId,
+            },
+          );
+          return { folders: Object.keys(folderMetadata), headCommitSha };
+        },
+      );
+    },
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
 }
@@ -429,115 +525,204 @@ export async function importDocumentArchiveEntry(
     ? source.properties
     : importedProperties(input.text);
   validateAppearanceAssets(input.iconAssets ?? []);
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    const appearances: Appearance[] =
-      target.mode === "create" && appearance ? [appearance] : [];
-    if (target.mode === "create")
-      for (const [path, meta] of Object.entries(folderMetadata))
-        if (!(await repo.fileExistsInWorktree(path)) && meta.appearance)
-          appearances.push(meta.appearance);
-    return withAppearanceAssetsInRepo(
-      repo,
-      appearances,
-      input.iconAssets ?? [],
-      async (repo) => {
-        if (target.mode === "replace") {
-          const row = await db.document.findFirst({
-            where: { id: target.documentId, projectId: input.projectId },
-          });
-          const baseCommitSha = row && (await repo.lastCommitForPath(row.path));
-          if (!row || !baseCommitSha) throw new CoreError("NOT_FOUND");
-          if (target.expectedHeadCommitSha !== baseCommitSha)
-            throw new CoreError(
-              "CONFLICT",
-              "The document changed after preview. Preview the import again.",
-            );
-          if (row.kind !== input.kind)
-            throw new CoreError(
-              "BAD_REQUEST",
-              "the existing document is a different kind of file",
-              { field: "targetDocumentId" },
-            );
-          const update = {
-            kind: "update" as const,
-            documentId: row.id,
-            baseCommitSha,
-            title,
-            changeSummary: `replaced by import of ${input.fileName}`,
-            ...(properties && { propertiesInput: properties }),
-          };
-          if (source)
+  const folders = requestedFolders({ ...input, folderMetadata });
+  const untracked =
+    target.mode === "replace"
+      ? await findUntrackedDocument(db, input.projectId, target.documentId)
+      : null;
+  if (untracked && target.mode === "replace") {
+    // A document kept out of Git is replaced in its own store; nothing is committed.
+    if (untracked.kind !== input.kind)
+      throw new CoreError(
+        "BAD_REQUEST",
+        "the existing document is a different kind of file",
+        { field: "targetDocumentId" },
+      );
+    const update = {
+      projectId: input.projectId,
+      documentId: untracked.id,
+      baseCommitSha: target.expectedHeadCommitSha,
+      title,
+      ...(properties && { properties }),
+    };
+    if (source)
+      return saveUntrackedDocument(
+        db,
+        { ...update, content: { kind: "python", text: source.body } },
+        actor,
+      );
+    const built = await build(untracked.slug);
+    return saveUntrackedDocument(
+      db,
+      {
+        ...update,
+        content: { kind: "markdown", contentJson: built.contentJson },
+        assets: built.assets,
+      },
+      actor,
+    );
+  }
+  if (
+    target.mode === "create" &&
+    (await isUntrackedFolderPath(db, input.projectId, input.folderPath))
+  ) {
+    // Like a single file dropped there, the entry stays out of Git.
+    const create = {
+      projectId: input.projectId,
+      folderPath: input.folderPath,
+      title,
+      ...(appearance && { appearance }),
+      ...(properties && { properties }),
+    };
+    const ensure = () =>
+      ensureUntrackedArchiveFolders(
+        db,
+        input.projectId,
+        folders,
+        appearance ? [appearance] : [],
+        input.iconAssets ?? [],
+        actor,
+      );
+    if (source) {
+      await ensure();
+      return createUntrackedDocument(
+        db,
+        {
+          ...create,
+          content: { kind: "python", text: source.body },
+          reviewSource: { kind: "import", imported: source.review },
+        },
+        actor,
+      );
+    }
+    const assetsFromSlug = slugify(title);
+    const built = await build(assetsFromSlug);
+    await ensure();
+    return createUntrackedDocument(
+      db,
+      {
+        ...create,
+        content: { kind: "markdown", contentJson: built.contentJson },
+        reviewSource: { kind: "import", imported: importedReview(input.text) },
+        assets: built.assets,
+        assetsFromSlug,
+      },
+      actor,
+    );
+  }
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const appearances: Appearance[] =
+        target.mode === "create" && appearance ? [appearance] : [];
+      if (target.mode === "create")
+        for (const [path, meta] of Object.entries(folderMetadata))
+          if (!(await repo.fileExistsInWorktree(path)) && meta.appearance)
+            appearances.push(meta.appearance);
+      return withAppearanceAssetsInRepo(
+        repo,
+        appearances,
+        input.iconAssets ?? [],
+        async (repo) => {
+          if (target.mode === "replace") {
+            const row = await db.document.findFirst({
+              where: { id: target.documentId, projectId: input.projectId },
+            });
+            const baseCommitSha =
+              row && (await repo.lastCommitForPath(row.path));
+            if (!row || !baseCommitSha) throw new CoreError("NOT_FOUND");
+            if (target.expectedHeadCommitSha !== baseCommitSha)
+              throw new CoreError(
+                "CONFLICT",
+                "The document changed after preview. Preview the import again.",
+              );
+            if (row.kind !== input.kind)
+              throw new CoreError(
+                "BAD_REQUEST",
+                "the existing document is a different kind of file",
+                { field: "targetDocumentId" },
+              );
+            const update = {
+              kind: "update" as const,
+              documentId: row.id,
+              baseCommitSha,
+              title,
+              changeSummary: `replaced by import of ${input.fileName}`,
+              ...(properties && { propertiesInput: properties }),
+            };
+            if (source)
+              return writeDocumentInRepo(
+                db,
+                repo,
+                input.projectId,
+                { ...update, content: { kind: "python", text: source.body } },
+                actor,
+                { operation: "update" },
+              );
+            const built = await build(row.slug);
+            await removeStaleAssets(repo, row, built);
             return writeDocumentInRepo(
               db,
               repo,
               input.projectId,
-              { ...update, content: { kind: "python", text: source.body } },
+              {
+                ...update,
+                content: { kind: "markdown", contentJson: built.contentJson },
+                assets: built.assets,
+              },
               actor,
               { operation: "update" },
             );
-          const built = await build(row.slug);
-          await removeStaleAssets(repo, row, built);
-          return writeDocumentInRepo(
-            db,
-            repo,
-            input.projectId,
-            {
-              ...update,
-              content: { kind: "markdown", contentJson: built.contentJson },
-              assets: built.assets,
-            },
-            actor,
-            { operation: "update" },
-          );
-        }
-        const create = {
-          kind: "create" as const,
-          id: randomUUID(),
-          folderPath: input.folderPath,
-          title,
-          createdAt: new Date().toISOString(),
-          appearance,
-          ...(properties && { propertiesInput: properties }),
-        };
-        if (source) {
-          await ensureFolders(repo, { ...input, folderMetadata }, actor);
+          }
+          const create = {
+            kind: "create" as const,
+            id: randomUUID(),
+            folderPath: input.folderPath,
+            title,
+            createdAt: new Date().toISOString(),
+            appearance,
+            ...(properties && { propertiesInput: properties }),
+          };
+          if (source) {
+            await ensureFolders(db, repo, input.projectId, folders, actor);
+            return writeDocumentInRepo(
+              db,
+              repo,
+              input.projectId,
+              {
+                ...create,
+                content: { kind: "python", text: source.body },
+                reviewSource: { kind: "import", imported: source.review },
+              },
+              actor,
+              { operation: "create" },
+            );
+          }
+          const assetsFromSlug = slugify(title);
+          const built = await build(assetsFromSlug);
+          await ensureFolders(db, repo, input.projectId, folders, actor);
           return writeDocumentInRepo(
             db,
             repo,
             input.projectId,
             {
               ...create,
-              content: { kind: "python", text: source.body },
-              reviewSource: { kind: "import", imported: source.review },
+              content: { kind: "markdown", contentJson: built.contentJson },
+              reviewSource: {
+                kind: "import",
+                imported: importedReview(input.text),
+              },
+              assets: built.assets,
+              assetsFromSlug,
             },
             actor,
             { operation: "create" },
           );
-        }
-        const assetsFromSlug = slugify(title);
-        const built = await build(assetsFromSlug);
-        await ensureFolders(repo, { ...input, folderMetadata }, actor);
-        return writeDocumentInRepo(
-          db,
-          repo,
-          input.projectId,
-          {
-            ...create,
-            content: { kind: "markdown", contentJson: built.contentJson },
-            reviewSource: {
-              kind: "import",
-              imported: importedReview(input.text),
-            },
-            assets: built.assets,
-            assetsFromSlug,
-          },
-          actor,
-          { operation: "create" },
-        );
-      },
-    );
-  });
+        },
+      );
+    },
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
 }

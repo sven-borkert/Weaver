@@ -22,6 +22,10 @@ export type ExplorerItem = {
   lastEditedBy: ExplorerEditor;
   machineEditor?: ExplorerMachineEditor;
   appearance?: Appearance | null;
+  /** Kept out of Git; deleting it is permanent. */
+  untracked?: boolean;
+  /** The listed revision, which a delete outside Git must match. */
+  headCommitSha?: string;
 };
 
 /** Create/update stamps of a folder; null where its metadata does not record them. */

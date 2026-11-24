@@ -71,7 +71,9 @@ function generationError(cause: unknown): string {
       ? "Editing access is no longer available for this document."
       : data?.field === "instruction"
         ? "Use a shorter message for the configured assistant model."
-        : "The assistant could not answer. Try again.";
+        : data?.field === "selection"
+          ? "The selected text is too large to send to the assistant. Select less text or use a shorter message."
+          : "The assistant could not answer. Try again.";
 }
 
 function canInsert(schema: Schema, markdown: string): boolean {

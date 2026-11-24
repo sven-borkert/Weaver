@@ -40,67 +40,73 @@ export async function setDocumentProperties(
   if (await isUntrackedDocument(db, input.projectId, input.documentId))
     return setUntrackedDocumentProperties(db, input, actor);
   let changed = false;
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    const row = await db.document.findFirst({
-      where: { id: input.documentId, projectId: input.projectId },
-    });
-    if (!row) throw new CoreError("NOT_FOUND");
-    const head = await repo.lastCommitForPath(row.path);
-    if (!head) throw new CoreError("NOT_FOUND");
-    if (head !== input.expectedHeadCommitSha)
-      throw new CoreError(
-        "CONFLICT",
-        "The document changed. Reload and try again.",
-        { headCommitSha: head },
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const row = await db.document.findFirst({
+        where: { id: input.documentId, projectId: input.projectId },
+      });
+      if (!row) throw new CoreError("NOT_FOUND");
+      const head = await repo.lastCommitForPath(row.path);
+      if (!head) throw new CoreError("NOT_FOUND");
+      if (head !== input.expectedHeadCommitSha)
+        throw new CoreError(
+          "CONFLICT",
+          "The document changed. Reload and try again.",
+          { headCommitSha: head },
+        );
+      const kind = documentKindOfPath(row.path);
+      const currentFile = await repo.readFileFromWorktree(row.path);
+      const { meta, body } = parseDocumentFile(currentFile, kind);
+      const properties = applyPagePropertiesInput(
+        meta.properties,
+        input.properties,
       );
-    const kind = documentKindOfPath(row.path);
-    const currentFile = await repo.readFileFromWorktree(row.path);
-    const { meta, body } = parseDocumentFile(currentFile, kind);
-    const properties = applyPagePropertiesInput(
-      meta.properties,
-      input.properties,
-    );
-    const { properties: _old, ...rest } = meta;
-    const file = composeDocumentFile(
-      {
-        ...rest,
-        ...(properties ? { properties } : {}),
-        updated: new Date().toISOString(),
-        updatedBy: documentAuthorForContent(actor),
-      },
-      body,
-      kind,
-    );
-    assertDocumentFileSize(file, row.path);
-    const unchanged =
-      composeDocumentFile(
-        { ...rest, ...(properties ? { properties } : {}) },
+      const { properties: _old, ...rest } = meta;
+      const file = composeDocumentFile(
+        {
+          ...rest,
+          ...(properties ? { properties } : {}),
+          updated: new Date().toISOString(),
+          updatedBy: documentAuthorForContent(actor),
+        },
         body,
         kind,
-      ) === composeDocumentFile(meta, body, kind);
-    if (unchanged) return { headCommitSha: head };
-    await repo.writeFileAtomic(row.path, file);
-    const sha = await repo.commitAll(`properties: ${row.path}`, author(actor));
-    changed = true;
-    try {
-      await repairDocumentProjectionInRepo(
-        db,
-        repo,
-        input.projectId,
-        row.id,
-        row.path,
       );
-    } catch (error) {
-      await reportProjectionFailureAndReconcile({
-        projectId: input.projectId,
-        documentId: row.id,
-        headCommitSha: sha,
-        error,
-      });
-    }
-    return { headCommitSha: sha };
-  });
+      assertDocumentFileSize(file, row.path);
+      const unchanged =
+        composeDocumentFile(
+          { ...rest, ...(properties ? { properties } : {}) },
+          body,
+          kind,
+        ) === composeDocumentFile(meta, body, kind);
+      if (unchanged) return { headCommitSha: head };
+      await repo.writeFileAtomic(row.path, file);
+      const sha = await repo.commitAll(
+        `properties: ${row.path}`,
+        author(actor),
+      );
+      changed = true;
+      try {
+        await repairDocumentProjectionInRepo(
+          db,
+          repo,
+          input.projectId,
+          row.id,
+          row.path,
+        );
+      } catch (error) {
+        await reportProjectionFailureAndReconcile({
+          projectId: input.projectId,
+          documentId: row.id,
+          headCommitSha: sha,
+          error,
+        });
+      }
+      return { headCommitSha: sha };
+    },
+    { db, actor, min: "Editor" },
+  );
   if (changed) void notifyProjectContentChanged(db, input.projectId);
   return result;
 }

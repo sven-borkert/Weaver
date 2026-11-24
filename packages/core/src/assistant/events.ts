@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { truncateText } from "../diagnostics/sanitize";
 
 export const MAX_EVENT_PAYLOAD_CHARS = 8_000;
 
@@ -91,6 +92,11 @@ export const BOUNDED_JSON_SLACK_CHARS = 64;
 /** The final, guaranteed-small payload when even a shrunk value overflows the budget. */
 const BOUNDED_JSON_FALLBACK = { truncated: true } as const;
 
+/** JSON.stringify writes a surrogate pair as-is and escapes only an unpaired
+ * one, which PostgreSQL jsonb rejects. An even run of backslashes before it
+ * means the text holds a literal backslash rather than an escape. */
+const LONE_SURROGATE_ESCAPE = /(?<!\\)((?:\\\\)*)\\ud[89a-f][0-9a-f]{2}/g;
+
 function tryStringify(value: unknown): string | undefined {
   try {
     return JSON.stringify(value);
@@ -108,7 +114,7 @@ function shrink(input: unknown, remaining: { chars: number }): unknown {
     const available = Math.max(0, remaining.chars - quoteOverhead);
     const take = Math.min(input.length, available);
     remaining.chars = Math.max(0, remaining.chars - quoteOverhead - take);
-    return input.length > take ? `${input.slice(0, take)}…` : input;
+    return truncateText(input, take + 1);
   }
   if (Array.isArray(input)) {
     const result: unknown[] = [];
@@ -139,13 +145,22 @@ function shrink(input: unknown, remaining: { chars: number }): unknown {
  * never exceeds `max`. Strings are cut and arrays/objects are cut off once
  * the budget runs out; if the shrunk-and-marked value still overflows (e.g.
  * structural overhead outran the estimate), the content is dropped entirely
- * in favor of a small fixed marker — never an unbounded payload.
+ * in favor of a small fixed marker — never an unbounded payload. Strings are
+ * cut on whole code points, and an unpaired surrogate that arrived in the
+ * value becomes U+FFFD, so the result always fits a jsonb column.
  */
 export function boundedJson(
   value: unknown,
   maxChars = MAX_EVENT_PAYLOAD_CHARS,
 ): unknown {
-  const serialized = tryStringify(value);
+  let serialized = tryStringify(value);
+  if (serialized !== undefined) {
+    const wellFormed = serialized.replace(LONE_SURROGATE_ESCAPE, "$1\\ufffd");
+    if (wellFormed !== serialized) {
+      serialized = wellFormed;
+      value = JSON.parse(wellFormed);
+    }
+  }
   if (serialized !== undefined && serialized.length <= maxChars) return value;
 
   const budget = Math.max(0, maxChars - BOUNDED_JSON_SLACK_CHARS);

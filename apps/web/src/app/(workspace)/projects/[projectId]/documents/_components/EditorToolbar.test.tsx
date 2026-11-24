@@ -431,6 +431,14 @@ describe("EditorToolbar", () => {
     expect(textOf(tree!.root)).toContain("It is a placeholder.");
     expect(button("Replace selection")).toBeUndefined();
 
+    generate.mockRejectedValueOnce({
+      data: { code: "BAD_REQUEST", field: "selection" },
+    });
+    await ask("Rewrite all of it");
+    expect(textOf(tree!.root)).toContain(
+      "The selected text is too large to send to the assistant. Select less text or use a shorter message.",
+    );
+
     generate.mockResolvedValueOnce({
       reply: "Here is a clearer version.",
       markdown: "New text",

@@ -24,7 +24,10 @@ import {
   type ProjectRepoWriter,
 } from "@weaver/git-store";
 import * as gitStore from "@weaver/git-store";
-import * as projectRepos from "@weaver/core/services/projectRepo";
+import { toOrganizationRole } from "@weaver/core/roles";
+import { createApiKeySecurityContext } from "@weaver/core/security/context";
+import { storeDocumentImage } from "@weaver/core/services/documentImages";
+import { applyMcpOperation } from "@weaver/core/services/mcpOperations";
 import {
   createDocument,
   getDocument,
@@ -69,6 +72,11 @@ async function setupProjectWith(role: MatrixRole, suffix: string) {
   await addMembership(project.id, actor.id, role);
   return { project, caller: callerFor(actor), ownerCaller, actor };
 }
+
+const PNG_1X1 = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 const PARA = (text: string) => ({
   type: "doc",
@@ -327,6 +335,89 @@ describe("document router", () => {
           where: { ...where, outcome: "validation_failure" },
         }),
       ).toMatchObject({ inputTokens: 12, outputTokens: 20, costMicros: 52n });
+    });
+
+    it("answers on a Markdown document kept out of Git", async () => {
+      const { project, caller, actor } = await setupGeneration();
+      const admin = callerFor(await makeUser("Admin", "untracked-ai-admin"));
+      const connection = await admin.llm.createConnection({
+        name: "Untracked generation provider",
+        providerType: "openai_compatible",
+        endpoint: "https://untracked.example/v1",
+        credential: "fake-untracked-key",
+      });
+      const model = await admin.llm.createModel({
+        connectionId: connection.id,
+        providerModelId: "untracked-chat",
+        displayName: "Untracked chat",
+        capabilities: ["chat", "tool_use"],
+      });
+      await admin.llm.setRoute({ purpose: "assistant", modelId: model.id });
+      const untracked = await caller.document.create({
+        projectId: project.id,
+        folderPath: [],
+        title: "Kept out of Git",
+        contentJson: PARA("Local body"),
+        untracked: true,
+      });
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        Response.json({
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "It is local." },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+        }),
+      );
+
+      await expect(
+        callerFor(actor, { llmFetch: fetchImpl }).document.generateContent({
+          projectId: project.id,
+          documentId: untracked.id,
+          instruction: "What is this?",
+        }),
+      ).resolves.toEqual({
+        reply: "It is local.",
+        markdown: null,
+        action: null,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(
+        await getPrisma().aiUsage.findFirst({
+          where: {
+            projectId: project.id,
+            documentId: untracked.id,
+            operation: "document.generate_content",
+          },
+        }),
+      ).toMatchObject({ outcome: "success", totalTokens: 8 });
+
+      await caller.folder.create({
+        projectId: project.id,
+        parentPath: [],
+        name: "Local",
+        untracked: true,
+      });
+      const python = await caller.document.importFile({
+        projectId: project.id,
+        folderPath: ["local"],
+        fileName: "local.py",
+        text: "print(42)\n",
+      });
+      expect(
+        await getPrisma().untrackedDocument.count({ where: { id: python.id } }),
+      ).toBe(1);
+      await expect(
+        caller.document.generateContent({
+          projectId: project.id,
+          documentId: python.id,
+          instruction: "What is this?",
+        }),
+      ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
     });
 
     it("checks membership, document identity, and Markdown kind before calling a model", async () => {
@@ -3176,7 +3267,7 @@ it.each(["save", "delete"] as const)(
       select: { organizationId: true },
     });
     const lock = vi
-      .spyOn(projectRepos, "withProjectRepo")
+      .spyOn(gitStore, "withProjectRepo")
       .mockImplementationOnce(async function <T>(
         projectId: string,
         write: (repo: ProjectRepoWriter) => Promise<T>,
@@ -3205,6 +3296,149 @@ it.each(["save", "delete"] as const)(
     }
     const repo = (await openProjectRepo(project.id))!;
     expect(await repo.resolveHead()).toBe(created.headCommitSha);
+  },
+);
+
+it.each([
+  "document restore",
+  "document move",
+  "image upload",
+  "table save",
+  "folder create",
+  "folder delete",
+  "MCP write",
+] as const)(
+  "rejects a queued %s after the editor is downgraded to Viewer",
+  async (operation) => {
+    const { project, caller, actor } = await setupProjectWith(
+      "Editor",
+      `queued-${operation.replace(" ", "-")}-downgrade`,
+    );
+    const db = getPrisma();
+    const enriched = {
+      ...securityContextFor(actor),
+      name: null,
+      email: actor.email,
+    };
+    await caller.folder.create({
+      projectId: project.id,
+      parentPath: [],
+      name: "Archive",
+    });
+    const created = await caller.document.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Before downgrade",
+      contentJson: PARA("Original body"),
+    });
+    const edited = await caller.document.update({
+      projectId: project.id,
+      documentId: created.id,
+      baseCommitSha: created.headCommitSha,
+      content: { kind: "markdown", contentJson: PARA("Edited body") },
+      changeSummary: "Edit before downgrade",
+    });
+    const table = await caller.table.create({
+      projectId: project.id,
+      folderPath: [],
+      title: "Before downgrade",
+    });
+    const write = {
+      "document restore": () =>
+        caller.document.restore({
+          projectId: project.id,
+          documentId: created.id,
+          sha: created.headCommitSha,
+          expectedHeadCommitSha: edited.headCommitSha,
+        }),
+      "document move": () =>
+        caller.document.move({
+          projectId: project.id,
+          documentId: created.id,
+          folderPath: ["archive"],
+        }),
+      "image upload": () =>
+        storeDocumentImage(
+          db,
+          {
+            projectId: project.id,
+            documentId: created.id,
+            fileName: "pixel.png",
+            bytes: PNG_1X1,
+          },
+          enriched,
+        ),
+      "table save": () =>
+        caller.table.save({
+          projectId: project.id,
+          tableId: table.id,
+          baseCommitSha: table.headCommitSha,
+          columns: table.columns,
+          rows: [{ id: randomUUID(), cells: {} }],
+        }),
+      "folder create": () =>
+        caller.folder.create({
+          projectId: project.id,
+          parentPath: [],
+          name: "Later",
+        }),
+      "folder delete": () =>
+        caller.folder.delete({ projectId: project.id, path: ["archive"] }),
+      "MCP write": () =>
+        applyMcpOperation(
+          db,
+          {
+            ...createApiKeySecurityContext({
+              userId: actor.id,
+              globalRole: actor.role,
+              keyId: `key-${actor.id}`,
+              permissions: { mcp: ["use"], content: ["read", "write"] },
+              projectIds: [],
+            }),
+            name: null,
+            email: actor.email,
+          },
+          {
+            idempotencyKey: "queued-downgrade-0001",
+            toolName: "create_document",
+            operation: {
+              kind: "document.create",
+              projectId: project.id,
+              folderPath: [],
+              title: "Written after downgrade",
+              markdown: "Body\n",
+            },
+            summary: "Create after downgrade",
+          },
+        ),
+    }[operation];
+    const { organizationId } = await db.project.findUniqueOrThrow({
+      where: { id: project.id },
+      select: { organizationId: true },
+    });
+    const repo = (await openProjectRepo(project.id))!;
+    const head = await repo.resolveHead();
+    const lock = vi
+      .spyOn(gitStore, "withProjectRepo")
+      .mockImplementationOnce(async function <T>(
+        projectId: string,
+        locked: (writer: ProjectRepoWriter) => Promise<T>,
+      ) {
+        return withProjectRepo(projectId, async (writer) => {
+          await db.member.updateMany({
+            where: { organizationId, userId: actor.id },
+            data: { role: toOrganizationRole("Viewer") },
+          });
+          return locked(writer);
+        });
+      });
+    try {
+      await expect(write()).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(lock).toHaveBeenCalledTimes(1);
+    } finally {
+      lock.mockRestore();
+    }
+    expect(await repo.resolveHead()).toBe(head);
   },
 );
 

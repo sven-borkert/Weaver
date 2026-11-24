@@ -860,6 +860,99 @@ describe("content.lifecycle operation", () => {
     expect(after.folders).toEqual([]);
   });
 
+  it("refuses to delete a folder that holds only documents kept out of Git", async () => {
+    const f = await ownerProject("op-folder-untracked-only");
+    await folders.createFolder(
+      f.db,
+      { projectId: f.project.id, parentPath: [], name: "Archive" },
+      f.actor,
+    );
+    const draft = await createDocument(
+      f.db,
+      {
+        projectId: f.project.id,
+        title: "Draft",
+        folderPath: ["archive"],
+        content: { kind: "markdown", contentJson: parseDocumentBody("body\n") },
+        untracked: true,
+      },
+      f.actor,
+    );
+    const listing = await listContentFolders(
+      f.db,
+      { projectId: f.project.id },
+      f.actor,
+    );
+
+    await expect(
+      applyLifecycle(f, {
+        kind: "content.lifecycle",
+        projectId: f.project.id,
+        action: "folder_delete",
+        resourceType: "document",
+        baseProjectCommitSha: listing.baseProjectCommitSha,
+        path: ["archive"],
+      }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+    const repo = (await openProjectRepo(f.project.id))!;
+    expect(await repo.resolveHead()).toBe(listing.baseProjectCommitSha);
+    expect(
+      (
+        await f.db.untrackedDocument.findUniqueOrThrow({
+          where: { id: draft.id },
+        })
+      ).path,
+    ).toBe("archive/draft.md");
+  });
+
+  it("refuses to create a Git folder at or inside a folder kept out of Git", async () => {
+    const f = await ownerProject("op-folder-untracked-twin");
+    await folders.createFolder(
+      f.db,
+      { projectId: f.project.id, parentPath: [], name: "Tracked" },
+      f.actor,
+    );
+    await folders.createFolder(
+      f.db,
+      {
+        projectId: f.project.id,
+        parentPath: [],
+        name: "Scratch",
+        untracked: true,
+      },
+      f.actor,
+    );
+    const listing = await listContentFolders(
+      f.db,
+      { projectId: f.project.id },
+      f.actor,
+    );
+    const create = (parentPath: string[], name: string) =>
+      applyLifecycle(f, {
+        kind: "content.lifecycle",
+        projectId: f.project.id,
+        action: "folder_create",
+        resourceType: "document",
+        baseProjectCommitSha: listing.baseProjectCommitSha,
+        parentPath,
+        name,
+      });
+
+    await expect(create([], "Scratch")).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    await expect(create(["scratch"], "Inner")).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    const repo = (await openProjectRepo(f.project.id))!;
+    expect(await repo.resolveHead()).toBe(listing.baseProjectCommitSha);
+    expect(
+      (await repo.listTrackedFiles()).some((file) =>
+        file.startsWith("scratch/"),
+      ),
+    ).toBe(false);
+  });
+
   it("moves a document and refuses a stale item base", async () => {
     const f = await ownerProject("op-item-move");
     const doc = await createDocument(

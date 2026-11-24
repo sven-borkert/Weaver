@@ -60,6 +60,31 @@ describe("boundedJson", () => {
   });
 });
 
+describe("boundedJson keeps payloads storable in jsonb", () => {
+  // In Unicode mode the class matches unpaired surrogates only.
+  const lone = /[\uD800-\uDFFF]/u;
+
+  it("never cuts a string inside a surrogate pair", () => {
+    for (let offset = 0; offset < 40; offset += 1) {
+      const text = `${"a".repeat(1_900 + offset)}😀${"a".repeat(3_000)}`;
+      const bounded = boundedJson({ text }, 2_000) as { text: string };
+      expect(bounded.text).not.toMatch(lone);
+      expect(JSON.stringify(bounded).length).toBeLessThanOrEqual(2_000);
+    }
+  });
+
+  it("replaces an unpaired surrogate in keys and values with U+FFFD", () => {
+    expect(
+      boundedJson({ text: "cut \uD83D", "\uDE00": ["\uDE00x", "ok 😀"] }),
+    ).toEqual({ text: "cut \uFFFD", "\uFFFD": ["\uFFFDx", "ok 😀"] });
+  });
+
+  it("leaves a literal backslash-u sequence alone", () => {
+    const value = { text: "C:\\ud83d and \\\uD83D" };
+    expect(boundedJson(value)).toEqual({ text: "C:\\ud83d and \\\uFFFD" });
+  });
+});
+
 describe("reduceRunEvents", () => {
   it("concatenates text, collects proposals, and finds the terminal state", () => {
     const reduction = reduceRunEvents([

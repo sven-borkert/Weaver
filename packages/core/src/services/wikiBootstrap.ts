@@ -187,6 +187,7 @@ export async function runWikiBootstrap(
         baseProjectCommitSha: await repo.resolveHead(),
       };
       const applied = await applyFolderCreate(
+        db,
         repo,
         operation,
         author,

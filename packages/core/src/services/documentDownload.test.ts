@@ -69,6 +69,9 @@ beforeAll(async () => {
     "notes/archive/.gitkeep": "",
     "tables/budget.table/notes.md": "# table",
   });
+  // The cold import of the service graph takes seconds under suite load;
+  // pay it here, after the env stubs, instead of inside the first test.
+  await import("./documentDownload");
 });
 
 afterAll(async () => {

@@ -496,34 +496,37 @@ export async function setFolderReviewRecursively(
 ): Promise<FolderReviewResult> {
   await assertProjectRole(db, input.projectId, actor, "Maintainer");
   let changed = false;
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Maintainer");
-    const { files, preflight } = await prepareInRepo(
-      db,
-      repo,
-      input,
-      actor,
-      input.expectedHeadCommitSha,
-    );
-    if (preflight.exceedsLimits)
-      throw new CoreError(
-        "BAD_REQUEST",
-        "This assignment exceeds 1,000 document rewrites or 50 MiB. Select a smaller folder and preview again.",
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const { files, preflight } = await prepareInRepo(
+        db,
+        repo,
+        input,
+        actor,
+        input.expectedHeadCommitSha,
       );
-    const sha = await commitFiles(
-      repo,
-      files,
-      preflight.baseProjectCommitSha,
-      actor,
-      `review: assign folder reviewers ${input.path.join("/") || "/"}`,
-    );
-    changed = files.length > 0;
-    await projectFiles(db, repo, input.projectId, files, sha, actor);
-    return {
-      headCommitSha: sha,
-      changedDocumentCount: preflight.changedDocumentCount,
-    };
-  });
+      if (preflight.exceedsLimits)
+        throw new CoreError(
+          "BAD_REQUEST",
+          "This assignment exceeds 1,000 document rewrites or 50 MiB. Select a smaller folder and preview again.",
+        );
+      const sha = await commitFiles(
+        repo,
+        files,
+        preflight.baseProjectCommitSha,
+        actor,
+        `review: assign folder reviewers ${input.path.join("/") || "/"}`,
+      );
+      changed = files.length > 0;
+      await projectFiles(db, repo, input.projectId, files, sha, actor);
+      return {
+        headCommitSha: sha,
+        changedDocumentCount: preflight.changedDocumentCount,
+      };
+    },
+    { db, actor, min: "Maintainer" },
+  );
   if (changed) void notifyProjectContentChanged(db, input.projectId);
   return result;
 }
@@ -535,36 +538,39 @@ export async function clearFolderReviewDefault(
 ): Promise<{ headCommitSha: string }> {
   await assertProjectRole(db, input.projectId, actor, "Maintainer");
   let changed = false;
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Maintainer");
-    const source = await inventory(repo, input, false);
-    assertHead(source.head, input.expectedHeadCommitSha);
-    const dir = input.path.join("/");
-    const meta = folderMeta(source, dir, true);
-    if (!meta.reviewDefaults) return { headCommitSha: source.head };
-    const path = folderMetadataPath(dir);
-    const next = { ...meta, reviewDefaults: undefined };
-    const content = dir
-      ? composeFolderMetadata({
-          ...(next as FolderMetadata),
-          updated: new Date().toISOString(),
-          updatedBy: authorForUser({
-            id: actor.userId,
-            name: actor.name ?? null,
-            email: actor.email ?? "unknown@local",
-          }),
-        })
-      : composeRootFolderMetadata(next);
-    const headCommitSha = await commitFiles(
-      repo,
-      [{ path, original: source.blobs.get(path) ?? null, content }],
-      source.head,
-      actor,
-      `review: use parent default ${dir || "/"}`,
-    );
-    changed = true;
-    return { headCommitSha };
-  });
+  const result = await withProjectRepo(
+    input.projectId,
+    async (repo) => {
+      const source = await inventory(repo, input, false);
+      assertHead(source.head, input.expectedHeadCommitSha);
+      const dir = input.path.join("/");
+      const meta = folderMeta(source, dir, true);
+      if (!meta.reviewDefaults) return { headCommitSha: source.head };
+      const path = folderMetadataPath(dir);
+      const next = { ...meta, reviewDefaults: undefined };
+      const content = dir
+        ? composeFolderMetadata({
+            ...(next as FolderMetadata),
+            updated: new Date().toISOString(),
+            updatedBy: authorForUser({
+              id: actor.userId,
+              name: actor.name ?? null,
+              email: actor.email ?? "unknown@local",
+            }),
+          })
+        : composeRootFolderMetadata(next);
+      const headCommitSha = await commitFiles(
+        repo,
+        [{ path, original: source.blobs.get(path) ?? null, content }],
+        source.head,
+        actor,
+        `review: use parent default ${dir || "/"}`,
+      );
+      changed = true;
+      return { headCommitSha };
+    },
+    { db, actor, min: "Maintainer" },
+  );
   if (changed) void notifyProjectContentChanged(db, input.projectId);
   return result;
 }

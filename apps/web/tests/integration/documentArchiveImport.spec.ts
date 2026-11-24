@@ -28,7 +28,7 @@ import {
   importDocumentArchiveEntry,
 } from "@weaver/core/services/documentImport";
 import { storeDocumentImage } from "@weaver/core/services/documentImages";
-import { getTree } from "@weaver/core/services/folders";
+import { createFolder, getTree } from "@weaver/core/services/folders";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 
 const PNG_1X1 = Buffer.from(
@@ -1333,4 +1333,200 @@ describe("imported page properties", () => {
       tags: ["e"],
     });
   }, 30_000);
+});
+
+describe("importing into a folder kept out of Git", () => {
+  it("keeps the folders, documents, images and icons out of Git and replaces in place", async () => {
+    const db = getPrisma();
+    const { project, actor } = await fixture("untracked-destination");
+    const { imageIconFromBytes } =
+      await import("@weaver/core/services/appearanceAssets");
+    const { importArchiveFolders } =
+      await import("@weaver/core/services/documentImport");
+    await createDocument(
+      db,
+      {
+        projectId: project.id,
+        folderPath: [],
+        title: "Tracked",
+        content: { kind: "markdown", contentJson: BODY("in git") },
+      },
+      actor,
+    );
+    await createFolder(
+      db,
+      {
+        projectId: project.id,
+        parentPath: [],
+        name: "Scratch",
+        untracked: true,
+      },
+      actor,
+    );
+    const repo = (await openProjectRepo(project.id))!;
+    const head = await repo.resolveHead();
+    const files = await tracked(project.id);
+    const icon = imageIconFromBytes(PNG_1X1);
+    const appearance = { backgroundColor: "#123456", icon };
+
+    const folders = await importArchiveFolders(
+      db,
+      {
+        projectId: project.id,
+        folderPath: ["scratch"],
+        folderNames: {},
+        folderMetadata: {
+          "scratch/empty": {
+            name: "Empty",
+            created: null,
+            createdBy: null,
+            updated: null,
+            updatedBy: null,
+            appearance,
+          },
+        },
+        iconAssets: [{ ...icon, bytes: PNG_1X1 }],
+      },
+      actor,
+    );
+    expect(folders).toEqual({
+      folders: ["scratch/empty"],
+      headCommitSha: null,
+    });
+    const created = await importDocumentArchiveEntry(
+      db,
+      {
+        projectId: project.id,
+        folderPath: ["scratch", "notes"],
+        folderNames: { "scratch/notes": "Notes" },
+        kind: "markdown",
+        fileName: "trip-report.md",
+        text: MARKDOWN,
+        images: [{ name: "pixel.png", bytes: PNG_1X1 }],
+        target: { mode: "create" },
+      },
+      actor,
+    );
+    expect(created.path).toBe("scratch/notes/trip-report.md");
+    expect(await repo.resolveHead()).toBe(head);
+    expect(await tracked(project.id)).toEqual(files);
+    const tree = await getTree(db, { projectId: project.id }, actor);
+    expect(tree.untrackedFolders).toEqual([
+      "scratch",
+      "scratch/empty",
+      "scratch/notes",
+    ]);
+    expect(tree.folderNames["scratch/notes"]).toBe("Notes");
+    expect(tree.folderAppearances["scratch/empty"]).toEqual(appearance);
+    expect(
+      tree.documents.find((document) => document.id === created.id)?.untracked,
+    ).toBe(true);
+    const stored = async () =>
+      (
+        await db.untrackedFile.findMany({
+          where: { projectId: project.id },
+          select: { path: true },
+          orderBy: { path: "asc" },
+        })
+      ).map((file) => file.path);
+    expect(await stored()).toEqual([
+      `.weaver-icons/${icon.digest}.${icon.extension}`,
+      "scratch/notes/trip-report.assets/pixel.png",
+    ]);
+
+    const replaced = await importDocumentArchiveEntry(
+      db,
+      {
+        projectId: project.id,
+        folderPath: ["scratch", "notes"],
+        folderNames: {},
+        kind: "markdown",
+        fileName: "trip-report.md",
+        text: "# Trip Report\n\nNo pictures any more.\n",
+        images: [],
+        target: {
+          mode: "replace",
+          documentId: created.id,
+          expectedHeadCommitSha: created.headCommitSha,
+        },
+      },
+      actor,
+    );
+    expect(replaced.id).toBe(created.id);
+    expect(await repo.resolveHead()).toBe(head);
+    expect(await stored()).toEqual([
+      `.weaver-icons/${icon.digest}.${icon.extension}`,
+    ]);
+    const row = await db.untrackedDocument.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    expect(row.content).toContain("No pictures any more.");
+    await expect(
+      importDocumentArchiveEntry(
+        db,
+        {
+          projectId: project.id,
+          folderPath: ["scratch", "notes"],
+          folderNames: {},
+          kind: "markdown",
+          fileName: "trip-report.md",
+          text: "# Trip Report\n\nStale.\n",
+          images: [],
+          target: {
+            mode: "replace",
+            documentId: created.id,
+            expectedHeadCommitSha: created.headCommitSha,
+          },
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("refuses archive folder metadata that would put a Git folder inside a folder kept out of Git", async () => {
+    const db = getPrisma();
+    const { project, actor } = await fixture("untracked-mixed");
+    await createFolder(
+      db,
+      {
+        projectId: project.id,
+        parentPath: [],
+        name: "Scratch",
+        untracked: true,
+      },
+      actor,
+    );
+    await createFolder(
+      db,
+      { projectId: project.id, parentPath: [], name: "Guides" },
+      actor,
+    );
+    const head = await (await openProjectRepo(project.id))!.resolveHead();
+    await expect(
+      importDocumentArchiveEntry(
+        db,
+        {
+          projectId: project.id,
+          folderPath: ["guides"],
+          folderNames: {},
+          folderMetadata: {
+            "scratch/sub": {
+              name: "Sub",
+              created: null,
+              createdBy: null,
+              updated: null,
+              updatedBy: null,
+            },
+          },
+          kind: "markdown",
+          fileName: "trip-report.md",
+          text: "# Trip Report\n",
+          images: [],
+          target: { mode: "create" },
+        },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await (await openProjectRepo(project.id))!.resolveHead()).toBe(head);
+  });
 });

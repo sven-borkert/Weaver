@@ -26,7 +26,8 @@ export function scopeOptions(
   page: PageContext,
 ): Array<"document" | "table" | "project"> {
   const options: Array<"document" | "table" | "project"> = [];
-  if (page.projectId && page.documentId) options.push("document");
+  if (page.projectId && page.documentId && !page.documentOutsideGit)
+    options.push("document");
   if (page.projectId && page.tableId) options.push("table");
   if (page.projectId) options.push("project");
   return options;
@@ -199,7 +200,9 @@ export function ScopeSelector({
               hint={
                 options.includes("document")
                   ? undefined
-                  : "Open a document to use this"
+                  : page.documentOutsideGit
+                    ? "Not available for documents kept out of Git"
+                    : "Open a document to use this"
               }
               onSelect={() => {
                 onChange({

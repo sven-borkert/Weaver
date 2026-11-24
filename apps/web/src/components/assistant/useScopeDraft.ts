@@ -27,7 +27,15 @@ export function useScopeDraft(input: {
   pinnedProjectId: string | null;
   lastUserSnapshot: ScopeSnapshot | null;
 }) {
-  const page = usePageContext();
+  const route = usePageContext();
+  // Shares the document page's cache entry, so it rarely costs a request.
+  const pageDocument = api.document.get.useQuery(
+    { projectId: route.projectId ?? "", documentId: route.documentId ?? "" },
+    { enabled: Boolean(route.projectId && route.documentId) },
+  );
+  const page = pageDocument.data?.untracked
+    ? { ...route, documentOutsideGit: true }
+    : route;
   const projects = api.project.list.useQuery();
   const accessibleProjectIds = useMemo(
     () => (projects.data ? projects.data.map((p) => p.id) : null),

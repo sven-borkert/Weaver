@@ -1982,14 +1982,17 @@ export async function applyDocumentPatchOperation(
 }
 
 export async function applyFolderCreate(
+  db: PrismaClient,
   repo: ProjectRepoWriter,
   operation: ContentLifecycleOperation,
-  author: Parameters<typeof createFolderInRepo>[2],
+  author: Parameters<typeof createFolderInRepo>[4],
   audit: FolderAudit,
 ): Promise<AppliedOperation> {
   assertLifecycleShape(operation);
   const result = await createFolderInRepo(
+    db,
     repo,
+    operation.projectId,
     { parentPath: operation.parentPath!, name: operation.name! },
     author,
     scopeForResourceType(operation.resourceType),
@@ -2200,7 +2203,7 @@ export async function applyOperationInRepo(
       const scope = scopeForResourceType(operation.resourceType);
       switch (operation.action) {
         case "folder_create":
-          return applyFolderCreate(repo, operation, author, audit);
+          return applyFolderCreate(db, repo, operation, author, audit);
         case "folder_rename": {
           const result = await renameFolderInRepo(
             db,
@@ -2237,7 +2240,9 @@ export async function applyOperationInRepo(
         }
         case "folder_delete": {
           const result = await deleteFolderInRepo(
+            db,
             repo,
+            operation.projectId,
             { path: operation.path! },
             author,
             scope,

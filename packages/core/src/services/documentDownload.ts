@@ -33,31 +33,53 @@ import { assertOutsideTablesRoot } from "@weaver/core/tables/paths";
 import type { PrismaClient } from "@weaver/db/client";
 import { openProjectRepo, type ProjectRepoReader } from "@weaver/git-store";
 import { getDocumentWithSnapshot } from "./documents";
+import { assetsDirForDocPath } from "../documents/images";
 import {
-  listUntrackedUnder,
-  readUntrackedAssets,
+  listUntrackedArchiveEntries,
+  listUntrackedFileSizes,
+  readUntrackedArchiveEntries,
   readUntrackedDocumentFile,
   readUntrackedFile,
 } from "./untrackedDocuments";
 
-/** Untracked documents, folder metadata and images below `rel`, as in-memory archive blobs. */
+/** Untracked documents, folder metadata and images below `rel` by size; their bytes load after planning. */
 async function untrackedArchiveBlobs(
   db: PrismaClient,
   projectId: string,
   rel: string,
 ): Promise<ArchiveBlob[]> {
-  const { documents, folders } = await listUntrackedUnder(db, projectId, rel);
-  const blobs: ArchiveBlob[] = [];
-  const add = (path: string, bytes: Uint8Array) =>
-    blobs.push({ path, sha: "", size: bytes.byteLength, bytes });
-  for (const folder of folders)
-    add(`${folder.path}/.folder.json`, Buffer.from(folder.metadata));
-  for (const document of documents) {
-    add(document.path, Buffer.from(document.content));
-    for (const asset of await readUntrackedAssets(db, projectId, document.path))
-      add(asset.path, asset.bytes);
-  }
-  return blobs;
+  return (await listUntrackedArchiveEntries(db, projectId, rel)).map(
+    ({ path, size }) => ({ path, sha: "", size }),
+  );
+}
+
+/**
+ * Loads the untracked files the plan kept, once it is within the limits.
+ * `base` turns plan paths back into stored paths; a file deleted meanwhile
+ * is left out.
+ */
+async function loadUntrackedBytes(
+  db: PrismaClient,
+  projectId: string,
+  plan: ArchivePlan,
+  base: string,
+): Promise<void> {
+  const pending = plan.files.filter((file) => file.sha === "" && !file.bytes);
+  if (!pending.length) return;
+  const loaded = await readUntrackedArchiveEntries(
+    db,
+    projectId,
+    pending.map((file) => `${base}${file.path}`),
+  );
+  plan.files = plan.files.filter((file) => {
+    if (file.sha !== "" || file.bytes) return true;
+    const bytes = loaded.get(`${base}${file.path}`);
+    plan.totalBytes += (bytes?.byteLength ?? 0) - file.size;
+    if (!bytes) return false;
+    file.bytes = bytes;
+    file.size = bytes.byteLength;
+    return true;
+  });
 }
 import { assertProjectRole, type ProjectActor } from "./projectAccess";
 
@@ -138,17 +160,22 @@ export async function createDocumentArchive(
         size: content.byteLength,
         bytes: content,
       },
-      ...(await readUntrackedAssets(db, input.projectId, untracked.path)).map(
-        (asset) => ({
-          path: asset.path,
-          sha: "",
-          size: asset.bytes.byteLength,
-          bytes: asset.bytes,
-        }),
-      ),
+      ...(
+        await listUntrackedFileSizes(
+          db,
+          input.projectId,
+          `${assetsDirForDocPath(untracked.path)}/`,
+        )
+      ).map(({ path, size }) => ({ path, sha: "", size })),
     ];
     const plan = planDocumentArchive(blobs, untracked.path)!;
     assertWithinLimits(plan);
+    await loadUntrackedBytes(
+      db,
+      input.projectId,
+      plan,
+      untracked.path.slice(0, untracked.path.lastIndexOf("/") + 1),
+    );
     const repo = await openProjectRepo(input.projectId);
     await addAppearanceToArchive(db, input.projectId, repo, null, plan, []);
     assertWithinLimits(plan);
@@ -215,6 +242,13 @@ export async function archiveFolderInRepo(
   const plan = planFolderArchive(blobs, input.folderPath);
   if (!plan) throw folderNotFound("path");
   assertWithinLimits(plan, input.limits);
+  if (input.untracked)
+    await loadUntrackedBytes(
+      input.untracked.db,
+      input.untracked.projectId,
+      plan,
+      input.folderPath.length ? `${input.folderPath.join("/")}/` : "",
+    );
   await addAppearanceToArchive(
     input.untracked?.db ?? null,
     input.untracked?.projectId ?? "",

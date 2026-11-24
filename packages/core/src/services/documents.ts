@@ -1306,7 +1306,12 @@ export async function assertEditableMarkdownDocument(
   actor: ProjectActor,
 ): Promise<void> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
-  const document = await requireDocument(db, input.projectId, input.documentId);
+  // Either store: Ask the assistant works on documents kept out of Git too.
+  const where = { id: input.documentId, projectId: input.projectId };
+  const document =
+    (await db.document.findFirst({ where, select: { path: true } })) ??
+    (await db.untrackedDocument.findFirst({ where, select: { path: true } }));
+  if (!document) throw new CoreError("NOT_FOUND");
   if (documentKindOfPath(document.path) !== "markdown")
     throw new CoreError(
       "BAD_REQUEST",
@@ -1563,10 +1568,12 @@ async function writeDocument(
   actor: EnrichedActor,
   metadata: WriteMetadata,
 ): Promise<DocumentResult> {
-  const result = await withProjectRepo(projectId, async (repo) => {
-    await assertProjectRole(db, projectId, actor, "Editor");
-    return writeDocumentInRepo(db, repo, projectId, request, actor, metadata);
-  });
+  const result = await withProjectRepo(
+    projectId,
+    (repo) =>
+      writeDocumentInRepo(db, repo, projectId, request, actor, metadata),
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, projectId);
   return result;
 }
@@ -1619,39 +1626,41 @@ export async function createDocument(
       actor,
     );
   }
-  const result = await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    return withAppearanceAssetsInRepo(
-      repo,
-      input.appearance ? [input.appearance] : [],
-      input.iconAssets ?? [],
-      (writer) =>
-        writeDocumentInRepo(
-          db,
-          writer,
-          input.projectId,
-          {
-            kind: "create",
-            id: randomUUID(),
-            folderPath: input.folderPath,
-            title: input.title,
-            content: input.content,
-            createdAt: new Date().toISOString(),
-            ...(input.assets && { assets: input.assets }),
-            ...(input.assetsFromSlug && {
-              assetsFromSlug: input.assetsFromSlug,
-            }),
-            ...(input.review && { review: input.review }),
-            ...(input.reviewSource && { reviewSource: input.reviewSource }),
-            ...(input.appearance && { appearance: input.appearance }),
-            ...(input.properties && { propertiesInput: input.properties }),
-          },
-          actor,
-          { operation: "create", ...provenance },
-        ),
-      input.allowMissingIcon,
-    );
-  });
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) =>
+      withAppearanceAssetsInRepo(
+        repo,
+        input.appearance ? [input.appearance] : [],
+        input.iconAssets ?? [],
+        (writer) =>
+          writeDocumentInRepo(
+            db,
+            writer,
+            input.projectId,
+            {
+              kind: "create",
+              id: randomUUID(),
+              folderPath: input.folderPath,
+              title: input.title,
+              content: input.content,
+              createdAt: new Date().toISOString(),
+              ...(input.assets && { assets: input.assets }),
+              ...(input.assetsFromSlug && {
+                assetsFromSlug: input.assetsFromSlug,
+              }),
+              ...(input.review && { review: input.review }),
+              ...(input.reviewSource && { reviewSource: input.reviewSource }),
+              ...(input.appearance && { appearance: input.appearance }),
+              ...(input.properties && { propertiesInput: input.properties }),
+            },
+            actor,
+            { operation: "create", ...provenance },
+          ),
+        input.allowMissingIcon,
+      ),
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
 }
@@ -2687,8 +2696,10 @@ export async function restoreDocument(
   await assertProjectRole(db, input.projectId, actor, "Editor");
   if (await isUntrackedDocument(db, input.projectId, input.documentId))
     throw new CoreError("BAD_REQUEST", "Documents outside Git have no history");
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    restoreDocumentInRepo(db, repo, input, actor),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) => restoreDocumentInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
@@ -2815,8 +2826,10 @@ export async function moveDocument(
   if (await isUntrackedDocument(db, input.projectId, input.documentId))
     return moveUntrackedDocument(db, input, actor);
   await assertTrackedDestination(db, input.projectId, input.folderPath);
-  const result = await withProjectRepo(input.projectId, (repo) =>
-    moveDocumentInRepo(db, repo, input, actor),
+  const result = await withProjectRepo(
+    input.projectId,
+    (repo) => moveDocumentInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
   );
   void notifyProjectContentChanged(db, input.projectId);
   return result;
@@ -2857,16 +2870,22 @@ export async function deleteDocumentInRepo(
 
 export async function deleteDocument(
   db: PrismaClient,
-  input: { projectId: string; documentId: string },
+  input: {
+    projectId: string;
+    documentId: string;
+    /** Checked only outside Git; a Git delete stays recoverable from history. */
+    expectedHeadCommitSha?: string;
+  },
   actor: EnrichedActor,
 ): Promise<void> {
   await assertProjectRole(db, input.projectId, actor, "Editor");
   if (await isUntrackedDocument(db, input.projectId, input.documentId))
     return deleteUntrackedDocument(db, input, actor);
-  await withProjectRepo(input.projectId, async (repo) => {
-    await assertProjectRole(db, input.projectId, actor, "Editor");
-    return deleteDocumentInRepo(db, repo, input, actor);
-  });
+  await withProjectRepo(
+    input.projectId,
+    (repo) => deleteDocumentInRepo(db, repo, input, actor),
+    { db, actor, min: "Editor" },
+  );
   void notifyProjectContentChanged(db, input.projectId);
 }
 

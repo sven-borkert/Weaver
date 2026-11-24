@@ -1158,119 +1158,123 @@ async function acceptProposalInternal(
   };
 
   let contentCommitted = false;
-  const accepted = await withProjectRepo(operation.projectId, async (repo) => {
-    // Re-read inside the project lock: concurrent accepts of the same proposal
-    // serialize here, so only the first one can reach a writer.
-    const fresh = await db.assistantProposal.findFirst({
-      where: { id: row.id, userId: actor.userId },
-    });
-    if (!fresh) throw new CoreError("NOT_FOUND");
-    if (automatic && fresh.status !== "pending") return toView(fresh);
-    if (fresh.status !== "pending" && fresh.status !== "accepting")
-      throw new CoreError("CONFLICT", `proposal is ${fresh.status}`);
-    if (fresh.status === "pending") {
-      const claim = (client: Db) =>
-        client.assistantProposal.updateMany({
-          where: {
-            id: fresh.id,
-            status: "pending",
-            expiresAt: { gte: new Date() },
-          },
-          data: { status: "accepting" },
-        });
-      const claimed = automatic
-        ? await db.$transaction(async (tx) => {
-            if (
-              !(await admitAutomaticAcceptance(
-                tx,
-                actor,
-                fresh,
-                operation.projectId,
-                automatic,
-              ))
-            )
-              return null;
-            await assertProjectRole(tx, operation.projectId, actor, "Editor");
-            return claim(tx);
-          })
-        : await claim(db);
-      if (!claimed) return getProposal(db, actor, fresh.id);
-      if (claimed.count !== 1) {
-        await expireProposals(db);
-        const current = await getProposal(db, actor, fresh.id);
-        if (current.status === "expired") return current;
-        throw new CoreError("CONFLICT", `proposal is ${current.status}`);
+  const accepted = await withProjectRepo(
+    operation.projectId,
+    async (repo) => {
+      // Re-read inside the project lock: concurrent accepts of the same proposal
+      // serialize here, so only the first one can reach a writer.
+      const fresh = await db.assistantProposal.findFirst({
+        where: { id: row.id, userId: actor.userId },
+      });
+      if (!fresh) throw new CoreError("NOT_FOUND");
+      if (automatic && fresh.status !== "pending") return toView(fresh);
+      if (fresh.status !== "pending" && fresh.status !== "accepting")
+        throw new CoreError("CONFLICT", `proposal is ${fresh.status}`);
+      if (fresh.status === "pending") {
+        const claim = (client: Db) =>
+          client.assistantProposal.updateMany({
+            where: {
+              id: fresh.id,
+              status: "pending",
+              expiresAt: { gte: new Date() },
+            },
+            data: { status: "accepting" },
+          });
+        const claimed = automatic
+          ? await db.$transaction(async (tx) => {
+              if (
+                !(await admitAutomaticAcceptance(
+                  tx,
+                  actor,
+                  fresh,
+                  operation.projectId,
+                  automatic,
+                ))
+              )
+                return null;
+              return claim(tx);
+            })
+          : await claim(db);
+        if (!claimed) return getProposal(db, actor, fresh.id);
+        if (claimed.count !== 1) {
+          await expireProposals(db);
+          const current = await getProposal(db, actor, fresh.id);
+          if (current.status === "expired") return current;
+          throw new CoreError("CONFLICT", `proposal is ${current.status}`);
+        }
       }
-    }
-    const recoveredCreate = await recoverPriorOperation(
-      db,
-      repo,
-      operation,
-      operationId,
-    );
-    if (recoveredCreate)
+      const recoveredCreate = await recoverPriorOperation(
+        db,
+        repo,
+        operation,
+        operationId,
+      );
+      if (recoveredCreate)
+        return resolve(
+          db,
+          fresh.id,
+          "accepted",
+          { commitSha: recoveredCreate.commitSha },
+          recoveredCreate.resourceId ?? undefined,
+        );
+
+      const base = await checkOperationBase(db, repo, operation);
+      if (!base.ok) {
+        if (base.reason === "gone")
+          return resolve(db, fresh.id, "conflicted", {
+            reason: "target no longer exists",
+          });
+        /** A moved base never overwrites: recover our own commit or conflict. */
+        const recovered = await findCommitByOperationId(
+          repo,
+          base.path,
+          operationId,
+        );
+        return recovered
+          ? resolve(db, fresh.id, "accepted", { commitSha: recovered })
+          : resolve(db, fresh.id, "conflicted", {
+              reason: "base revision changed",
+            });
+      }
+
+      let applied: AppliedOperation;
+      try {
+        applied = await applyOperationInRepo(db, repo, operation, author, {
+          table: base.table,
+          summary: fresh.summary,
+          operationId,
+          runId: row.runId,
+        });
+      } catch (error) {
+        const committed = await repo.logForPath(".", {
+          skip: 0,
+          limit: 1,
+          operationId,
+        });
+        if (!committed.some((entry) => entry.operationId === operationId)) {
+          await db.assistantProposal.updateMany({
+            where: { id: fresh.id, status: "accepting" },
+            data: { status: "pending" },
+          });
+        }
+        throw error;
+      }
+      contentCommitted = true;
+      const createdResourceId =
+        operation.kind === "document.create" ||
+        operation.kind === "table.create"
+          ? (applied.resourceId ?? undefined)
+          : undefined;
       return resolve(
         db,
         fresh.id,
         "accepted",
-        { commitSha: recoveredCreate.commitSha },
-        recoveredCreate.resourceId ?? undefined,
+        { commitSha: applied.commitSha },
+        createdResourceId,
       );
-
-    const base = await checkOperationBase(db, repo, operation);
-    if (!base.ok) {
-      if (base.reason === "gone")
-        return resolve(db, fresh.id, "conflicted", {
-          reason: "target no longer exists",
-        });
-      /** A moved base never overwrites: recover our own commit or conflict. */
-      const recovered = await findCommitByOperationId(
-        repo,
-        base.path,
-        operationId,
-      );
-      return recovered
-        ? resolve(db, fresh.id, "accepted", { commitSha: recovered })
-        : resolve(db, fresh.id, "conflicted", {
-            reason: "base revision changed",
-          });
-    }
-
-    let applied: AppliedOperation;
-    try {
-      applied = await applyOperationInRepo(db, repo, operation, author, {
-        table: base.table,
-        summary: fresh.summary,
-        operationId,
-        runId: row.runId,
-      });
-    } catch (error) {
-      const committed = await repo.logForPath(".", {
-        skip: 0,
-        limit: 1,
-        operationId,
-      });
-      if (!committed.some((entry) => entry.operationId === operationId)) {
-        await db.assistantProposal.updateMany({
-          where: { id: fresh.id, status: "accepting" },
-          data: { status: "pending" },
-        });
-      }
-      throw error;
-    }
-    contentCommitted = true;
-    const createdResourceId =
-      operation.kind === "document.create" || operation.kind === "table.create"
-        ? (applied.resourceId ?? undefined)
-        : undefined;
-    return resolve(
-      db,
-      fresh.id,
-      "accepted",
-      { commitSha: applied.commitSha },
-      createdResourceId,
-    );
-  });
+    },
+    { db, actor, min: "Editor" },
+  );
   // The dispatch takes the repository's shared read lock, so it must run
   // after withProjectRepo released the write lock (M4).
   if (contentCommitted)

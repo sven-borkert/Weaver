@@ -48,6 +48,15 @@ describe("parseDocumentAssistantReply", () => {
     ).toEqual({ reply: "It is $x^2$.", markdown: null, action: null });
   });
 
+  it("keeps escaped brackets from the selection as text", () => {
+    const markdown = String.raw`See \[1\] and \[RFC 2119\] for details.`;
+    expect(
+      parseDocumentAssistantReply(
+        `<replace_selection>\n${markdown}\n</replace_selection>`,
+      ),
+    ).toEqual({ reply: "", markdown, action: "replace" });
+  });
+
   it("formats a reply back into the tagged form for later turns", () => {
     const reply = {
       reply: "Here it is.",

@@ -625,7 +625,7 @@ export async function applyWikiOperation(
               owned: true,
               writes: 1,
             };
-            return applyFolderCreate(repo, content, author, {
+            return applyFolderCreate(db, repo, content, author, {
               operationId: options.operationId,
               runId: options.runId,
               wikiRequestHash: options.wikiRequestHash,

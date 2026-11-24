@@ -8,6 +8,7 @@ const mocked = vi.hoisted(() => ({
   tableGet: vi.fn(),
   tableDelete: vi.fn(),
   documentMove: vi.fn(),
+  documentDelete: vi.fn(),
   folderMove: vi.fn(),
   tableFolderMove: vi.fn(),
 }));
@@ -20,6 +21,7 @@ vi.mock("~/trpc/react", () => ({
           reviewPermissions: { query: mocked.permissions },
           markReviewed: { mutate: mocked.mark },
           move: { mutate: mocked.documentMove },
+          delete: { mutate: mocked.documentDelete },
         },
         table: {
           get: { query: mocked.tableGet },
@@ -87,6 +89,31 @@ describe("explorer operations", () => {
       "preview required",
     );
     expect(mocked.tableDelete).toHaveBeenCalledTimes(1);
+  });
+  it("deletes a document kept out of Git at its listed revision and a Git document without one", async () => {
+    const untracked = {
+      ...item,
+      id: "d2",
+      untracked: true,
+      headCommitSha: "listed-sha",
+    };
+    const tracked = { ...item, headCommitSha: "commit-sha" };
+    const operations = useExplorerOperations("p1", "documents");
+    const prepared = await operations.prepare("delete", [tracked, untracked]);
+    expect([...prepared.keys]).toEqual(["item:d1", "item:d2"]);
+    await operations.run("delete", tracked, [], prepared.revisions);
+    await operations.run("delete", untracked, [], prepared.revisions);
+    expect(mocked.documentDelete.mock.calls).toEqual([
+      [{ projectId: "p1", documentId: "d1" }],
+      [
+        {
+          projectId: "p1",
+          documentId: "d2",
+          expectedHeadCommitSha: "listed-sha",
+        },
+      ],
+    ]);
+    expect(mocked.documentGet).not.toHaveBeenCalled();
   });
   it.each(["documents", "tables"] as const)(
     "moves folders through the %s folder endpoint",

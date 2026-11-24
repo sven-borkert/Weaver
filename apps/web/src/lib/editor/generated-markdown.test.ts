@@ -360,6 +360,136 @@ describe("replaceGeneratedMarkdown", () => {
   });
 });
 
+function textPos(editor: Editor, text: string, end = false): number {
+  let found = -1;
+  editor.state.doc.descendants((node, pos) => {
+    const index = found < 0 && node.isText ? node.text!.indexOf(text) : -1;
+    if (index >= 0) found = pos + index + (end ? text.length : 0);
+    return found < 0;
+  });
+  if (found < 0) throw new Error(`"${text}" not found`);
+  return found;
+}
+
+/** Selects from the start of `from` to the end of `to`. */
+function selectText(editor: Editor, from: string, to = from) {
+  editor.commands.setTextSelection({
+    from: textPos(editor, from),
+    to: textPos(editor, to, true),
+  });
+  return editor.state.selection.getBookmark();
+}
+
+const saved = (editor: Editor) => {
+  const markdown = serializeDocumentBody(editor.getJSON());
+  const stored = editor.schema.nodeFromJSON(parseDocumentBody(markdown));
+  expect(stored.eq(editor.state.doc)).toBe(true);
+  return markdown;
+};
+
+describe("applying a reply to whole selected blocks", () => {
+  const fruit = "- cherry\n- apple\n- banana";
+
+  it.each([
+    [
+      "a sorted list",
+      "- apple\n- banana\n- cherry",
+      "- apple\n- banana\n- cherry\n",
+    ],
+    [
+      "plain paragraphs",
+      "Apple\n\nBanana\n\nCherry",
+      "Apple\n\nBanana\n\nCherry\n",
+    ],
+    [
+      "a task list",
+      "- [ ] apple\n- [x] banana\n- [ ] cherry",
+      "- [ ] apple\n- [x] banana\n- [ ] cherry\n",
+    ],
+  ])("replaces three selected list items with %s", (_, reply, expected) => {
+    const editor = editorWith(`Intro\n\n${fruit}\n\nOutro`);
+    const bookmark = selectText(editor, "cherry", "banana");
+
+    expect(replaceGeneratedMarkdown(editor, bookmark, reply)).toBe(true);
+    expect(saved(editor)).toBe(`Intro\n\n${expected}\nOutro\n`);
+  });
+
+  it("merges a list reply into the items around the selection", () => {
+    const editor = editorWith("- keep\n- cherry\n- apple\n- last");
+    const bookmark = selectText(editor, "cherry", "apple");
+
+    expect(
+      replaceGeneratedMarkdown(editor, bookmark, "- apple\n- cherry"),
+    ).toBe(true);
+    expect(saved(editor)).toBe("- keep\n- apple\n- cherry\n- last\n");
+  });
+
+  it("splits a list around paragraphs that replace some of its items", () => {
+    const editor = editorWith("1. keep\n2. cherry\n3. apple\n4. last");
+    const bookmark = selectText(editor, "cherry", "apple");
+
+    expect(replaceGeneratedMarkdown(editor, bookmark, "Apple\n\nCherry")).toBe(
+      true,
+    );
+    expect(saved(editor)).toBe("1. keep\n\nApple\n\nCherry\n\n4. last\n");
+  });
+
+  it.each([
+    ["inline text", "2"],
+    ["a fenced block", "```js\n2\n```"],
+  ])("replaces part of a code line with %s", (_, reply) => {
+    const editor = editorWith("```js\nconst a = 1;\n```\n\nAfter");
+    const bookmark = selectText(editor, "1");
+
+    expect(replaceGeneratedMarkdown(editor, bookmark, reply)).toBe(true);
+    expect(saved(editor)).toBe("```js\nconst a = 2;\n```\n\nAfter\n");
+  });
+
+  it.each([
+    [
+      "a paragraph",
+      "First para\n\nSecond",
+      "First para",
+      "First para",
+      "Added",
+      "First para\n\nAdded\n\nSecond\n",
+    ],
+    [
+      "a heading",
+      "## Title\n\nBody",
+      "Title",
+      "Title",
+      "Intro text",
+      "## Title\n\nIntro text\n\nBody\n",
+    ],
+    [
+      "a list",
+      "- one\n- two\n\nAfter",
+      "one",
+      "two",
+      "Summary",
+      "- one\n- two\n\nSummary\n\nAfter\n",
+    ],
+    [
+      "part of a list",
+      "- one\n- two\n\nAfter",
+      "ne",
+      "tw",
+      "## Notes",
+      "- one\n- two\n\n## Notes\n\nAfter\n",
+    ],
+  ])(
+    "inserts after %s instead of inside it",
+    (_, body, from, to, reply, expected) => {
+      const editor = editorWith(body);
+      const bookmark = selectText(editor, from, to);
+
+      expect(insertGeneratedMarkdown(editor, bookmark, reply)).toBe(true);
+      expect(saved(editor)).toBe(expected);
+    },
+  );
+});
+
 describe("documentAssistantContext", () => {
   it("serializes the selection and its surroundings as Markdown", () => {
     const editor = editorWith("Intro with **bold** text.\n\n## Next");
@@ -416,6 +546,88 @@ describe("spliceGeneratedSource", () => {
         "insert",
       ),
     ).toEqual({ from: 3, to: 3, text: "\n\n```js\nx\n```\n" });
+  });
+
+  const apply = (
+    value: string,
+    start: number,
+    end: number,
+    reply: string,
+    action: "insert" | "replace",
+  ) => {
+    const edit = spliceGeneratedSource(
+      schema,
+      { value, start, end },
+      reply,
+      action,
+    );
+    return edit && value.slice(0, edit.from) + edit.text + value.slice(edit.to);
+  };
+
+  it("gives a reply its own paragraph on the blank line between paragraphs", () => {
+    const value = "First\n\nSecond";
+    expect(apply(value, 6, 6, "Middle", "insert")).toBe(
+      "First\n\nMiddle\n\nSecond",
+    );
+  });
+
+  it("keeps a reply on the blank line after a list out of the last item", () => {
+    const value = "- one\n- two\n\nAfter";
+    const result = apply(value, 12, 12, "Summary", "insert");
+    expect(result).toBe("- one\n- two\n\nSummary\n\nAfter");
+    expect(
+      parseDocumentBody(result!).content?.map((node) => node.type),
+    ).toEqual(["bulletList", "paragraph", "paragraph"]);
+  });
+
+  it("separates a reply that replaces whole lines from the next block", () => {
+    const value = "# Title\nText";
+    expect(apply(value, 0, 7, "Plain", "replace")).toBe("Plain\n\nText");
+  });
+
+  it.each([
+    ["a fenced reply", "```js\n2\n```"],
+    ["inline text", "2"],
+  ])("keeps %s inside a fenced block", (_, reply) => {
+    const value = "```js\nconst a = 1;\n```\n\nAfter";
+    const at = value.indexOf("1");
+    expect(apply(value, at, at + 1, reply, "replace")).toBe(
+      "```js\nconst a = 2;\n```\n\nAfter",
+    );
+  });
+
+  it("refuses a reply that would end the fenced block around it", () => {
+    for (const value of [
+      "```js\nconst a = 1;\n```\n\nAfter",
+      "```js\nconst a = 1;\n```",
+    ]) {
+      const at = value.indexOf("1");
+      expect(
+        apply(value, at, at + 1, "````\nx\n```\ny\n````", "replace"),
+      ).toBeNull();
+      expect(
+        apply(value, at, at + 1, "## Heading\n\nText", "replace"),
+      ).toBeNull();
+    }
+  });
+
+  it("keeps a table row on one line with its cells", () => {
+    const value = "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter";
+    const at = value.indexOf("1");
+    expect(apply(value, at, at + 1, "x | y", "replace")).toBe(
+      "| A | B |\n| --- | --- |\n| x \\| y | 2 |\n\nAfter",
+    );
+    expect(apply(value, at, at + 1, "- a\n- b", "replace")).toBeNull();
+  });
+
+  it("refuses an edit that merges blocks outside the edited range", () => {
+    const value = "First\n\nSecond\n\nThird";
+    // A selected paragraph with its line break is replaced as a block.
+    expect(apply(value, 7, 14, "Middle", "replace")).toBe(
+      "First\n\nMiddle\n\nThird",
+    );
+    // Replacing the blank lines too would glue the reply to both neighbours.
+    expect(apply(value, 5, 15, "Middle", "replace")).toBeNull();
   });
 
   it("refuses content that cannot be saved", () => {

@@ -39,6 +39,52 @@ describe("normalizeLatexDelimiters", () => {
     expect(normalizeLatexDelimiters(text)).toBe(text);
   });
 
+  it.each([
+    String.raw`\[x^2\]`,
+    String.raw`\[a_1\]`,
+    String.raw`\[\frac{a}{b}\]`,
+    String.raw`\[ E = mc^2 \]`,
+    String.raw`\[ x + y = 2 \]`,
+    "\\[\nx\n\\]",
+  ])("converts bracket delimiters around LaTeX in %j", (text) => {
+    expect(normalizeLatexDelimiters(text)).toBe(`$$${text.slice(2, -2)}$$`);
+  });
+
+  it.each([
+    String.raw`\[1\]`,
+    String.raw`\[RFC 2119\]`,
+    String.raw`\[Enter\]`,
+    String.raw`\[^1\]`,
+    String.raw`\[snake\_case\]`,
+    String.raw`\[C:\\temp\]`,
+    String.raw`\[Ctrl+C\]`,
+    String.raw`\[1-3\]`,
+    String.raw`\[n/a\]`,
+    String.raw`\[key=value\]`,
+  ])("keeps escaped brackets around plain text in %j", (text) => {
+    expect(normalizeLatexDelimiters(text)).toBe(text);
+  });
+
+  it("keeps a serialized selection with literal brackets as text", () => {
+    const text = String.raw`See \[1\] and \[RFC 2119\] for details.`;
+    expect(normalizeLatexDelimiters(text)).toBe(text);
+    expect(types(text)).not.toContain("Math");
+    expect(types(text)).toContain("See [1] and [RFC 2119] for details.");
+    expect(
+      normalizeLatexDelimiters(String.raw`Press \[Enter\], then \[x^2\].`),
+    ).toBe(String.raw`Press \[Enter\], then $$x^2$$.`);
+  });
+
+  it("leaves link destinations alone", () => {
+    const text = String.raw`[Foo](https://example.test/Foo_\(bar\)) and [b](<https://example.test/\(c\)>) <https://example.test/\(d\)>`;
+    expect(normalizeLatexDelimiters(text)).toBe(text);
+    expect(
+      normalizeLatexDelimiters(
+        String.raw`[Foo \(x\)](https://example.test/\(y\)) then \(z\)`,
+      ),
+    ).toBe(String.raw`[Foo $x$](https://example.test/\(y\)) then $z$`);
+  });
+
   it("returns text without delimiters unchanged", () => {
     const text = "Costs $5 and $10, see [notes](https://example.test).";
     expect(normalizeLatexDelimiters(text)).toBe(text);

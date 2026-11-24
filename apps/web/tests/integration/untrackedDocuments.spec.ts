@@ -3,6 +3,7 @@ import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { FakeJobQueue, setJobQueueForTests } from "@weaver/core/jobs/queue";
 import {
+  archiveFolderInRepo,
   createDocumentArchive,
   createFolderArchive,
   readDocumentFile,
@@ -261,10 +262,81 @@ describe("documents kept out of Git", () => {
     expect((await caller.folder.tree({ projectId })).untrackedFolders).toEqual(
       [],
     );
-    await caller.document.delete({ projectId, documentId: nested.id });
+    await caller.document.delete({
+      projectId,
+      documentId: nested.id,
+      expectedHeadCommitSha: (
+        await caller.document.get({ projectId, documentId: nested.id })
+      ).baseCommitSha,
+    });
     await expect(
       caller.document.get({ projectId, documentId: nested.id }),
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("refuses to delete an untracked document over a save the caller has not seen", async () => {
+    const { caller, projectId, actor } = await setup("delete-revision");
+    const editor = await makeUser("User", "untracked-delete-colleague");
+    await addMembership(projectId, editor.id, "Editor");
+    const created = await caller.document.create({
+      projectId,
+      folderPath: [],
+      title: "Shared draft",
+      contentJson: BODY("first"),
+      untracked: true,
+    });
+    await storeDocumentImage(
+      getPrisma(),
+      {
+        projectId,
+        documentId: created.id,
+        fileName: "pic.png",
+        bytes: PNG_1X1,
+      },
+      actor,
+    );
+    const listed = (await caller.folder.tree({ projectId })).documents.find(
+      (document) => document.id === created.id,
+    )!;
+    const saved = await callerFor(editor).document.update({
+      projectId,
+      documentId: created.id,
+      baseCommitSha: listed.headCommitSha,
+      content: { kind: "markdown", contentJson: BODY("colleague's save") },
+    });
+
+    await expect(
+      caller.document.delete({
+        projectId,
+        documentId: created.id,
+        expectedHeadCommitSha: listed.headCommitSha,
+      }),
+    ).rejects.toMatchObject({
+      code: "CONFLICT",
+      cause: { details: { headCommitSha: saved.headCommitSha } },
+    });
+    await expect(
+      caller.document.delete({ projectId, documentId: created.id }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(
+      await getPrisma().untrackedFile.count({ where: { projectId } }),
+    ).toBe(1);
+    expect(
+      (await caller.document.get({ projectId, documentId: created.id }))
+        .baseCommitSha,
+    ).toBe(saved.headCommitSha);
+
+    await caller.document.delete({
+      projectId,
+      documentId: created.id,
+      expectedHeadCommitSha: saved.headCommitSha,
+    });
+    await expect(
+      caller.document.get({ projectId, documentId: created.id }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(
+      await getPrisma().untrackedFile.count({ where: { projectId } }),
+    ).toBe(0);
   });
 
   it("reviews, sets properties and appearance on an untracked document", async () => {
@@ -489,5 +561,149 @@ describe("documents kept out of Git", () => {
     ).rejects.toMatchObject({
       code: expect.stringMatching(/NOT_FOUND|FORBIDDEN/),
     });
+  });
+});
+
+describe("folders and downloads of content kept out of Git", () => {
+  beforeEach(async () => {
+    await resetDb();
+    setJobQueueForTests(new FakeJobQueue());
+  });
+  afterEach(() => setJobQueueForTests(null));
+
+  it("reports a tracked folder move whose untracked content could not follow", async () => {
+    const db = getPrisma();
+    const { caller, projectId } = await setup("carry-fails");
+    await caller.folder.create({ projectId, parentPath: [], name: "Team" });
+    const draft = await caller.document.create({
+      projectId,
+      folderPath: ["team"],
+      title: "Draft",
+      contentJson: EMPTY,
+      untracked: true,
+    });
+    await db.$executeRawUnsafe(
+      `CREATE FUNCTION weaver_test_refuse_update() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$`,
+    );
+    await db.$executeRawUnsafe(
+      `CREATE TRIGGER weaver_test_refuse_update BEFORE UPDATE ON "UntrackedDocument" FOR EACH ROW EXECUTE FUNCTION weaver_test_refuse_update()`,
+    );
+    try {
+      await expect(
+        caller.folder.rename({ projectId, path: ["team"], name: "Crew" }),
+      ).rejects.toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+    } finally {
+      await db.$executeRawUnsafe(
+        `DROP TRIGGER weaver_test_refuse_update ON "UntrackedDocument"`,
+      );
+      await db.$executeRawUnsafe(`DROP FUNCTION weaver_test_refuse_update()`);
+    }
+    // Moving the folder back reunites it with the content that stayed behind.
+    await caller.folder.rename({ projectId, path: ["crew"], name: "Team" });
+    expect(
+      (await caller.document.get({ projectId, documentId: draft.id })).path,
+    ).toBe("team/draft.md");
+    expect((await caller.folder.tree({ projectId })).folders).toContain("team");
+  });
+
+  it("applies the archive limits before loading untracked content", async () => {
+    const db = getPrisma();
+    const { caller, projectId, actor } = await setup("archive-limits");
+    await caller.folder.create({ projectId, parentPath: [], name: "Team" });
+    const draft = await caller.document.create({
+      projectId,
+      folderPath: ["team"],
+      title: "Draft",
+      contentJson: EMPTY,
+      untracked: true,
+    });
+    const big = Buffer.concat([PNG_1X1, Buffer.alloc(5_000)]);
+    await db.untrackedFile.create({
+      data: {
+        projectId,
+        path: "team/draft.assets/big.png",
+        bytes: big,
+        sha: "b".repeat(40),
+      },
+    });
+    const reads: string[] = [];
+    const contentModels = new Set([
+      "untrackedDocument",
+      "untrackedFolder",
+      "untrackedFile",
+    ]);
+    const watched = new Proxy(db, {
+      get(target, prop) {
+        const value: unknown = Reflect.get(target, prop);
+        if (typeof prop === "string" && contentModels.has(prop))
+          return new Proxy(value as object, {
+            get(model, method) {
+              const fn: unknown = Reflect.get(model, method);
+              if (typeof fn !== "function") return fn;
+              return (...args: unknown[]) => {
+                reads.push(`${prop}.${String(method)}`);
+                return (fn as (...a: unknown[]) => unknown).apply(model, args);
+              };
+            },
+          });
+        return typeof value === "function"
+          ? (value as (...a: unknown[]) => unknown).bind(target)
+          : value;
+      },
+    });
+    const repo = (await openProjectRepo(projectId))!;
+    await expect(
+      archiveFolderInRepo(repo, {
+        folderPath: ["team"],
+        rootName: "team",
+        limits: { maxFiles: 100, maxBytes: 2_000 },
+        untracked: { db: watched, projectId },
+      }),
+    ).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+      details: { reason: "PAYLOAD_TOO_LARGE" },
+    });
+    expect(reads).toEqual([]);
+
+    const zip = await unzip(
+      (
+        await createFolderArchive(
+          db,
+          { projectId, folderPath: ["team"] },
+          actor,
+        )
+      ).stream,
+    );
+    expect(
+      (await zip.file("team/draft.assets/big.png")!.async("uint8array"))
+        .byteLength,
+    ).toBe(big.byteLength);
+    expect(await zip.file("team/draft.md")!.async("string")).toContain(
+      draft.id,
+    );
+  });
+
+  it("keeps an untracked folder off the reserved tables root", async () => {
+    const { caller, projectId } = await setup("reserved-root");
+    await expect(
+      caller.folder.create({
+        projectId,
+        parentPath: [],
+        name: "Tables",
+        untracked: true,
+      }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await caller.folder.create({
+      projectId,
+      parentPath: [],
+      name: "Scratch",
+      untracked: true,
+    });
+    await expect(
+      caller.folder.rename({ projectId, path: ["scratch"], name: "Tables" }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect((await caller.folder.tree({ projectId })).untrackedFolders).toEqual([
+      "scratch",
+    ]);
   });
 });

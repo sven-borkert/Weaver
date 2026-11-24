@@ -55,6 +55,15 @@ export function useExplorerOperations(
             tableId: entry.id,
           });
           prepared.revisions[key] = snapshot.baseCommitSha;
+        } else if (
+          action === "delete" &&
+          entry.kind === "item" &&
+          entry.untracked &&
+          entry.headCommitSha
+        ) {
+          // The revision the user saw listed, not a fresh one: a save made
+          // since then has no history to come back from.
+          prepared.revisions[key] = entry.headCommitSha;
         }
         prepared.keys.add(key);
       }
@@ -85,9 +94,13 @@ export function useExplorerOperations(
         else await router.delete.mutate({ projectId, path: entry.path });
       } else if (kind === "documents") {
         const input = { projectId, documentId: entry.id };
+        const revision = revisions[entryKey(entry)];
         if (action === "move")
           await client.document.move.mutate({ ...input, folderPath: target });
-        else await client.document.delete.mutate(input);
+        else
+          await client.document.delete.mutate(
+            revision ? { ...input, expectedHeadCommitSha: revision } : input,
+          );
       } else {
         const input = { projectId, tableId: entry.id };
         if (action === "move")

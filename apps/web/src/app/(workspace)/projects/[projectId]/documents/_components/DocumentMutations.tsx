@@ -76,6 +76,10 @@ type DocumentMutationsProps = {
   archive?: DragDownload;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /** Kept out of Git: deleting it is permanent. */
+  untracked?: boolean;
+  /** The listed revision; a delete outside Git must still match it. */
+  revision?: string;
 };
 
 export function DocumentMutations({
@@ -91,6 +95,8 @@ export function DocumentMutations({
   archive,
   open,
   onOpenChange,
+  untracked = false,
+  revision,
 }: DocumentMutationsProps) {
   const utils = api.useUtils();
   const [appearanceOpen, setAppearanceOpen] = useState(false);
@@ -128,7 +134,12 @@ export function DocumentMutations({
       invalidate();
       setDeleteOpen(false);
     },
-    onError: () => toast.error("Could not delete the document"),
+    onError: (error) => {
+      // A newer listing carries the revision a retry needs.
+      if (error.data?.code === "CONFLICT")
+        void utils.folder.tree.invalidate({ projectId });
+      toast.error("Could not delete the document");
+    },
   });
 
   if (!canEdit && !download) return null;
@@ -299,13 +310,24 @@ export function DocumentMutations({
           <DialogHeader>
             <DialogTitle>Delete document</DialogTitle>
             <DialogDescription>
-              Delete <strong>{documentTitle}</strong>? Its Git history remains
-              available for manual recovery.
+              {untracked ? (
+                <>
+                  Permanently delete <strong>{documentTitle}</strong>? It is
+                  kept out of Git, so it and its images cannot be recovered.
+                </>
+              ) : (
+                <>
+                  Delete <strong>{documentTitle}</strong>? Its Git history
+                  remains available for manual recovery.
+                </>
+              )}
             </DialogDescription>
           </DialogHeader>
           {deleteDocument.error ? (
             <p role="alert" className="text-danger m-0 text-[12px]">
-              Could not delete the document. Try again.
+              {deleteDocument.error.data?.code === "CONFLICT"
+                ? "The document changed since this list was loaded. Check it before deleting."
+                : "Could not delete the document. Try again."}
             </p>
           ) : null}
           <DialogFooter>
@@ -318,7 +340,13 @@ export function DocumentMutations({
               variant="destructive"
               disabled={deleteDocument.isPending}
               aria-busy={deleteDocument.isPending}
-              onClick={() => deleteDocument.mutate({ projectId, documentId })}
+              onClick={() =>
+                deleteDocument.mutate({
+                  projectId,
+                  documentId,
+                  ...(untracked ? { expectedHeadCommitSha: revision } : {}),
+                })
+              }
             >
               {deleteDocument.isPending ? "Deleting…" : "Delete document"}
             </Button>
