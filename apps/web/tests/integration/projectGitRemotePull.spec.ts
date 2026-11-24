@@ -2507,6 +2507,8 @@ describe("mergeFetchedBranch with content kept out of Git", () => {
       folders: ["notes-2"],
       files: [],
     });
+    // The pull job repairs the projection after merging; this test merges directly.
+    await caller.document.rebuildIndex({ projectId });
     const tree = await caller.folder.tree({ projectId });
     expect(tree.untrackedFolders).toEqual(["notes-2"]);
     expect(tree.folderNames["notes-2"]).toBe("Notes");

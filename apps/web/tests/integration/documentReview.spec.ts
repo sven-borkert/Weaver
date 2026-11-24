@@ -315,6 +315,7 @@ describe("document review through the write paths", () => {
         expect(queuedWriter).toHaveBeenCalledWith(
           f.project.id,
           expect.any(Function),
+          expect.objectContaining({ min: "Editor" }),
         ),
       );
       release();

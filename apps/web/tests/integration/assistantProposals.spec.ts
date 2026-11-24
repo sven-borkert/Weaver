@@ -30,11 +30,7 @@ import {
   listContentFolders,
 } from "@weaver/core/services/folders";
 import { createTable, getTable, saveTable } from "@weaver/core/services/tables";
-import {
-  openProjectRepo,
-  withProjectRepo,
-  type ProjectRepoWriter,
-} from "@weaver/git-store";
+import { openProjectRepo, type ProjectRepoWriter } from "@weaver/git-store";
 import * as gitStore from "@weaver/git-store";
 import {
   addMembership,
@@ -848,13 +844,14 @@ describe("assistant proposals", () => {
         markdown: "queued",
       },
     });
+    const originalWithProjectRepo = gitStore.withProjectRepo;
     const lock = vi
       .spyOn(gitStore, "withProjectRepo")
       .mockImplementationOnce(async function <T>(
         projectId: string,
         locked: (repo: ProjectRepoWriter) => Promise<T>,
       ) {
-        return withProjectRepo(projectId, async (repo) => {
+        return originalWithProjectRepo(projectId, async (repo) => {
           await db.member.updateMany({
             where: { userId: user.id },
             data: { role: toOrganizationRole("Viewer") },

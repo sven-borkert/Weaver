@@ -1421,14 +1421,16 @@ describe("importing into a folder kept out of Git", () => {
     expect(
       tree.documents.find((document) => document.id === created.id)?.untracked,
     ).toBe(true);
+    // Sorted in JS: database collations order the leading "." differently.
     const stored = async () =>
       (
         await db.untrackedFile.findMany({
           where: { projectId: project.id },
           select: { path: true },
-          orderBy: { path: "asc" },
         })
-      ).map((file) => file.path);
+      )
+        .map((file) => file.path)
+        .sort();
     expect(await stored()).toEqual([
       `.weaver-icons/${icon.digest}.${icon.extension}`,
       "scratch/notes/trip-report.assets/pixel.png",
@@ -1526,7 +1528,7 @@ describe("importing into a folder kept out of Git", () => {
         },
         actor,
       ),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(await (await openProjectRepo(project.id))!.resolveHead()).toBe(head);
   });
 });

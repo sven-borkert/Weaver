@@ -3418,13 +3418,14 @@ it.each([
     });
     const repo = (await openProjectRepo(project.id))!;
     const head = await repo.resolveHead();
+    const originalWithProjectRepo = gitStore.withProjectRepo;
     const lock = vi
       .spyOn(gitStore, "withProjectRepo")
       .mockImplementationOnce(async function <T>(
         projectId: string,
         locked: (writer: ProjectRepoWriter) => Promise<T>,
       ) {
-        return withProjectRepo(projectId, async (writer) => {
+        return originalWithProjectRepo(projectId, async (writer) => {
           await db.member.updateMany({
             where: { organizationId, userId: actor.id },
             data: { role: toOrganizationRole("Viewer") },
